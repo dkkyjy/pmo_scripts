@@ -1,0 +1,12 @@
+*.png
+*.pdf
+*.txt
+*.log
+*.zip
+.vscode/*
+.github/*
+../Reco_Dir
+../kewen_scripts
+__pycache__
+read_header/__pycache__
+find_events/__pycache__
