@@ -3,7 +3,6 @@ ROOT file data reading and processing module
 
 This module reads a single ROOT file (teventadc) containing "Trigger",
 extracts du_id, gps_time, du_nanoseconds,
-constructs keys based on gps_time and minimum nanoseconds, and outputs a matching file.
 
 Main functions:
 1. Parse command line arguments
@@ -83,38 +82,6 @@ def read_file_du_time_ns(
     )
 
 
-def extract_gps_time(gps_times: List[int]) -> int:
-    """
-    Extract time value from gps_times list, prioritizing index 2, otherwise using minimum value or 0.
-
-    Parameters:
-        gps_times: GPS time list
-
-    Returns:
-        Extracted time value
-    """
-    if len(gps_times) > 2:
-        return gps_times[2]
-    else:
-        return min(gps_times) if gps_times else 0
-
-
-def create_dict_key(gps_times: List[int], du_nanoseconds: List[int]) -> str:
-    """
-    Create dictionary key based on gps_time and du_nanoseconds.
-
-    Parameters:
-        gps_times: GPS time list
-        du_nanoseconds: Nanosecond time list
-
-    Returns:
-        String key
-    """
-    gps_time = extract_gps_time(gps_times)
-    min_nanosecond = min(du_nanoseconds)
-    return f"{gps_time}.{min_nanosecond}"
-
-
 def cal_dict_du_ns(
     run_number_list: List[List[int]],
     event_number_list: List[List[int]],
@@ -141,15 +108,21 @@ def cal_dict_du_ns(
                 list_du_id.append(str(du_ids[j]))
                 dict_du_ns[str(du_ids[j])] = int(du_nanoseconds[j])
 
-            # Create dictionary key and add to result dictionary
-            base_key = create_dict_key(gps_times, du_nanoseconds)
-            # Add file path information to key
-            str_key = f"{base_key}_{i}_{file_path}" if file_path else base_key
-            data_dict[str_key] = {
+            # extract gps_times
+            date = gps_times[0]
+            time = gps_times[1]
+            gps_time = gps_times[2]
+            
+            # Add information to data_dict
+            data_dict[str(event_number)] = {
                 "run_number": run_number,
                 "event_number": event_number,
-                "time": dict_du_ns,
+                "date": str(date),
+                "time": f'{time:0>6}',
+                "gps_time": int(gps_time),
+                "du_ns": dict_du_ns,
                 "du_id": list_du_id,
+                "file": file_path,
                 "index": int(i),
             }
 
@@ -218,7 +191,7 @@ def process_root_file(file_path: str, date: str, out_dir_base: str) -> bool:
         logger.info(f"Processed events: {len(result)}")
 
         # Write output file
-        output_filename = f"{os.path.basename(file_path).replace('.root', '.yaml')}"
+        output_filename = f"{os.path.basename(file_path).replace('.root', '_N.yaml')}"
         out_path = write_output(result, out_dir, output_filename)
         logger.info(f"Written to: {out_path}")
         return True

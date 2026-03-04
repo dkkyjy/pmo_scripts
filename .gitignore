@@ -8,5 +8,11 @@
 ../Reco_Dir
 ../kewen_scripts
 __pycache__
+docs/*
+tests/*
+scripts/*
+cov_annotate/*
+.pytest_cache/*
+.coverage
 read_header/__pycache__
 find_events/__pycache__

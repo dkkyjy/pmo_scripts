@@ -190,38 +190,6 @@ def read_file_du_time_ns(file_name: str, left: int, right: int):
     )
 
 
-def extract_gps_time(gps_times: List[int]) -> int:
-    """
-    Extract time value from gps_times list, prioritizing index 2, otherwise using minimum value or 0.
-
-    Parameters:
-        gps_times: GPS time list
-
-    Returns:
-        Extracted time value
-    """
-    if len(gps_times) > 2:
-        return gps_times[2]
-    else:
-        return min(gps_times) if len(gps_times) > 0 else 0
-
-
-def create_dict_key(gps_times: List[int], du_nanoseconds: List[int]) -> str:
-    """
-    Create dictionary key based on gps_time and du_nanoseconds.
-
-    Parameters:
-        gps_times: GPS time list
-        du_nanoseconds: Nanosecond time list
-
-    Returns:
-        String key
-    """
-    gps_time = extract_gps_time(gps_times)
-    min_nanosecond = min(du_nanoseconds)
-    return f"{gps_time}.{min_nanosecond}"
-
-
 def cal_dict_du_ns(
     run_number_list: List[List[int]],
     event_number_list: List[List[int]],
@@ -254,16 +222,21 @@ def cal_dict_du_ns(
                 dict_du_amp[str(du_ids[j])] = int(max_value)
                 list_du_id.append(str(du_ids[j]))
 
-            # Create dictionary key and add to result dictionary
-            base_key = create_dict_key(gps_times, du_nanoseconds)
-            # Add file path information to key
-            str_key = f"{base_key}_{i}_{file_path}" if file_path else base_key
-            data_dict[str_key] = {
+            # extract gps_times
+            date = gps_times[0]
+            time = gps_times[1]
+            gps_time = gps_times[2]
+            # Add information to key
+            data_dict[str(event_number)] = {
                 "run_number": run_number,
                 "event_number": event_number,
-                "time": dict_du_ns,
-                "signal": dict_du_amp,
+                "date": str(date),
+                "time": f'{time:0<6}',
+                "gps_time": int(gps_time),
+                "du_ns": dict_du_ns,
+                "du_vs": dict_du_amp,
                 "du_id": list_du_id,
+                "file": file_path,
                 "index": int(i),
             }
 

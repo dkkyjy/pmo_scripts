@@ -17,8 +17,14 @@ import yaml
 
 from logger_config import logger
 
+TYPE_PATTERNS = {
+    "F": "Trigger*_F.yaml",
+    "X": "Trigger*_X.yaml",
+    "Y": "Trigger*_Y.yaml",
+    "Z": "Trigger*_Z.yaml",
+    "XY": "Trigger*_XY.yaml",
+}
 
-PATTERN = "Trigger*.yaml"
 
 def payload_to_log_text(payload: Dict[str, Any]) -> str:
     """Convert one event payload into readable YAML text for logs."""
@@ -233,18 +239,19 @@ def merge_files_for_pattern(
 
 def merge_trigger_files(dirpath: Path, ymd: str, outdir: Path) -> int:
     """Merge Trigger*.yaml in one date directory into one output file."""
-    outpath = outdir / f"Trigger_{ymd}_merged.yaml"
-    logger.info(
-        "Start merge workflow: input_dir={}, output_dir={}, output_file={}",
-        dirpath,
-        outdir,
-        outpath,
-    )
-    code, msg = merge_files_for_pattern(dirpath, PATTERN, outpath)
-    if code != 0:
-        logger.error(msg)
-        return code
-    logger.info(msg)
+    for t, pattern in TYPE_PATTERNS.items():
+        outpath = outdir / f"Trigger_{ymd}_{t}_merged.yaml"
+        logger.info(
+            "Start merge workflow: input_dir={}, output_dir={}, output_file={}",
+            dirpath,
+            outdir,
+            outpath,
+        )
+        code, msg = merge_files_for_pattern(dirpath, pattern, outpath)
+        if code != 0:
+            logger.error(msg)
+            return code
+        logger.info(msg)
     return 0
 
 
