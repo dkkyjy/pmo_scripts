@@ -50,7 +50,7 @@ def setup_logger(
         log_file = env_log_file
 
     if console:
-        logger.add(sys.stdout, colorize=True, level=level, format=fmt, enqueue=enqueue)
+        logger.add(sys.stdout, colorize=True, level='INFO', format=fmt, enqueue=enqueue)
 
     if log_file is not None:
         p = Path(log_file)

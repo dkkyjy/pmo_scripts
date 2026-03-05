@@ -191,7 +191,7 @@ def process_root_file(file_path: str, date: str, out_dir_base: str) -> bool:
         logger.info(f"Processed events: {len(result)}")
 
         # Write output file
-        output_filename = f"{os.path.basename(file_path).replace('.root', '_N.yaml')}"
+        output_filename = f"{os.path.basename(file_path).replace('.root', '.yaml')}"
         out_path = write_output(result, out_dir, output_filename)
         logger.info(f"Written to: {out_path}")
         return True

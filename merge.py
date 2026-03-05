@@ -20,6 +20,11 @@ from logger_config import logger
 
 PATTERN = "Trigger*.yaml"
 
+
+def event_key_sort_value(event_key: str) -> Any:
+    """Sort event keys numerically when possible, else lexicographically."""
+    return int(event_key) if event_key.isdigit() else event_key
+
 def payload_to_log_text(payload: Dict[str, Any]) -> str:
     """Convert one event payload into readable YAML text for logs."""
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
@@ -41,8 +46,7 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
             if not isinstance(existing, dict):
                 existing = {}
             before_count = len(existing)
-            for key, item in value.items():
-                existing[key] = item
+            existing.update(value)
             merged[field] = existing
             logger.debug(
                 "Merged dict field='{}': before_keys={}, incoming_keys={}, after_keys={}",
@@ -108,7 +112,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
 
     for path in files:
         content = load_yaml_dict(path)
-        logger.debug("Processing file {} with {} top-level entries", path, len(content))
+        logger.info("Processing file {} with {} top-level entries", path, len(content))
 
         file_inserted = 0
         file_merged = 0
@@ -132,17 +136,17 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 logger.debug("Inserted new event key={} from file={}", event_key, path)
             else:
                 original_payload = grouped[event_key]
-                logger.info(
+                logger.debug(
                     "Merging duplicate event_number={} from file={}",
                     event_key,
                     path,
                 )
-                logger.info(
+                logger.debug(
                     "Original record before merge for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(original_payload),
                 )
-                logger.info(
+                logger.debug(
                     "Incoming record for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(payload),
@@ -153,13 +157,13 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 merged_count += 1
                 file_merged += 1
                 merged_event_keys.add(event_key)
-                logger.info(
+                logger.debug(
                     "Merged result for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(merged_payload),
                 )
 
-        logger.debug(
+        logger.info(
             "File summary {}: inserted={}, merged={}, skipped={}",
             path,
             file_inserted,
@@ -176,7 +180,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
     if merged_event_keys:
         merged_event_list = sorted(
             merged_event_keys,
-            key=lambda item: int(item) if item.isdigit() else item,
+            key=event_key_sort_value,
         )
         logger.info(
             "Merged event_number list ({}): {}",
@@ -186,7 +190,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
     else:
         logger.info("No duplicate event_number entries were merged")
 
-    return dict(sorted(grouped.items(), key=lambda item: int(item[0]) if item[0].isdigit() else item[0]))
+    return dict(sorted(grouped.items(), key=lambda item: event_key_sort_value(item[0])))
 
 
 def write_merged_yaml(outpath: Path, files: List[Path], merged_data: Dict[str, Dict[str, Any]]) -> None:

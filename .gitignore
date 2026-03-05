@@ -3,8 +3,10 @@
 *.txt
 *.log
 *.zip
+.venv/*
 .vscode/*
 .github/*
+.pytest_cache/*
 ../Reco_Dir
 ../kewen_scripts
 __pycache__
