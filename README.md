@@ -1,127 +1,170 @@
 # PMO Scripts (GRAND)
 
-Event reconstruction pipeline for GRAND/PMO Trigger ROOT files.
+面向 GRAND/PMO 的 Trigger ROOT 数据重建流水线。
 
-This repository reads `Trigger*.root` files, builds per-file matching YAMLs, reconstructs event directions with PWM/SWM models, and saves diagnostic figures for analysis.
+该项目用于批量处理 `Trigger*.root`，生成中间 YAML，执行事件匹配与方向重建（PWM/SWM），并产出统计和图像结果。
 
 > [!IMPORTANT]
-> `loop.py` is **dry-run by default**. It only prints commands unless you pass `--run`.
+> `loop.py` 默认是 dry-run，只打印计划命令；加上 `--run` 才会真正执行。
 
-## Overview
+## 概览
 
-Core pipeline:
+- **批处理调度**：按日期范围扫描 `--base-path/yyyy/mm/dd`。
+- **两种读取模式**：常规时间模式（`read_header.py`）和信号幅值模式（`read_trace.py`）。
+- **分阶段缓存**：输出 `*_matched.yaml`、`*_PWM.yaml`、`*_SWM.yaml`，便于断点续跑。
+- **后处理能力**：支持按天合并、触发统计与覆盖率测试脚本。
 
-1. `loop.py` scans date folders (`yyyy/mm/dd`) under `--base-path` and orchestrates jobs.
-2. `read_header/_read_header.py` converts ROOT header timing to `Trigger*.yaml`.
-3. Optional signal mode uses `read_header/read_header_alltraceADCsquare.py` to produce `*_F/X/Y/Z/XY.yaml`.
-4. `main.py` runs matching + reconstruction (`find_event/*`) and writes cached stage outputs:
-	 - `_matched.yaml`
-	 - `_PWM.yaml`
-	 - `_SWM.yaml`
-	 - plot images (`*.png`)
-5. `merge.py` merges one day of outputs into `Trigger_yyyymmdd_{matched|PWM|SWM}.yaml`.
+## 核心流程
 
-## Repository Structure
+```text
+loop.py
+  ├─ read_header/read_header.py（常规时间模式）
+  ├─ read_header/read_trace.py（--with-signal）
+  ├─ main.py
+  │    ├─ find_event/matching_times.py
+  │    ├─ find_event/estimation.py
+  │    └─ find_event/plotting.py
+  └─ merge.py（可选，按天汇总）
+```
+
+## 目录结构
 
 ```text
 .
-├── loop.py                 # Date-range orchestration, multiprocessing, dry-run/run switch
-├── main.py                 # Single matching YAML reconstruction entrypoint
-├── merge.py                # Daily merged YAML generator
-├── logger_config.py        # loguru setup (LOG_LEVEL / LOG_FILE)
-├── read_header/            # ROOT -> initial YAML converters
-└── find_event/             # Filtering, fitting, plotting, utilities
+├── loop.py
+├── main.py
+├── merge.py
+├── stats_trigger.py
+├── stats_lookback.py
+├── stats_du_ns.py
+├── read_header/
+│   ├── read_header.py
+│   └── read_trace.py
+├── find_event/
+├── scripts/
+│   └── run_tests.sh
+├── tests/
+└── docs/
 ```
 
-## Prerequisites
+## 环境准备
 
-- Python 3.9+
-- Access to ROOT Trigger files readable by `uproot`
-- Detector position file (default `_gp65_rtksort.txt`)
-
-Install dependencies:
+- Python 3.8+
+- 依赖安装：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Quick Start
+## 快速开始
 
-### 1) Dry-run a small window (safe)
-
-```bash
-python loop.py 2025-11-01T00:00:00 2025-11-01T23:59:59 \
-	--base-path /path/to/ROOT \
-	--out-dir-base ../Reco_Dir \
-	--limit 1 --jobs 1
-```
-
-### 2) Execute reconstruction
+### 1) 安全试跑（仅打印命令）
 
 ```bash
-python loop.py 2025-11-01T00:00:00 2025-11-01T23:59:59 \
-	--base-path /path/to/ROOT \
-	--out-dir-base ../Reco_Dir \
-	--run --jobs 4
+python loop.py 2026-02-14T00:00:00 2026-02-14T02:00:00 \
+  --base-path /path/to/TD \
+  --out-dir-base ../Reco_Dir \
+  --limit 1 --jobs 1
 ```
 
-### 3) Run signal-amplitude mode
+### 2) 实际执行重建
 
 ```bash
-python loop.py 2025-11-01T00:00:00 2025-11-01T23:59:59 \
-	--base-path /path/to/ROOT \
-	--out-dir-base ../Reco_Dir \
-	--run --with-signal --left 0 --right 512 --channel X
+python loop.py 2026-02-14T00:00:00 2026-02-14T02:00:00 \
+  --base-path /path/to/TD \
+  --out-dir-base ../Reco_Dir \
+  --run --jobs 4
 ```
 
-## Common Workflows
-
-### Single-file debug
+### 3) 信号幅值模式
 
 ```bash
-python main.py ../Reco_Dir/2025/11/01/Trigger_xxx.yaml \
-	--fig_name Trigger_xxx \
-	--det-pos _gp65_rtksort.txt
+python loop.py 2026-02-14T00:00:00 2026-02-14T02:00:00 \
+  --base-path /path/to/TD \
+  --out-dir-base ../Reco_Dir \
+  --run --with-signal --left 0 --right 512 --channel X
 ```
 
-### Merge one day outputs
+> [!TIP]
+> 建议先用 `--limit 1 --jobs 1` 验证输出，再放大任务规模。
+
+## 常用命令
+
+### 单文件调试
 
 ```bash
-python merge.py 2025/11/01 -o ../Reco_Dir
+python main.py ../Reco_Dir/2026/02/14/Trigger_xxx.yaml \
+  --fig_name Trigger_xxx \
+  --det-pos _gp65_rtksort.txt
 ```
 
-Merged files are written as:
-
-- `../Reco_Dir/Trigger_20251101_matched.yaml`
-- `../Reco_Dir/Trigger_20251101_PWM.yaml`
-- `../Reco_Dir/Trigger_20251101_SWM.yaml`
-
-## Configuration
-
-Logging is configured through environment variables:
+### 日级合并
 
 ```bash
-export LOG_LEVEL=DEBUG
-export LOG_FILE=logs/loop.log
+python merge.py 2026/02/14 -o ../Reco_Dir
 ```
 
-Supported datetime input formats for `loop.py` include:
+### 统计分析（示例）
+
+```bash
+python stats_trigger.py ../Reco_Dir/Trigger_20260214_merged.yaml --avg-window=60 --no-plot
+python stats_lookback.py ../Reco_Dir/Trigger_20260214_merged.yaml --lookback 10
+```
+
+### 运行全部测试并统计覆盖率
+
+```bash
+./scripts/run_tests.sh
+```
+
+## 主要输出
+
+单个输入文件通常会生成：
+
+- `Trigger_xxx.yaml`（读取阶段输出）
+- `Trigger_xxx_matched.yaml`
+- `Trigger_xxx_PWM.yaml`
+- `Trigger_xxx_SWM.yaml`
+- `Trigger_xxx*.png`
+
+按天合并可生成：
+
+- `Trigger_yyyymmdd_merged.yaml`
+
+## 配置与约定
+
+### 日志
+
+```bash
+export LOG_LEVEL=INFO
+export LOG_FILE=loop.log
+```
+
+### 时间参数格式
+
+`loop.py` 支持：
 
 - `YYYY-MM-DDTHH:MM:SS`
 - `YYYYMMDDHHMMSS`
 - `YYYY-MM-DDHHMM`
 - `YYYY/MM/DDHHMM`
 
-## Notes and Caveats
-
 > [!NOTE]
-> In `main.py`, code after SWM plotting is currently unreachable because of an explicit `exit()`.
+> `main.py` 在 SWM 绘图后有显式 `exit()`，其后的 background rejection 分支默认不可达。
 
-> [!TIP]
-> Keep output filename conventions unchanged (`*_matched.yaml`, `*_PWM.yaml`, `*_SWM.yaml`), because downstream stages rely on these exact patterns.
+> [!IMPORTANT]
+> 不要修改缓存后缀规则（`*_matched.yaml`、`*_PWM.yaml`、`*_SWM.yaml`），下游流程依赖这些命名。
 
-## Troubleshooting
+## 故障排查
 
-- **No files processed**: verify input directory layout is `--base-path/yyyy/mm/dd` and filenames contain both `Trigger` and `.root`.
-- **No events after filtering**: this can be expected; `find_event/matching_times.py` applies strict speed-of-light consistency filtering.
-- **Missing detector file**: pass `--det-pos` to `main.py` if `_gp65_rtksort.txt` is not in the working directory.
+- **找不到输入文件**：检查 `--base-path/yyyy/mm/dd` 目录格式和 `Trigger*.root` 文件名。
+- **过滤后事件数为 0**：可能是正常现象，匹配阶段使用了较严格的一致性筛选。
+- **图像或 PDF 未生成**：确认事件有效性、依赖安装和输出路径权限。
+- **探测器位置文件缺失**：使用 `main.py --det-pos <path>` 指定文件。
+
+## 更多文档
+
+- `docs/loop.md`
+- `docs/main.md`
+- `docs/merge.md`
+- `docs/stats_trigger.md`

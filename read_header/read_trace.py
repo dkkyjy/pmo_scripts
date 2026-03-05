@@ -11,7 +11,7 @@ Main functions:
 2. Read and process ROOT file data
 3. Generate matching files
 
-Usage: python read_header_alltraceADCsquare.py <file_path> <left> <right> <base_path> <out_dir_base>
+Usage: python read_trace.py <file_path> <left> <right> <base_path> <out_dir_base>
 left/right are optional, default 0,512
 """
 

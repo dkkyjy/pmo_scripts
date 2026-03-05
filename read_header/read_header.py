@@ -9,7 +9,7 @@ Main functions:
 2. Read and process ROOT file data
 3. Generate matching file
 
-Usage: python _read_header.py <file_path> <base_path> <out_dir_base>
+Usage: python read_header.py <file_path> <base_path> <out_dir_base>
 """
 
 import uproot

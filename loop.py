@@ -3,7 +3,7 @@
 loop.py
 
 Generate and invoke:
-    python read_header/_read_header.py file_path base_path out_dir_base
+    python read_header/read_header.py file_path base_path out_dir_base
     python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml
     
 Usage examples:
@@ -96,11 +96,11 @@ def get_file_list(file_start: int, file_end: int, date: str, base_path: str) -> 
     return selected
 
 
-def make_readtime_command(file_path: str, date: str, out_dir_base: str) -> list[str]:
+def make_readheader_command(file_path: str, date: str, out_dir_base: str) -> list[str]:
     """Construct the command for read_header with file_path, date, out_dir_base parameters."""
     cmd = [
         sys.executable,  # use current python interpreter
-        "read_header/_read_header.py",
+        "read_header/read_header.py",
         file_path,
         "--date",
         date,
@@ -111,10 +111,10 @@ def make_readtime_command(file_path: str, date: str, out_dir_base: str) -> list[
 
 
 def make_readtrace_command(file_path: str, date: str, out_dir_base: str, left: int = 0, right: int = 512) -> list[str]:
-    """Construct the command for read_header_alltraceADCsquare with file_path, left, right, date, out_dir_base parameters."""
+    """Construct the command for read_trace with file_path, left, right, date, out_dir_base parameters."""
     cmd = [
         sys.executable,  # use current python interpreter
-        "read_header/read_header_alltraceADCsquare.py",
+        "read_header/read_trace.py",
         file_path,
         "--left",
         str(left),
@@ -238,17 +238,17 @@ def process_date(task: tuple) -> tuple[str, int]:
                     logger.error(f"Executable not found when running: {readtrace_cmd[0]}")
                     return (file_path, 2)
         else:
-            readtime_cmd = make_readtime_command(file_path, date, out_dir_base)
-            logger.info(f"{' '.join(readtime_cmd)}")
+            readheader_cmd = make_readheader_command(file_path, date, out_dir_base)
+            logger.info(f"{' '.join(readheader_cmd)}")
 
             if do_run:
                 try:
-                    p = subprocess.run(readtime_cmd, check=False)
+                    p = subprocess.run(readheader_cmd, check=False)
                     if p.returncode != 0:
                         logger.error(f"Command failed for {file_path} with exit {p.returncode}")
                         return (file_path, p.returncode)
                 except FileNotFoundError:
-                    logger.error(f"Executable not found when running: {readtime_cmd[0]}")
+                    logger.error(f"Executable not found when running: {readheader_cmd[0]}")
                     return (file_path, 2)
 
     if only_read:
@@ -293,8 +293,8 @@ def main() -> int:
         action="store_true",
         help="Whether to process signal amplitude related processes (such as signal amplitude fitting, signal related plotting, etc.). Adding this parameter will enable signal-related reading and analysis logic, disabled by default."
     )
-    ap.add_argument("--left", type=int, default=0, help="left parameter for read_header_alltraceADCsquare.py (default 0)")
-    ap.add_argument("--right", type=int, default=512, help="right parameter for read_header_alltraceADCsquare.py (default 512)")
+    ap.add_argument("--left", type=int, default=0, help="left parameter for read_trace.py (default 0)")
+    ap.add_argument("--right", type=int, default=512, help="right parameter for read_trace.py (default 512)")
     ap.add_argument("--channel", choices=['F', 'X', 'Y', 'Z', 'XY'], default='X', help="Channel suffix for matching files when --with-signal is set (default X)")
     args = ap.parse_args()
 
