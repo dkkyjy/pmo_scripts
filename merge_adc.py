@@ -31,6 +31,33 @@ def payload_to_log_text(payload: Dict[str, Any]) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
 
 
+def _to_scalar_or_list(value: Any) -> List[Any]:
+    """Normalize one DU value into a list for safe concatenation."""
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def merge_du_value_map(base_map: Dict[str, Any], incoming_map: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge DU-value maps and preserve repeated trigger samples per DU.
+
+    Supports both legacy scalar values and list values. If the same DU exists
+    in both maps, values are concatenated in order.
+    """
+    merged: Dict[str, Any] = dict(base_map)
+    for du_id, incoming_value in incoming_map.items():
+        du_id_str = str(du_id)
+        if du_id_str not in merged:
+            merged[du_id_str] = incoming_value
+            continue
+
+        existing_list = _to_scalar_or_list(merged[du_id_str])
+        incoming_list = _to_scalar_or_list(incoming_value)
+        merged[du_id_str] = [*existing_list, *incoming_list]
+
+    return merged
+
+
 def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
     """Merge two event payload dicts for the same event_number."""
     merged = dict(base)
@@ -47,15 +74,13 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
             if not isinstance(existing, dict):
                 existing = {}
             before_count = len(existing)
-            for key, item in value.items():
-                existing[key] = item
-            merged[field] = existing
+            merged[field] = merge_du_value_map(existing, value)
             logger.debug(
                 "Merged dict field='{}': before_keys={}, incoming_keys={}, after_keys={}",
                 field,
                 before_count,
                 len(value),
-                len(existing),
+                len(merged[field]),
             )
             continue
 

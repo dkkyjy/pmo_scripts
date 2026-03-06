@@ -30,6 +30,37 @@ def payload_to_log_text(payload: Dict[str, Any]) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
 
 
+def _to_scalar_or_list(value: Any) -> Any:
+    """Normalize one DU value into scalar-or-list form.
+
+    - Lists are preserved.
+    - Scalars are wrapped to list only when concatenation is needed by caller.
+    """
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def merge_du_ns_map(base_map: Dict[str, Any], incoming_map: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge du_ns maps and preserve multiple trigger samples per DU.
+
+    Supports both legacy scalar values and new list values.
+    When a DU appears in both maps, samples are concatenated in order.
+    """
+    merged: Dict[str, Any] = dict(base_map)
+    for du_id, incoming_value in incoming_map.items():
+        du_id_str = str(du_id)
+        if du_id_str not in merged:
+            merged[du_id_str] = incoming_value
+            continue
+
+        existing_list = _to_scalar_or_list(merged[du_id_str])
+        incoming_list = _to_scalar_or_list(incoming_value)
+        merged[du_id_str] = [*existing_list, *incoming_list]
+
+    return merged
+
+
 def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
     """Merge two event payload dicts for the same event_number."""
     merged = dict(base)
@@ -41,7 +72,22 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
 
     for field, value in incoming.items():
         logger.debug("Processing field='{}' (type={})", field, type(value).__name__)
-        if field in {"du_ns", "du_vs"} and isinstance(value, dict):
+        if field == "du_ns" and isinstance(value, dict):
+            existing = merged.get(field)
+            if not isinstance(existing, dict):
+                existing = {}
+            before_count = len(existing)
+            merged[field] = merge_du_ns_map(existing, value)
+            logger.debug(
+                "Merged dict field='{}': before_keys={}, incoming_keys={}, after_keys={}",
+                field,
+                before_count,
+                len(value),
+                len(merged[field]),
+            )
+            continue
+
+        if field == "du_vs" and isinstance(value, dict):
             existing = merged.get(field)
             if not isinstance(existing, dict):
                 existing = {}

@@ -27,8 +27,8 @@ from logger_config import logger
 
 plt.style.use(["science", "grid", "notebook"])
 
-DELTA_PLOT_MIN_NS = -2e7
-DELTA_PLOT_MAX_NS = 2e7
+DELTA_PLOT_MIN_NS = -1e5
+DELTA_PLOT_MAX_NS = 1e5
 
 EventPayload = Dict[str, Any]
 YamlData = Dict[str, EventPayload]
@@ -49,6 +49,25 @@ AdjacentPairRow = Tuple[
     float,
     str,
 ]
+SharedPairCountRow = Tuple[
+    int,
+    int,
+    int,
+    int,
+    int,
+    str,
+]
+SharedDuCountRow = Tuple[
+    int,
+    int,
+    int,
+    int,
+    int,
+    str,
+]
+
+DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
 
 
 def sort_du_id_key(du_id: str) -> Tuple[int, str]:
@@ -70,13 +89,30 @@ def read_yaml_events(yaml_path: Path) -> YamlData:
 
 
 def parse_du_ns_map(payload: EventPayload) -> Dict[str, float]:
-    """Parse numeric ``du_ns`` map from one event payload."""
+    """Parse numeric ``du_ns`` map from one event payload.
+
+    Supports both scalar values and list values; for list values, the last
+    numeric sample is used to keep backward-compatible per-event scalar math.
+    """
     du_ns = payload.get("du_ns")
     if not isinstance(du_ns, dict):
         return {}
 
     parsed: Dict[str, float] = {}
     for key, value in du_ns.items():
+        if isinstance(value, list):
+            numeric_values: List[float] = []
+            for item in value:
+                try:
+                    numeric_values.append(float(item))
+                except (TypeError, ValueError):
+                    continue
+            if not numeric_values:
+                logger.debug("Skip non-numeric du_ns list for DU {}: {}", key, value)
+                continue
+            parsed[str(key)] = numeric_values[-1]
+            continue
+
         try:
             parsed[str(key)] = float(value)
         except (TypeError, ValueError):
@@ -99,9 +135,87 @@ def parse_event_datetime(payload: EventPayload) -> str:
 
     try:
         dt_obj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
-        return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+        return dt_obj.strftime(DATETIME_FORMAT)
     except ValueError:
         return f"{date_str} {time_str}".strip()
+
+
+def parse_cli_datetime(value: str) -> datetime:
+    """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
+    try:
+        return datetime.strptime(value, DATETIME_FORMAT)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Invalid datetime format: "
+            f"{value!r}. Expected format: {DATETIME_FORMAT}"
+        ) from exc
+
+
+def parse_payload_datetime(payload: EventPayload) -> datetime | None:
+    """Parse payload date/time fields into datetime for range filtering."""
+    date_value = payload.get("date", "")
+    time_value = payload.get("time", "")
+
+    date_str = str(date_value) if date_value is not None else ""
+    time_str = str(time_value) if time_value is not None else ""
+    if time_str.isdigit() and len(time_str) < 6:
+        time_str = time_str.zfill(6)
+
+    if not date_str or not time_str:
+        return None
+
+    try:
+        return datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def in_datetime_range(
+    event_dt: datetime,
+    start_dt: datetime | None,
+    end_dt: datetime | None,
+) -> bool:
+    """Check whether event datetime is inside an inclusive range."""
+    if start_dt is not None and event_dt < start_dt:
+        return False
+    if end_dt is not None and event_dt > end_dt:
+        return False
+    return True
+
+
+def filter_data_by_datetime_range(
+    data: YamlData,
+    start_dt: datetime | None,
+    end_dt: datetime | None,
+) -> YamlData:
+    """Filter YAML events by datetime range from payload date/time fields."""
+    if start_dt is None and end_dt is None:
+        return data
+
+    filtered_data: YamlData = {}
+    invalid_datetime_count = 0
+
+    for event_key, payload in data.items():
+        event_dt = parse_payload_datetime(payload)
+        if event_dt is None:
+            invalid_datetime_count += 1
+            continue
+
+        if in_datetime_range(event_dt, start_dt, end_dt):
+            filtered_data[event_key] = payload
+
+    logger.info(
+        "Datetime range filter on YAML events: {} -> {}",
+        len(data),
+        len(filtered_data),
+    )
+    if invalid_datetime_count > 0:
+        logger.warning(
+            "Skipped {} events with invalid/missing date/time while filtering",
+            invalid_datetime_count,
+        )
+
+    return filtered_data
 
 
 def load_du_time_offsets(offset_file: Path) -> OffsetMap:
@@ -194,14 +308,25 @@ def build_adjacent_common_pair_rows(
     offset_map: OffsetMap | None = None,
 ) -> List[AdjacentPairRow]:
     """Build rows for shared DU pairs between current and previous events."""
+    pair_rows, _ = _build_common_pair_and_count_rows(records, lookback, offset_map)
+    return pair_rows
+
+
+def _build_common_pair_and_count_rows(
+    records: Sequence[EventRecord],
+    lookback: int,
+    offset_map: OffsetMap | None,
+) -> Tuple[List[AdjacentPairRow], List[SharedPairCountRow]]:
+    """Build both pair-delta rows and shared-pair-count rows in one pass."""
     if len(records) < 2:
-        return []
+        return [], []
 
     lookback = max(1, int(lookback))
     if offset_map is None:
         offset_map = {}
 
     rows: List[AdjacentPairRow] = []
+    count_rows: List[SharedPairCountRow] = []
     for row_index in range(1, len(records)):
         (
             _,
@@ -220,6 +345,17 @@ def build_adjacent_common_pair_rows(
             ]
             prev_pair_map = build_pair_delta_map(prev_du_ns, offset_map)
             common_pairs = sorted(set(prev_pair_map) & set(curr_pair_map))
+
+            count_rows.append(
+                (
+                    prev_event_number,
+                    curr_event_number,
+                    prev_second,
+                    curr_second,
+                    len(common_pairs),
+                    curr_event_datetime,
+                )
+            )
 
             for du_a, du_b in common_pairs:
                 prev_delta = prev_pair_map[(du_a, du_b)]
@@ -255,7 +391,89 @@ def build_adjacent_common_pair_rows(
         len(rows),
         lookback,
     )
+    logger.info(
+        "Built shared DU-pair count rows: {} (lookback={})",
+        len(count_rows),
+        lookback,
+    )
+    return rows, count_rows
+
+
+def build_shared_pair_count_rows(
+    records: Sequence[EventRecord],
+    lookback: int = 10,
+    offset_map: OffsetMap | None = None,
+) -> List[SharedPairCountRow]:
+    """Build shared DU-pair count rows between current and previous events."""
+    _, count_rows = _build_common_pair_and_count_rows(records, lookback, offset_map)
+    return count_rows
+
+
+def build_shared_du_count_rows(
+    records: Sequence[EventRecord],
+    lookback: int = 10,
+) -> List[SharedDuCountRow]:
+    """Build shared DU count rows between current and previous events."""
+    if len(records) < 2:
+        return []
+
+    lookback = max(1, int(lookback))
+    rows: List[SharedDuCountRow] = []
+    for row_index in range(1, len(records)):
+        _, curr_second, _, curr_event_number, curr_du_ns, curr_event_datetime = records[
+            row_index
+        ]
+        curr_du_ids = set(curr_du_ns.keys())
+
+        start_index = max(0, row_index - lookback)
+        for prev_row_index in range(start_index, row_index):
+            _, prev_second, _, prev_event_number, prev_du_ns, _ = records[prev_row_index]
+            prev_du_ids = set(prev_du_ns.keys())
+            shared_du_count = len(curr_du_ids & prev_du_ids)
+            rows.append(
+                (
+                    prev_event_number,
+                    curr_event_number,
+                    prev_second,
+                    curr_second,
+                    shared_du_count,
+                    curr_event_datetime,
+                )
+            )
+
+    logger.info(
+        "Built shared DU count rows: {} (lookback={})",
+        len(rows),
+        lookback,
+    )
     return rows
+
+
+def derive_shared_pair_count_rows_from_adjacent_rows(
+    rows: Sequence[AdjacentPairRow],
+) -> List[SharedPairCountRow]:
+    """Derive shared-pair counts from pair rows (cache-compat fallback)."""
+    grouped: Dict[Tuple[int, int, int, int, str], int] = {}
+    for row in rows:
+        key = (row[0], row[1], row[2], row[3], row[10])
+        grouped[key] = grouped.get(key, 0) + 1
+
+    derived_rows: List[SharedPairCountRow] = []
+    for key in sorted(grouped.keys()):
+        prev_event_number, curr_event_number, prev_second, curr_second, curr_datetime = (
+            key
+        )
+        derived_rows.append(
+            (
+                prev_event_number,
+                curr_event_number,
+                prev_second,
+                curr_second,
+                grouped[key],
+                curr_datetime,
+            )
+        )
+    return derived_rows
 
 
 def write_adjacent_pair_csv(path: Path, rows: Sequence[AdjacentPairRow]) -> None:
@@ -299,6 +517,46 @@ def read_adjacent_pair_csv(path: Path) -> List[AdjacentPairRow]:
                     float(row["curr_pair_delta_ns"]),
                     float(row["adjacent_pair_delta_ns"]),
                     float(row["abs_adjacent_pair_delta_ns"]),
+                    str(row.get("curr_event_datetime", "")),
+                )
+            )
+    return rows
+
+
+def write_shared_pair_count_csv(
+    path: Path,
+    rows: Sequence[SharedPairCountRow],
+) -> None:
+    """Write shared DU-pair count rows to CSV."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file_obj:
+        writer = csv.writer(file_obj)
+        writer.writerow(
+            [
+                "prev_event_number",
+                "curr_event_number",
+                "prev_gps_time",
+                "curr_gps_time",
+                "shared_du_pair_count",
+                "curr_event_datetime",
+            ]
+        )
+        writer.writerows(rows)
+
+
+def read_shared_pair_count_csv(path: Path) -> List[SharedPairCountRow]:
+    """Read shared DU-pair count rows from CSV cache."""
+    rows: List[SharedPairCountRow] = []
+    with path.open("r", encoding="utf-8", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        for row in reader:
+            rows.append(
+                (
+                    int(row["prev_event_number"]),
+                    int(row["curr_event_number"]),
+                    int(row["prev_gps_time"]),
+                    int(row["curr_gps_time"]),
+                    int(row["shared_du_pair_count"]),
                     str(row.get("curr_event_datetime", "")),
                 )
             )
@@ -399,6 +657,104 @@ def plot_adjacent_pair_delta_histogram(
     plt.close(fig)
 
 
+def plot_shared_pair_count_histogram(
+    path: Path,
+    rows: Sequence[SharedPairCountRow],
+    bins: int,
+) -> None:
+    """Plot histogram for shared DU-pair counts across event comparisons."""
+    if not rows:
+        logger.warning("No shared DU-pair count rows; skip plotting")
+        return
+
+    counts = [row[4] for row in rows]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.hist(counts, bins=max(1, bins), edgecolor="black")
+    ax.set_xlabel("Shared DU-pair count")
+    ax.set_ylabel("Count")
+    ax.set_yscale("log")
+    ax.set_title("Distribution of shared DU-pair count in lookback comparisons")
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def plot_shared_pair_count_vs_time(
+    path: Path,
+    rows: Sequence[SharedPairCountRow],
+) -> None:
+    """Plot shared DU-pair counts versus current event time."""
+    if not rows:
+        logger.warning("No shared DU-pair count rows; skip time scatter plotting")
+        return
+
+    gps_times = [row[3] for row in rows]
+    count_values = [row[4] for row in rows]
+    datetime_labels = [row[5] for row in rows]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.scatter(gps_times, count_values, s=8, alpha=0.6)
+    ax.set_xlabel("Curr event time (gps_time)")
+    ax.set_ylabel("Shared DU-pair count")
+    ax.set_title("Shared DU-pair count vs curr event time")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
+    apply_time_ticks(ax, gps_times, datetime_labels)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def plot_shared_du_count_histogram(
+    path: Path,
+    rows: Sequence[SharedDuCountRow],
+    bins: int,
+) -> None:
+    """Plot histogram for shared DU counts across event comparisons."""
+    if not rows:
+        logger.warning("No shared DU count rows; skip plotting")
+        return
+
+    counts = [row[4] for row in rows]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.hist(counts, bins=max(1, bins), edgecolor="black")
+    ax.set_xlabel("Shared DU count")
+    ax.set_ylabel("Count")
+    ax.set_yscale("log")
+    ax.set_title("Distribution of shared DU count in lookback comparisons")
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def plot_shared_du_count_vs_time(
+    path: Path,
+    rows: Sequence[SharedDuCountRow],
+) -> None:
+    """Plot shared DU counts versus current event time."""
+    if not rows:
+        logger.warning("No shared DU count rows; skip time scatter plotting")
+        return
+
+    gps_times = [row[3] for row in rows]
+    count_values = [row[4] for row in rows]
+    datetime_labels = [row[5] for row in rows]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.scatter(gps_times, count_values, s=8, alpha=0.6)
+    ax.set_xlabel("Curr event time (gps_time)")
+    ax.set_ylabel("Shared DU count")
+    ax.set_title("Shared DU count vs curr event time")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
+    apply_time_ticks(ax, gps_times, datetime_labels)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -431,6 +787,22 @@ def parse_args() -> argparse.Namespace:
         help="Ignore existing CSV cache and recompute from YAML",
     )
     parser.add_argument(
+        "--start-datetime",
+        type=parse_cli_datetime,
+        help=(
+            "Start datetime (inclusive), format: "
+            f"{DATETIME_HELP_FORMAT}"
+        ),
+    )
+    parser.add_argument(
+        "--end-datetime",
+        type=parse_cli_datetime,
+        help=(
+            "End datetime (inclusive), format: "
+            f"{DATETIME_HELP_FORMAT}"
+        ),
+    )
+    parser.add_argument(
         "--offset-file",
         default="2025-10-28_beacon_25Hz_offset.txt",
         help="DU time offset file path. Format: du_id, offset, sigma",
@@ -441,6 +813,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Main workflow."""
     args = parse_args()
+    start_datetime = getattr(args, "start_datetime", None)
+    end_datetime = getattr(args, "end_datetime", None)
+
+    if (
+        start_datetime is not None
+        and end_datetime is not None
+        and start_datetime > end_datetime
+    ):
+        logger.error("start-datetime must be earlier than or equal to end-datetime")
+        return 2
+
     yaml_path = Path(args.yaml_file)
     normalized_lookback = max(1, args.lookback)
 
@@ -453,18 +836,68 @@ def main() -> int:
     time_plot_out = yaml_path.with_name(
         f"{yaml_path.stem}_lookback{normalized_lookback}_common_du_pair_delta_vs_time.png"
     )
+    count_hist_out = yaml_path.with_name(
+        f"{yaml_path.stem}_lookback{normalized_lookback}_shared_du_pair_count_hist.png"
+    )
+    count_time_out = yaml_path.with_name(
+        f"{yaml_path.stem}_lookback{normalized_lookback}_shared_du_pair_count_vs_time.png"
+    )
+    du_count_hist_out = yaml_path.with_name(
+        f"{yaml_path.stem}_lookback{normalized_lookback}_shared_du_count_hist.png"
+    )
+    du_count_time_out = yaml_path.with_name(
+        f"{yaml_path.stem}_lookback{normalized_lookback}_shared_du_count_vs_time.png"
+    )
 
-    if csv_out.exists() and not args.force_recompute:
+    use_csv_cache = csv_out.exists() and not args.force_recompute
+    if start_datetime is not None or end_datetime is not None:
+        use_csv_cache = False
+
+    if use_csv_cache:
         logger.info("Found CSV cache: {}", csv_out)
         rows = read_adjacent_pair_csv(csv_out)
         logger.info("Loaded rows from CSV cache: {}", len(rows))
+        count_rows = derive_shared_pair_count_rows_from_adjacent_rows(rows)
+        logger.info("Derived shared-count rows from pair-row cache: {}", len(count_rows))
+        du_count_rows: List[SharedDuCountRow] = []
+
+        if yaml_path.exists():
+            try:
+                data = read_yaml_events(yaml_path)
+                data = filter_data_by_datetime_range(data, start_datetime, end_datetime)
+                du_count_rows = build_shared_du_count_rows(
+                    build_event_records(data),
+                    lookback=args.lookback,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to build shared DU count rows from YAML in cache path: {}",
+                    exc,
+                )
 
         if not args.no_plot:
             plot_adjacent_pair_delta_histogram(plot_out, rows, args.bins)
             plot_adjacent_pair_delta_vs_time(time_plot_out, rows)
+            plot_shared_pair_count_histogram(count_hist_out, count_rows, args.bins)
+            plot_shared_pair_count_vs_time(count_time_out, count_rows)
+            plot_shared_du_count_histogram(
+                du_count_hist_out,
+                du_count_rows,
+                args.bins,
+            )
+            plot_shared_du_count_vs_time(
+                du_count_time_out,
+                du_count_rows,
+            )
             if rows:
                 logger.info("Plot written: {}", plot_out)
                 logger.info("Plot written: {}", time_plot_out)
+            if count_rows:
+                logger.info("Plot written: {}", count_hist_out)
+                logger.info("Plot written: {}", count_time_out)
+            if du_count_rows:
+                logger.info("Plot written: {}", du_count_hist_out)
+                logger.info("Plot written: {}", du_count_time_out)
         else:
             logger.info("Plotting is disabled by --no-plot")
 
@@ -483,13 +916,16 @@ def main() -> int:
         logger.error("Failed to read YAML: {}", exc)
         return 2
 
+    data = filter_data_by_datetime_range(data, start_datetime, end_datetime)
+
     offset_map = load_du_time_offsets(Path(args.offset_file))
     records = build_event_records(data)
-    rows = build_adjacent_common_pair_rows(
+    rows, count_rows = _build_common_pair_and_count_rows(
         records,
         lookback=args.lookback,
         offset_map=offset_map,
     )
+    du_count_rows = build_shared_du_count_rows(records, lookback=args.lookback)
 
     write_adjacent_pair_csv(csv_out, rows)
     logger.info("CSV written: {}", csv_out)
@@ -497,9 +933,26 @@ def main() -> int:
     if not args.no_plot:
         plot_adjacent_pair_delta_histogram(plot_out, rows, args.bins)
         plot_adjacent_pair_delta_vs_time(time_plot_out, rows)
+        plot_shared_pair_count_histogram(count_hist_out, count_rows, args.bins)
+        plot_shared_pair_count_vs_time(count_time_out, count_rows)
+        plot_shared_du_count_histogram(
+            du_count_hist_out,
+            du_count_rows,
+            args.bins,
+        )
+        plot_shared_du_count_vs_time(
+            du_count_time_out,
+            du_count_rows,
+        )
         if rows:
             logger.info("Plot written: {}", plot_out)
             logger.info("Plot written: {}", time_plot_out)
+        if count_rows:
+            logger.info("Plot written: {}", count_hist_out)
+            logger.info("Plot written: {}", count_time_out)
+        if du_count_rows:
+            logger.info("Plot written: {}", du_count_hist_out)
+            logger.info("Plot written: {}", du_count_time_out)
     else:
         logger.info("Plotting is disabled by --no-plot")
 

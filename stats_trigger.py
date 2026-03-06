@@ -27,6 +27,8 @@ plt.style.use(["science", "grid", "notebook"])
 
 
 SecondDateTimeMap = Dict[int, Tuple[str, str, str]]
+DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
 
 
 def format_event_datetime(date_str: str, time_str: str) -> str:
@@ -36,7 +38,7 @@ def format_event_datetime(date_str: str, time_str: str) -> str:
 
     try:
         dt_obj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
-        return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+        return dt_obj.strftime(DATETIME_FORMAT)
     except ValueError:
         return f"{date_str} {time_str}".strip()
 
@@ -78,15 +80,19 @@ def apply_gps_datetime_ticks(
     if second_datetime_map is None or not seconds:
         return
 
-    tick_count = min(max_ticks, len(seconds))
+    unique_seconds = sorted(set(seconds))
+    if not unique_seconds:
+        return
+
+    tick_count = min(max_ticks, len(unique_seconds))
     if tick_count <= 0:
         return
 
     if tick_count == 1:
-        tick_positions = [seconds[0]]
+        tick_positions = [unique_seconds[0]]
     else:
-        indices = np.linspace(0, len(seconds) - 1, tick_count, dtype=int)
-        tick_positions = [seconds[index] for index in indices]
+        indices = np.linspace(0, len(unique_seconds) - 1, tick_count, dtype=int)
+        tick_positions = [unique_seconds[index] for index in indices]
 
     tick_labels: List[str] = []
     for second in tick_positions:
@@ -135,6 +141,76 @@ def parse_event_date_time(payload: Dict[str, Any]) -> Tuple[str, str]:
         time_str = time_str.zfill(6)
 
     return date_str, time_str
+
+
+def parse_cli_datetime(value: str) -> datetime:
+    """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
+    try:
+        return datetime.strptime(value, DATETIME_FORMAT)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Invalid datetime format: "
+            f"{value!r}. Expected format: {DATETIME_FORMAT}"
+        ) from exc
+
+
+def parse_payload_datetime(payload: Dict[str, Any]) -> Optional[datetime]:
+    """Parse event datetime from payload ``date`` and ``time`` fields."""
+    date_str, time_str = parse_event_date_time(payload)
+    if not date_str or not time_str:
+        return None
+
+    try:
+        return datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def in_datetime_range(
+    event_dt: datetime,
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> bool:
+    """Check whether event datetime is inside an inclusive range."""
+    if start_dt is not None and event_dt < start_dt:
+        return False
+    if end_dt is not None and event_dt > end_dt:
+        return False
+    return True
+
+
+def filter_data_by_datetime_range(
+    data: Dict[str, Dict[str, Any]],
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> Dict[str, Dict[str, Any]]:
+    """Filter YAML event payloads by datetime range from ``date``/``time``."""
+    if start_dt is None and end_dt is None:
+        return data
+
+    filtered_data: Dict[str, Dict[str, Any]] = {}
+    invalid_datetime_count = 0
+
+    for event_key, payload in data.items():
+        event_dt = parse_payload_datetime(payload)
+        if event_dt is None:
+            invalid_datetime_count += 1
+            continue
+
+        if in_datetime_range(event_dt, start_dt, end_dt):
+            filtered_data[event_key] = payload
+
+    logger.info(
+        "Datetime range filter on YAML events: {} -> {}",
+        len(data),
+        len(filtered_data),
+    )
+    if invalid_datetime_count > 0:
+        logger.warning(
+            "Skipped {} events with invalid/missing date/time while filtering",
+            invalid_datetime_count,
+        )
+    return filtered_data
 
 
 def get_du_ns_map(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -384,26 +460,76 @@ def build_window_averages(
     return event_rows, du_rows
 
 
+def serialize_du_ids(du_ids: List[str]) -> str:
+    """Serialize DU IDs to a compact CSV-safe string field."""
+    return "|".join(du_ids)
+
+
+def deserialize_du_ids(value: str) -> List[str]:
+    """Deserialize DU IDs from compact CSV field."""
+    if not value:
+        return []
+    return [item for item in value.split("|") if item]
+
+
+def build_event_du_ids_map(
+    data: Dict[str, Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Build mapping from event_number string to DU ID list."""
+    event_du_ids_map: Dict[str, List[str]] = {}
+    for event_key, payload in data.items():
+        event_number = payload.get("event_number", event_key)
+        event_du_ids_map[str(event_number)] = get_event_du_ids(payload)
+    return event_du_ids_map
+
+
+def build_data_from_cached_events(
+    records: List[Tuple[str, int, int, int, int, str, str]],
+    event_du_ids_map: Dict[str, List[str]],
+) -> Dict[str, Dict[str, Any]]:
+    """Rebuild minimal payloads from cache for DU-based aggregations."""
+    cached_data: Dict[str, Dict[str, Any]] = {}
+    for _, event_second, _, event_number, *_ in records:
+        event_number_key = str(event_number)
+        cached_data[event_number_key] = {
+            "gps_time": event_second,
+            "du_id": event_du_ids_map.get(event_number_key, []),
+        }
+    return cached_data
+
+
 def write_event_csv(
     path: Path,
     records: List[Tuple[str, int, int, int, int, str, str]],
+    event_du_ids_map: Optional[Dict[str, List[str]]] = None,
 ) -> None:
-    """Write per-event DU-count CSV."""
+    """Write per-event DU-count CSV with event_number as leading key."""
+    if event_du_ids_map is None:
+        event_du_ids_map = {}
+
     with path.open("w", newline="", encoding="utf-8") as fp:
         writer = csv.writer(fp)
         writer.writerow(
             [
-                "event_key",
+                "event_number",
                 "event_second",
                 "event_date",
                 "event_time",
                 "du_count",
-                "event_number",
-                "index",
+                "du_ids",
             ]
         )
         rows = [
-            (record[0], record[1], record[5], record[6], record[2], record[3], record[4])
+            (
+                record[3],
+                record[1],
+                record[5],
+                record[6],
+                record[2],
+                serialize_du_ids(
+                    event_du_ids_map.get(str(record[3]), event_du_ids_map.get(record[0], []))
+                ),
+            )
             for record in records
         ]
         writer.writerows(rows)
@@ -578,6 +704,158 @@ def write_avg_du_csv(
     logger.debug(f"Wrote avg-DU CSV rows: {len(rows)} -> {path}")
 
 
+def read_event_csv(
+    path: Path,
+) -> List[Tuple[str, int, int, int, int, str, str]]:
+    """Read per-event DU-count CSV."""
+    rows: List[Tuple[str, int, int, int, int, str, str]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row_index, row in enumerate(reader):
+            event_number = int(row["event_number"])
+            rows.append(
+                (
+                    str(event_number),
+                    int(row["event_second"]),
+                    int(row["du_count"]),
+                    event_number,
+                    row_index,
+                    str(row.get("event_date", "")),
+                    str(row.get("event_time", "")),
+                )
+            )
+    return rows
+
+
+def read_event_csv_du_ids(path: Path) -> Dict[str, List[str]]:
+    """Read event_number -> DU IDs mapping from event CSV cache."""
+    event_du_ids_map: Dict[str, List[str]] = {}
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            event_number_key = str(row["event_number"])
+            event_du_ids_map[event_number_key] = deserialize_du_ids(
+                str(row.get("du_ids", ""))
+            )
+    return event_du_ids_map
+
+
+def read_rate_csv(path: Path) -> List[Tuple[int, int, float]]:
+    """Read per-second event-rate CSV."""
+    rows: List[Tuple[int, int, float]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            rows.append(
+                (
+                    int(row["event_second"]),
+                    int(row["event_count"]),
+                    float(row["event_rate_hz"]),
+                )
+            )
+    return rows
+
+
+def read_du_rate_csv(path: Path) -> List[Tuple[str, int, float]]:
+    """Read per-DU trigger-rate CSV."""
+    rows: List[Tuple[str, int, float]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            rows.append(
+                (
+                    str(row["du_id"]),
+                    int(row["trigger_count"]),
+                    float(row["trigger_rate_hz"]),
+                )
+            )
+    return rows
+
+
+def read_adjacent_time_delta_csv(path: Path) -> List[Tuple[int, int]]:
+    """Read adjacent event time-delta distribution CSV."""
+    rows: List[Tuple[int, int]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            rows.append((int(row["delta_second"]), int(row["event_pair_count"])))
+    return rows
+
+
+def read_du_per_second_csv(path: Path) -> List[Tuple[int, str, int, float]]:
+    """Read per-second per-DU trigger-rate CSV."""
+    rows: List[Tuple[int, str, int, float]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            rows.append(
+                (
+                    int(row["event_second"]),
+                    str(row["du_id"]),
+                    int(row["trigger_count"]),
+                    float(row["trigger_rate_hz"]),
+                )
+            )
+    return rows
+
+
+def read_avg_event_csv(path: Path) -> List[Tuple[int, int, int, float]]:
+    """Read window-averaged event-rate CSV."""
+    rows: List[Tuple[int, int, int, float]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            rows.append(
+                (
+                    int(row["window_start_second"]),
+                    int(row["window_end_second_exclusive"]),
+                    int(row["event_count"]),
+                    float(row["avg_event_rate_hz"]),
+                )
+            )
+    return rows
+
+
+def read_avg_du_csv(path: Path) -> List[Tuple[int, int, str, int, float]]:
+    """Read window-averaged per-DU trigger-rate CSV."""
+    rows: List[Tuple[int, int, str, int, float]] = []
+    with path.open("r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            rows.append(
+                (
+                    int(row["window_start_second"]),
+                    int(row["window_end_second_exclusive"]),
+                    str(row["du_id"]),
+                    int(row["trigger_count"]),
+                    float(row["avg_trigger_rate_hz"]),
+                )
+            )
+    return rows
+
+
+def expand_adjacent_time_deltas_from_distribution(
+    rows: List[Tuple[int, int]],
+) -> List[int]:
+    """Expand (delta_second, event_pair_count) rows back to delta samples."""
+    deltas: List[int] = []
+    for delta_second, pair_count in rows:
+        deltas.extend([delta_second] * max(0, pair_count))
+    return deltas
+
+
+def build_per_second_du_from_rows(
+    rows: List[Tuple[int, str, int, float]],
+) -> Dict[int, Counter[str]]:
+    """Rebuild per-second DU counters from flattened CSV rows."""
+    per_second_du: Dict[int, Counter[str]] = {}
+    for second, du_id, trigger_count, _ in rows:
+        if second not in per_second_du:
+            per_second_du[second] = Counter()
+        per_second_du[second][du_id] = trigger_count
+    return per_second_du
+
+
 def plot_du_count_histogram(
     path: Path,
     records: List[Tuple[str, int, int, int, int, str, str]],
@@ -595,9 +873,13 @@ def plot_du_count_histogram(
     ax.hist(du_counts, bins=bins, edgecolor="black", alpha=0.8)
     ax.set_xlabel("DU count per event")
     ax.set_ylabel("Event count")
+    ax.set_yscale("log")
     ax.set_title("Histogram of Trigger DU Count")
     ax.grid(True, axis="y", linestyle=":", alpha=0.6)
-    ax.set_xticks(range(1, max_du + 1))
+    tick_positions = list(range(1, max_du + 1, 5))
+    if tick_positions and tick_positions[-1] != max_du:
+        tick_positions.append(max_du)
+    ax.set_xticks(tick_positions)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -645,6 +927,7 @@ def plot_adjacent_time_delta_histogram(path: Path, deltas: List[int]) -> None:
     ax.hist(deltas, bins=bins, edgecolor="black", alpha=0.8)
     ax.set_xlabel("Adjacent event time delta (s)")
     ax.set_ylabel("Event-pair count")
+    ax.set_yscale("log")
     ax.set_title("Histogram of Adjacent Event Time Delta")
     ax.grid(True, axis="y", linestyle=":", alpha=0.6)
     if max_delta - min_delta <= 30:
@@ -694,6 +977,7 @@ def plot_du_trigger_rate(path: Path, du_rates: List[Tuple[str, int, float]]) -> 
     ax.set_ylabel("Trigger rate (Hz)")
     ax.set_title("Trigger Rate per DU")
     ax.grid(True, axis="y", linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
     ax.tick_params(axis="x", rotation=75)
     fig.tight_layout()
     fig.savefig(path)
@@ -940,9 +1224,30 @@ def parse_args() -> argparse.Namespace:
         help="Number of most active DUs shown in Top-N line plots (default: 10, set to 0 to disable)",
     )
     parser.add_argument(
+        "--start-datetime",
+        type=parse_cli_datetime,
+        help=(
+            "Start datetime (inclusive), format: "
+            f"{DATETIME_HELP_FORMAT}"
+        ),
+    )
+    parser.add_argument(
+        "--end-datetime",
+        type=parse_cli_datetime,
+        help=(
+            "End datetime (inclusive), format: "
+            f"{DATETIME_HELP_FORMAT}"
+        ),
+    )
+    parser.add_argument(
         "--no-plot",
         action="store_true",
         help="Export CSV only, do not generate plots",
+    )
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="Ignore existing CSV cache and recompute from YAML",
     )
     return parser.parse_args()
 
@@ -950,59 +1255,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Main workflow."""
     args = parse_args()
+    start_datetime = getattr(args, "start_datetime", None)
+    end_datetime = getattr(args, "end_datetime", None)
+
+    if (
+        start_datetime is not None
+        and end_datetime is not None
+        and start_datetime > end_datetime
+    ):
+        logger.error("start-datetime must be earlier than or equal to end-datetime")
+        return 2
+
     yaml_path = Path(args.yaml_file)
 
     logger.info(f"Start stats workflow for YAML: {yaml_path}")
 
-    if not yaml_path.exists():
-        logger.error(f"Input file does not exist: {yaml_path}")
-        return 2
-
-    with yaml_path.open("r", encoding="utf-8") as fp:
-        data = yaml.safe_load(fp)
-
-    if not isinstance(data, dict):
-        logger.error("YAML top-level structure is not a dict; cannot parse by event key")
-        return 2
-
-    logger.info(f"Loaded YAML entries: {len(data)}")
-
-    records = parse_event_records(data)
-    second_datetime_map = build_second_datetime_map(records)
-    rates = build_rate_per_second(records)
-    adjacent_time_deltas = build_adjacent_time_deltas(records)
-    adjacent_time_delta_rows = build_adjacent_time_delta_distribution(
-        adjacent_time_deltas
-    )
-    du_rates = build_du_trigger_rate(data, records)
-    per_second_du = build_du_counts_per_second(data)
-    du_second_rows = build_du_rate_per_second_rows(per_second_du)
-
-    avg_event_rows: List[Tuple[int, int, int, float]] = []
-    avg_du_rows: List[Tuple[int, int, str, int, float]] = []
-
-    effective_avg_du_window = args.avg_window
-    logger.info(
-        "Window settings: avg_window={}, effective_avg_du_window={}",
-        args.avg_window,
-        effective_avg_du_window,
-    )
-
-    if args.avg_window > 0:
-        avg_event_rows, _ = build_window_averages(records, per_second_du, args.avg_window)
-
-    if effective_avg_du_window > 0:
-        _, avg_du_rows = build_window_averages(records, per_second_du, effective_avg_du_window)
-
     event_out = yaml_path.with_name(f"{yaml_path.stem}_event_du_count.csv")
-    rate_out = yaml_path.with_name(f"{yaml_path.stem}_rate_per_second.csv")
-    du_rate_out = yaml_path.with_name(f"{yaml_path.stem}_du_trigger_rate.csv")
-    time_delta_out = yaml_path.with_name(
-        f"{yaml_path.stem}_adjacent_time_delta_distribution.csv"
-    )
-    du_second_out = yaml_path.with_name(f"{yaml_path.stem}_du_rate_per_second.csv")
-    avg_event_out = yaml_path.with_name(f"{yaml_path.stem}_avg_event_rate.csv")
-    avg_du_out = yaml_path.with_name(f"{yaml_path.stem}_avg_du_trigger_rate.csv")
     du_hist_out = yaml_path.with_name(f"{yaml_path.stem}_du_count_hist.png")
     event_du_count_plot_out = yaml_path.with_name(
         f"{yaml_path.stem}_event_du_count_over_time.png"
@@ -1024,15 +1292,94 @@ def main() -> int:
         f"{yaml_path.stem}_avg_du_trigger_rate_topn.png"
     )
 
-    write_event_csv(event_out, records)
-    write_rate_csv(rate_out, rates, second_datetime_map)
-    write_du_rate_csv(du_rate_out, du_rates)
-    write_adjacent_time_delta_csv(time_delta_out, adjacent_time_delta_rows)
-    write_du_per_second_csv(du_second_out, du_second_rows, second_datetime_map)
+    use_csv_cache = event_out.exists() and not args.force_recompute
+    if start_datetime is not None or end_datetime is not None:
+        use_csv_cache = False
+
+    records: List[Tuple[str, int, int, int, int, str, str]] = []
+    rates: List[Tuple[int, int, float]] = []
+    adjacent_time_deltas: List[int] = []
+    adjacent_time_delta_rows: List[Tuple[int, int]] = []
+    du_rates: List[Tuple[str, int, float]] = []
+    per_second_du: Dict[int, Counter[str]] = {}
+    du_second_rows: List[Tuple[int, str, int, float]] = []
+    data_for_aggregates: Dict[str, Dict[str, Any]] = {}
+    event_du_ids_map: Dict[str, List[str]] = {}
+
+    if use_csv_cache:
+        logger.info("Found event CSV cache, load directly without YAML recompute")
+        records = read_event_csv(event_out)
+        event_du_ids_map = read_event_csv_du_ids(event_out)
+        data_for_aggregates = build_data_from_cached_events(records, event_du_ids_map)
+        second_datetime_map = build_second_datetime_map(records)
+        rates = build_rate_per_second(records)
+        adjacent_time_deltas = build_adjacent_time_deltas(records)
+        adjacent_time_delta_rows = build_adjacent_time_delta_distribution(
+            adjacent_time_deltas
+        )
+        du_rates = build_du_trigger_rate(data_for_aggregates, records)
+        per_second_du = build_du_counts_per_second(data_for_aggregates)
+        du_second_rows = build_du_rate_per_second_rows(per_second_du)
+    else:
+        if args.force_recompute and event_out.exists():
+            logger.info("Force recompute enabled, ignore existing event CSV cache")
+
+        if not yaml_path.exists():
+            logger.error(f"Input file does not exist: {yaml_path}")
+            return 2
+
+        with yaml_path.open("r", encoding="utf-8") as fp:
+            data = yaml.safe_load(fp)
+
+        if not isinstance(data, dict):
+            logger.error(
+                "YAML top-level structure is not a dict; cannot parse by event key"
+            )
+            return 2
+
+        logger.info(f"Loaded YAML entries: {len(data)}")
+
+        data = filter_data_by_datetime_range(data, start_datetime, end_datetime)
+        event_du_ids_map = build_event_du_ids_map(data)
+        data_for_aggregates = data
+
+        records = parse_event_records(data)
+        second_datetime_map = build_second_datetime_map(records)
+        rates = build_rate_per_second(records)
+        adjacent_time_deltas = build_adjacent_time_deltas(records)
+        adjacent_time_delta_rows = build_adjacent_time_delta_distribution(
+            adjacent_time_deltas
+        )
+        du_rates = build_du_trigger_rate(data_for_aggregates, records)
+        per_second_du = build_du_counts_per_second(data_for_aggregates)
+        du_second_rows = build_du_rate_per_second_rows(per_second_du)
+
+    avg_event_rows: List[Tuple[int, int, int, float]] = []
+    avg_du_rows: List[Tuple[int, int, str, int, float]] = []
+
+    effective_avg_du_window = args.avg_window
+    logger.info(
+        "Window settings: avg_window={}, effective_avg_du_window={}",
+        args.avg_window,
+        effective_avg_du_window,
+    )
+
     if args.avg_window > 0:
-        write_avg_event_csv(avg_event_out, avg_event_rows, second_datetime_map)
+        avg_event_rows, _ = build_window_averages(
+            records,
+            per_second_du,
+            args.avg_window,
+        )
+
     if effective_avg_du_window > 0:
-        write_avg_du_csv(avg_du_out, avg_du_rows, second_datetime_map)
+        _, avg_du_rows = build_window_averages(
+            records,
+            per_second_du,
+            effective_avg_du_window,
+        )
+
+    if not use_csv_cache:
+        write_event_csv(event_out, records, event_du_ids_map)
 
     if not args.no_plot:
         logger.info("Plotting is enabled; generating figures")
@@ -1078,14 +1425,7 @@ def main() -> int:
 
     logger.info(f"Total events: {len(records)}")
     logger.info(f"Per-event DU-count stats written to: {event_out}")
-    logger.info(f"Per-second event-rate stats written to: {rate_out}")
-    logger.info(f"Per-DU trigger-rate stats written to: {du_rate_out}")
-    logger.info(f"Adjacent time-delta stats written to: {time_delta_out}")
-    logger.info(f"Per-second per-DU trigger-rate stats written to: {du_second_out}")
-    if args.avg_window > 0:
-        logger.info(f"Window-averaged event-rate stats written to: {avg_event_out}")
-    if effective_avg_du_window > 0:
-        logger.info(f"Window-averaged per-DU trigger-rate stats written to: {avg_du_out}")
+    logger.info("Derived statistics are computed in-memory from the event CSV cache")
     if not args.no_plot:
         logger.info(f"DU-count histogram written to: {du_hist_out}")
         logger.info(f"Event DU-count time-series plot written to: {event_du_count_plot_out}")

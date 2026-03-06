@@ -38,9 +38,14 @@ YamlData = Dict[str, EventPayload]
 OffsetMap = Dict[str, float]
 ObservedPairDelta = Tuple[int, int, int, str, str, float, float]
 ExpectedPairDelta = Tuple[str, str, float, float]
-PairDistributionRow = Tuple[int, int, int, str, str, float, float, float, float, str]
+PairDistributionRow = Tuple[int, int, str, str, float, float, float, float, str]
+EventPairCountRow = Tuple[int, int, int, str]
+EventMaxRatioRow = Tuple[int, int, float]
 
 EventTimeLabelMap = Dict[int, str]
+
+DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
+DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
 
 
 def sort_du_id_key(du_id: str) -> Tuple[int, str]:
@@ -62,13 +67,30 @@ def read_yaml_events(yaml_path: Path) -> YamlData:
 
 
 def parse_du_ns_map(payload: EventPayload) -> Dict[str, float]:
-    """Parse ``du_ns`` map from one event payload."""
+    """Parse ``du_ns`` map from one event payload.
+
+    Supports both scalar values and list values; for list values, the last
+    numeric sample is used to keep backward-compatible per-event scalar math.
+    """
     du_ns = payload.get("du_ns")
     if not isinstance(du_ns, dict):
         return {}
 
     parsed: Dict[str, float] = {}
     for key, value in du_ns.items():
+        if isinstance(value, list):
+            numeric_values: List[float] = []
+            for item in value:
+                try:
+                    numeric_values.append(float(item))
+                except (TypeError, ValueError):
+                    continue
+            if not numeric_values:
+                logger.debug("Skip non-numeric du_ns list for DU {}: {}", key, value)
+                continue
+            parsed[str(key)] = numeric_values[-1]
+            continue
+
         try:
             parsed[str(key)] = float(value)
         except (TypeError, ValueError):
@@ -131,11 +153,139 @@ def format_event_datetime(date_str: str, time_str: str) -> str:
     if not date_str or not time_str:
         return ""
 
+    normalized_datetime = normalize_event_datetime_text(date_str, time_str)
     try:
-        dt_obj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
-        return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+        dt_obj = datetime.strptime(normalized_datetime, DATETIME_FORMAT)
+        return dt_obj.strftime(DATETIME_FORMAT)
     except ValueError:
         return f"{date_str} {time_str}".strip()
+
+
+def normalize_event_datetime_text(date_str: str, time_str: str) -> str:
+    """Normalize payload ``date``/``time`` text into ``DATETIME_FORMAT``."""
+    if date_str.isdigit() and len(date_str) == 8:
+        date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+
+    if time_str.isdigit() and len(time_str) == 6:
+        time_str = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+
+    return f"{date_str}T{time_str}"
+
+
+def parse_cli_datetime(value: str) -> datetime:
+    """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
+    try:
+        return datetime.strptime(value, DATETIME_FORMAT)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Invalid datetime format: "
+            f"{value!r}. Expected format: {DATETIME_FORMAT}"
+        ) from exc
+
+
+def parse_event_datetime(payload: EventPayload) -> Optional[datetime]:
+    """Parse one event payload datetime from ``date``/``time`` fields."""
+    date_str, time_str = parse_event_date_time(payload)
+    if not date_str or not time_str:
+        return None
+
+    try:
+        normalized_datetime = normalize_event_datetime_text(date_str, time_str)
+        return datetime.strptime(normalized_datetime, DATETIME_FORMAT)
+    except ValueError:
+        return None
+
+
+def parse_row_datetime(event_datetime: str) -> Optional[datetime]:
+    """Parse datetime text from distribution row cache field."""
+    if not event_datetime:
+        return None
+
+    try:
+        return datetime.strptime(event_datetime, DATETIME_FORMAT)
+    except ValueError:
+        return None
+
+
+def in_datetime_range(
+    event_dt: datetime,
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> bool:
+    """Check whether event datetime is inside an inclusive range."""
+    if start_dt is not None and event_dt < start_dt:
+        return False
+    if end_dt is not None and event_dt > end_dt:
+        return False
+    return True
+
+
+def filter_events_by_datetime_range(
+    data: YamlData,
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> YamlData:
+    """Filter YAML events by datetime range from payload ``date``/``time``."""
+    if start_dt is None and end_dt is None:
+        return data
+
+    filtered_data: YamlData = {}
+    invalid_datetime_count = 0
+
+    for event_key, payload in data.items():
+        event_dt = parse_event_datetime(payload)
+        if event_dt is None:
+            invalid_datetime_count += 1
+            continue
+        if in_datetime_range(event_dt, start_dt, end_dt):
+            filtered_data[event_key] = payload
+
+    logger.info(
+        "Datetime range filter on YAML events: {} -> {}",
+        len(data),
+        len(filtered_data),
+    )
+    if invalid_datetime_count > 0:
+        logger.warning(
+            "Skipped {} events with invalid/missing date/time while filtering",
+            invalid_datetime_count,
+        )
+    return filtered_data
+
+
+def filter_distribution_rows_by_datetime_range(
+    rows: Sequence[PairDistributionRow],
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> List[PairDistributionRow]:
+    """Filter distribution rows by datetime range from ``event_datetime``."""
+    if start_dt is None and end_dt is None:
+        return list(rows)
+
+    filtered_rows: List[PairDistributionRow] = []
+    invalid_datetime_count = 0
+
+    for row in rows:
+        event_dt = parse_row_datetime(row[8])
+        if event_dt is None:
+            invalid_datetime_count += 1
+            continue
+        if in_datetime_range(event_dt, start_dt, end_dt):
+            filtered_rows.append(row)
+
+    logger.info(
+        "Datetime range filter on cached rows: {} -> {}",
+        len(rows),
+        len(filtered_rows),
+    )
+    if invalid_datetime_count > 0:
+        logger.warning(
+            "Skipped {} cached rows with invalid/missing event_datetime "
+            "while filtering",
+            invalid_datetime_count,
+        )
+
+    return filtered_rows
 
 
 def build_event_time_label_map(data: YamlData) -> EventTimeLabelMap:
@@ -161,11 +311,11 @@ def build_event_time_label_map_from_rows(
     """Build mapping: gps_time -> datetime label from cached rows."""
     label_map: EventTimeLabelMap = {}
     for row in rows:
-        gps_time = int(row[2])
+        gps_time = int(row[1])
         if gps_time < 0 or gps_time in label_map:
             continue
-        if len(row) > 9:
-            label_map[gps_time] = str(row[9])
+        if len(row) > 8:
+            label_map[gps_time] = str(row[8])
     return label_map
 
 
@@ -356,7 +506,6 @@ def build_pair_distribution_rows(
         rows.append(
             (
                 event_number,
-                index,
                 event_time,
                 du_a,
                 du_b,
@@ -369,7 +518,7 @@ def build_pair_distribution_rows(
         )
 
     rows.sort(
-        key=lambda row: (row[2], row[1], sort_du_id_key(row[3]), sort_du_id_key(row[4]))
+        key=lambda row: (row[1], row[0], sort_du_id_key(row[2]), sort_du_id_key(row[3]))
     )
     return rows
 
@@ -381,7 +530,6 @@ def write_pair_distribution_csv(path: Path, rows: Sequence[PairDistributionRow])
         writer.writerow(
             [
                 "event_number",
-                "index",
                 "event_time",
                 "du_a",
                 "du_b",
@@ -404,7 +552,6 @@ def read_pair_distribution_csv(path: Path) -> List[PairDistributionRow]:
             rows.append(
                 (
                     int(row["event_number"]),
-                    int(row["index"]),
                     int(row["event_time"]),
                     str(row["du_a"]),
                     str(row["du_b"]),
@@ -458,9 +605,9 @@ def plot_observed_expected_ratio(path: Path, rows: Sequence[PairDistributionRow]
         return
 
     ratios = np.array([
-        row[6] / row[7]
+        row[5] / row[6]
         for row in rows
-        if row[7] > 0
+        if row[6] > 0
     ])
     if len(ratios) == 0:
         logger.warning("No positive theoretical deltas available; skip ratio plot")
@@ -487,7 +634,7 @@ def plot_delta_vs_event_time(
     event_time_label_map: Optional[EventTimeLabelMap] = None,
 ) -> None:
     """Plot observed absolute delta scatter against event time."""
-    samples = [(row[2], row[6]) for row in rows if row[2] >= 0]
+    samples = [(row[1], row[5]) for row in rows if row[1] >= 0]
     if not samples:
         logger.warning("No event-time delta samples available; skip delta-vs-time plot")
         return
@@ -517,9 +664,9 @@ def plot_ratio_vs_event_time(
 ) -> None:
     """Plot observed/theoretical ratio scatter against event time."""
     samples = [
-        (row[2], row[6] / row[7])
+        (row[1], row[5] / row[6])
         for row in rows
-        if row[2] >= 0 and row[7] > 0
+        if row[1] >= 0 and row[6] > 0
     ]
     if not samples:
         logger.warning("No event-time ratio samples available; skip ratio-vs-time plot")
@@ -538,6 +685,170 @@ def plot_ratio_vs_event_time(
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.set_yscale("log")
     apply_time_ticks(ax, x_values, event_time_label_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def build_event_max_ratio_rows(
+    rows: Sequence[PairDistributionRow],
+) -> List[EventMaxRatioRow]:
+    """Build per-event maximum observed/theoretical ratio rows."""
+    max_ratio_map: Dict[Tuple[int, int], float] = {}
+
+    for row in rows:
+        event_number, event_time = row[0], row[1]
+        observed_abs_delta_ns = row[5]
+        theoretical_delta_ns = row[6]
+        if event_time < 0 or theoretical_delta_ns <= 0:
+            continue
+
+        ratio = observed_abs_delta_ns / theoretical_delta_ns
+        key = (event_number, event_time)
+        previous_max = max_ratio_map.get(key)
+        if previous_max is None or ratio > previous_max:
+            max_ratio_map[key] = ratio
+
+    result_rows: List[EventMaxRatioRow] = [
+        (event_number, event_time, max_ratio)
+        for (event_number, event_time), max_ratio in max_ratio_map.items()
+    ]
+    result_rows.sort(key=lambda item: (item[1], item[0]))
+    return result_rows
+
+
+def build_event_pair_count_rows(
+    rows: Sequence[PairDistributionRow],
+) -> List[EventPairCountRow]:
+    """Build per-event DU-pair count rows from distribution rows."""
+    grouped_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    event_datetime_map: Dict[Tuple[int, int], str] = {}
+
+    for row in rows:
+        event_number, event_time, event_datetime = row[0], row[1], row[8]
+        key = (event_number, event_time)
+        grouped_counts[key] += 1
+        if key not in event_datetime_map and event_datetime:
+            event_datetime_map[key] = event_datetime
+
+    result_rows: List[EventPairCountRow] = []
+    for event_number, event_time in sorted(grouped_counts.keys(), key=lambda item: (item[1], item[0])):
+        result_rows.append(
+            (
+                event_number,
+                event_time,
+                grouped_counts[(event_number, event_time)],
+                event_datetime_map.get((event_number, event_time), ""),
+            )
+        )
+
+    return result_rows
+
+
+def plot_event_max_ratio_vs_time(
+    path: Path,
+    rows: Sequence[EventMaxRatioRow],
+    event_time_label_map: Optional[EventTimeLabelMap] = None,
+) -> None:
+    """Plot per-event maximum ratio against event time."""
+    if not rows:
+        logger.warning("No per-event max-ratio samples available; skip time plot")
+        return
+
+    x_values = np.array([row[1] for row in rows])
+    y_values = np.array([row[2] for row in rows], dtype=float)
+
+    floor_value = non_zero_floor_magnitude(y_values)
+    y_values[y_values <= 0] = floor_value
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.scatter(x_values, y_values, s=10, alpha=0.7)
+    ax.set_xlabel("Event time (gps_time)")
+    ax.set_ylabel("Per-event max(Observed |Δt| / Theoretical Δt)")
+    ax.set_title("Per-event maximum ratio vs event time")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
+    apply_time_ticks(ax, x_values, event_time_label_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def plot_event_max_ratio_histogram(
+    path: Path,
+    rows: Sequence[EventMaxRatioRow],
+) -> None:
+    """Plot histogram of per-event maximum ratio values."""
+    if not rows:
+        logger.warning("No per-event max-ratio samples available; skip histogram")
+        return
+
+    ratio_values = np.array([row[2] for row in rows], dtype=float)
+    floor_value = non_zero_floor_magnitude(ratio_values)
+    ratio_values[ratio_values <= 0] = floor_value
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(np.log10(ratio_values), bins=80, edgecolor="black", alpha=0.8)
+    ax.set_xlabel("log(Per-event max(Observed |Δt| / Theoretical Δt))")
+    ax.set_ylabel("Count")
+    ax.set_title("Distribution of per-event maximum ratio")
+    ax.grid(True, axis="y", linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def plot_event_pair_count_vs_time(
+    path: Path,
+    rows: Sequence[EventPairCountRow],
+    event_time_label_map: Optional[EventTimeLabelMap] = None,
+) -> None:
+    """Plot per-event DU-pair count against event time."""
+    samples = [(row[1], row[2]) for row in rows if row[1] >= 0]
+    if not samples:
+        logger.warning("No per-event pair-count samples available; skip time plot")
+        return
+
+    x_values = np.array([sample[0] for sample in samples])
+    y_values = np.array([sample[1] for sample in samples], dtype=float)
+
+    floor_value = non_zero_floor_magnitude(y_values)
+    y_values[y_values <= 0] = floor_value
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.scatter(x_values, y_values, s=10, alpha=0.7)
+    ax.set_xlabel("Event time (gps_time)")
+    ax.set_ylabel("DU-pair count per event")
+    ax.set_title("DU-pair count per event vs event time")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
+    apply_time_ticks(ax, x_values, event_time_label_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def plot_event_pair_count_histogram(
+    path: Path,
+    rows: Sequence[EventPairCountRow],
+) -> None:
+    """Plot histogram of per-event DU-pair counts."""
+    if not rows:
+        logger.warning("No per-event pair-count samples available; skip histogram")
+        return
+
+    count_values = np.array([row[2] for row in rows], dtype=float)
+    floor_value = non_zero_floor_magnitude(count_values)
+    count_values[count_values <= 0] = floor_value
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(np.log10(count_values), bins=80, edgecolor="black", alpha=0.8)
+    ax.set_xlabel("log(DU-pair count per event)")
+    ax.set_ylabel("Count")
+    ax.set_title("Distribution of DU-pair count per event")
+    ax.grid(True, axis="y", linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -578,12 +889,38 @@ def parse_args() -> argparse.Namespace:
             "du_pair_delta_distribution.csv"
         ),
     )
+    parser.add_argument(
+        "--start-datetime",
+        type=parse_cli_datetime,
+        help=(
+            "Start datetime (inclusive), format: "
+            f"{DATETIME_HELP_FORMAT}"
+        ),
+    )
+    parser.add_argument(
+        "--end-datetime",
+        type=parse_cli_datetime,
+        help=(
+            "End datetime (inclusive), format: "
+            f"{DATETIME_HELP_FORMAT}"
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     """CLI entry point."""
     args = parse_args()
+    start_datetime = getattr(args, "start_datetime", None)
+    end_datetime = getattr(args, "end_datetime", None)
+
+    if (
+        start_datetime is not None
+        and end_datetime is not None
+        and start_datetime > end_datetime
+    ):
+        logger.error("start-datetime must be earlier than or equal to end-datetime")
+        return 2
 
     yaml_path = Path(args.yaml_file)
     stem = yaml_path.stem
@@ -592,7 +929,11 @@ def main() -> int:
 
     if distribution_csv.exists() and not args.force_recompute:
         logger.info("Found distribution CSV cache: {}", distribution_csv)
-        distribution_rows = read_pair_distribution_csv(distribution_csv)
+        distribution_rows = filter_distribution_rows_by_datetime_range(
+            read_pair_distribution_csv(distribution_csv),
+            start_datetime,
+            end_datetime,
+        )
         logger.info("Loaded distribution rows from cache: {}", len(distribution_rows))
         event_time_label_map = build_event_time_label_map_from_rows(distribution_rows)
 
@@ -601,9 +942,15 @@ def main() -> int:
             ratio_plot = root / f"{stem}_observed_expected_ratio.png"
             delta_time_plot = root / f"{stem}_du_pair_delta_vs_time.png"
             ratio_time_plot = root / f"{stem}_observed_expected_ratio_vs_time.png"
+            event_pair_count_time_plot = root / f"{stem}_event_du_pair_count_vs_time.png"
+            event_pair_count_hist_plot = root / f"{stem}_event_du_pair_count_hist.png"
+            event_max_ratio_time_plot = root / f"{stem}_event_max_ratio_vs_time.png"
+            event_max_ratio_hist_plot = root / f"{stem}_event_max_ratio_hist.png"
+            event_pair_count_rows = build_event_pair_count_rows(distribution_rows)
+            event_max_ratio_rows = build_event_max_ratio_rows(distribution_rows)
             plot_pair_delta_distribution(
                 pair_delta_plot,
-                np.array([row[6] for row in distribution_rows]),
+                np.array([row[5] for row in distribution_rows]),
             )
             plot_observed_expected_ratio(ratio_plot, distribution_rows)
             plot_delta_vs_event_time(
@@ -616,10 +963,32 @@ def main() -> int:
                 distribution_rows,
                 event_time_label_map,
             )
+            plot_event_pair_count_vs_time(
+                event_pair_count_time_plot,
+                event_pair_count_rows,
+                event_time_label_map,
+            )
+            plot_event_pair_count_histogram(
+                event_pair_count_hist_plot,
+                event_pair_count_rows,
+            )
+            plot_event_max_ratio_vs_time(
+                event_max_ratio_time_plot,
+                event_max_ratio_rows,
+                event_time_label_map,
+            )
+            plot_event_max_ratio_histogram(
+                event_max_ratio_hist_plot,
+                event_max_ratio_rows,
+            )
             logger.info("Plot written: {}", pair_delta_plot)
             logger.info("Plot written: {}", ratio_plot)
             logger.info("Plot written: {}", delta_time_plot)
             logger.info("Plot written: {}", ratio_time_plot)
+            logger.info("Plot written: {}", event_pair_count_time_plot)
+            logger.info("Plot written: {}", event_pair_count_hist_plot)
+            logger.info("Plot written: {}", event_max_ratio_time_plot)
+            logger.info("Plot written: {}", event_max_ratio_hist_plot)
         else:
             logger.info("Plotting disabled by --no-plot")
 
@@ -640,6 +1009,8 @@ def main() -> int:
     except ValueError as exc:
         logger.error("Invalid YAML format: {}", exc)
         return 2
+
+    data = filter_events_by_datetime_range(data, start_datetime, end_datetime)
 
     event_time_label_map = build_event_time_label_map(data)
 
@@ -679,17 +1050,45 @@ def main() -> int:
         ratio_plot = root / f"{stem}_observed_expected_ratio.png"
         delta_time_plot = root / f"{stem}_du_pair_delta_vs_time.png"
         ratio_time_plot = root / f"{stem}_observed_expected_ratio_vs_time.png"
+        event_pair_count_time_plot = root / f"{stem}_event_du_pair_count_vs_time.png"
+        event_pair_count_hist_plot = root / f"{stem}_event_du_pair_count_hist.png"
+        event_max_ratio_time_plot = root / f"{stem}_event_max_ratio_vs_time.png"
+        event_max_ratio_hist_plot = root / f"{stem}_event_max_ratio_hist.png"
+        event_pair_count_rows = build_event_pair_count_rows(distribution_rows)
+        event_max_ratio_rows = build_event_max_ratio_rows(distribution_rows)
         plot_pair_delta_distribution(
             pair_delta_plot,
-            np.array([row[6] for row in distribution_rows]),
+            np.array([row[5] for row in distribution_rows]),
         )
         plot_observed_expected_ratio(ratio_plot, distribution_rows)
         plot_delta_vs_event_time(delta_time_plot, distribution_rows, event_time_label_map)
         plot_ratio_vs_event_time(ratio_time_plot, distribution_rows, event_time_label_map)
+        plot_event_pair_count_vs_time(
+            event_pair_count_time_plot,
+            event_pair_count_rows,
+            event_time_label_map,
+        )
+        plot_event_pair_count_histogram(
+            event_pair_count_hist_plot,
+            event_pair_count_rows,
+        )
+        plot_event_max_ratio_vs_time(
+            event_max_ratio_time_plot,
+            event_max_ratio_rows,
+            event_time_label_map,
+        )
+        plot_event_max_ratio_histogram(
+            event_max_ratio_hist_plot,
+            event_max_ratio_rows,
+        )
         logger.info("Plot written: {}", pair_delta_plot)
         logger.info("Plot written: {}", ratio_plot)
         logger.info("Plot written: {}", delta_time_plot)
         logger.info("Plot written: {}", ratio_time_plot)
+        logger.info("Plot written: {}", event_pair_count_time_plot)
+        logger.info("Plot written: {}", event_pair_count_hist_plot)
+        logger.info("Plot written: {}", event_max_ratio_time_plot)
+        logger.info("Plot written: {}", event_max_ratio_hist_plot)
     else:
         logger.info("Plotting disabled by --no-plot")
 

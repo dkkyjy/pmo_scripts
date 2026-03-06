@@ -1,8 +1,8 @@
 """
-ROOT file data reading and processing module
+ROOT file data reading and processing module.
 
 This module reads a single ROOT file (teventadc) containing "Trigger",
-extracts du_id, gps_time, du_nanoseconds,
+extracts du_id, gps_time, and du_nanoseconds.
 
 Main functions:
 1. Parse command line arguments
@@ -12,14 +12,32 @@ Main functions:
 Usage: python read_header.py <file_path> <base_path> <out_dir_base>
 """
 
-import uproot
-import numpy as np
-import sys
-import os
-import yaml
+from __future__ import annotations
+
 import argparse
+import os
+import sys
+from typing import Any, Dict, List, Tuple
+
+import uproot
+import yaml
+
 from logger_config import logger
-from typing import List, Dict, Tuple
+
+RunNumberList = List[int]
+EventNumberList = List[int]
+DuIdList = List[List[int]]
+GpsTimeList = List[List[int]]
+DuNanosecondList = List[List[int]]
+ReadHeaderResult = Tuple[
+    RunNumberList,
+    EventNumberList,
+    DuIdList,
+    GpsTimeList,
+    DuNanosecondList,
+]
+EventPayload = Dict[str, Any]
+YamlData = Dict[str, EventPayload]
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -44,30 +62,24 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv[1:])
 
 
-def read_file_du_time_ns(
-    file_name: str,
-) -> Tuple[
-    List[List[int]], List[List[int]], List[List[int]], List[List[int]], List[List[int]]
-]:
-    """
-    Read du_id, gps_time, and du_nanoseconds fields from the teventadc TTree of a single ROOT file and return as lists.
-    Returns three lists (one sublist per event).
-    """
-    f = uproot.open(file_name)
-    # Find the key containing teventadc (compatible with different naming versions)
-    keys = list(f.keys())
-    idx = None
-    for i, k in enumerate(keys):
-        if "teventadc" in str(k):
-            idx = i
-            break
-    if idx is None:
-        raise KeyError(f"teventadc TTree not found in file: {file_name}")
-    events = f[keys[idx]]
+def find_teventadc_key(keys: List[str], file_name: str) -> str:
+    """Find and return the key containing the teventadc tree name."""
+    for key in keys:
+        if "teventadc" in str(key):
+            return key
+    raise KeyError(f"teventadc TTree not found in file: {file_name}")
+
+
+def read_file_du_time_ns(file_name: str) -> ReadHeaderResult:
+    """Read event fields from teventadc TTree and return lists."""
+    root_file = uproot.open(file_name)
+    key_name = find_teventadc_key(list(root_file.keys()), file_name)
+    events = root_file[key_name]
     data = events.arrays(
         ["run_number", "event_number", "du_id", "gps_time", "du_nanoseconds"],
         library="np",
     )
+
     run_number_list = data["run_number"].tolist()
     event_number_list = data["event_number"].tolist()
     du_id_list = data["du_id"].tolist()
@@ -82,130 +94,128 @@ def read_file_du_time_ns(
     )
 
 
+def build_event_payload(
+    run_number: int,
+    event_number: int,
+    du_ids: List[int],
+    gps_times: List[int],
+    du_nanoseconds: List[int],
+    index: int,
+    file_path: str,
+) -> EventPayload:
+    """Build one event payload in the YAML output schema."""
+    dict_du_ns: Dict[str, List[int]] = {}
+    list_du_id: List[str] = []
+
+    for du_id, du_ns in zip(du_ids, du_nanoseconds):
+        du_id_str = str(du_id)
+        list_du_id.append(du_id_str)
+        dict_du_ns.setdefault(du_id_str, []).append(int(du_ns))
+
+    date = gps_times[0]
+    time = gps_times[1]
+    gps_time = gps_times[2]
+
+    return {
+        "run_number": run_number,
+        "event_number": event_number,
+        "date": str(date),
+        "time": f"{time:0>6}",
+        "gps_time": int(gps_time),
+        "du_ns": dict_du_ns,
+        "du_id": list_du_id,
+        "file": file_path,
+        "index": index,
+    }
+
+
 def cal_dict_du_ns(
-    run_number_list: List[List[int]],
-    event_number_list: List[List[int]],
-    du_id_list: List[List[int]],
-    gps_time_list: List[List[int]],
-    du_nanosecond_list: List[List[int]],
-    data_dict,
+    run_number_list: RunNumberList,
+    event_number_list: EventNumberList,
+    du_id_list: DuIdList,
+    gps_time_list: GpsTimeList,
+    du_nanosecond_list: DuNanosecondList,
+    data_dict: YamlData,
     file_path: str = "",
 ) -> None:
-    """
-    Combine du_id and du_nanoseconds from events, construct key using gps_time and minimum nanoseconds, and write results to data_dict.
-    Directly modifies the passed data_dict.
-    """
-    for i in range(len(du_id_list)):
-        run_number = run_number_list[i]
-        event_number = event_number_list[i]
-        du_ids = du_id_list[i]
-        gps_times = gps_time_list[i]
-        du_nanoseconds = du_nanosecond_list[i]
-        if len(du_ids) > 0:
-            dict_du_ns = {}
-            list_du_id = []
-            for j in range(len(du_ids)):
-                list_du_id.append(str(du_ids[j]))
-                dict_du_ns[str(du_ids[j])] = int(du_nanoseconds[j])
+    """Build output payloads for each event and write to ``data_dict``."""
+    for index, du_ids in enumerate(du_id_list):
+        if len(du_ids) == 0:
+            continue
 
-            # extract gps_times
-            date = gps_times[0]
-            time = gps_times[1]
-            gps_time = gps_times[2]
-            
-            # Add information to data_dict
-            data_dict[str(event_number)] = {
-                "run_number": run_number,
-                "event_number": event_number,
-                "date": str(date),
-                "time": f'{time:0>6}',
-                "gps_time": int(gps_time),
-                "du_ns": dict_du_ns,
-                "du_id": list_du_id,
-                "file": file_path,
-                "index": int(i),
-            }
+        payload = build_event_payload(
+            run_number=int(run_number_list[index]),
+            event_number=int(event_number_list[index]),
+            du_ids=du_ids,
+            gps_times=gps_time_list[index],
+            du_nanoseconds=du_nanosecond_list[index],
+            index=index,
+            file_path=file_path,
+        )
+        data_dict[str(payload["event_number"])] = payload
 
 
-def process_single_file(file_path: str, result_dict) -> None:
-    """
-    Process a single file and add results to the result dictionary.
-
-    Parameters:
-        file_path: File path
-        result_dict: Result dictionary
-    """
+def process_single_file(file_path: str, result_dict: YamlData) -> None:
+    """Process one ROOT file and append parsed events into ``result_dict``."""
     try:
         run_number, event_number, du_ids, gps_times, du_ns = read_file_du_time_ns(
             file_path
         )
-        # Extract filename for key generation
         file_name = os.path.basename(file_path)
-        cal_dict_du_ns(run_number, event_number, du_ids, gps_times, du_ns, result_dict, file_name)
-    except Exception as e:
-        logger.warning(f"Error processing file {file_path}: {e}, skipping")
+        cal_dict_du_ns(
+            run_number,
+            event_number,
+            du_ids,
+            gps_times,
+            du_ns,
+            result_dict,
+            file_name,
+        )
+    except Exception as exc:
+        logger.warning(f"Error processing file {file_path}: {exc}, skipping")
 
 
 def mkdir(path: str) -> None:
-    """Create directory if it doesn't exist."""
+    """Create directory if it does not exist."""
     if not os.path.exists(path):
         os.makedirs(path)
     else:
         logger.debug(f"Directory already exists: {path}")
 
 
-def write_output(
-    data_dict: Dict[str, List[Tuple[int, int]]], out_dir: str, file_name: str
-) -> str:
-    """Write results to out_dir and return the actual written file path."""
+def write_output(data_dict: YamlData, out_dir: str, file_name: str) -> str:
+    """Write YAML results to ``out_dir/file_name`` and return file path."""
     file_path = os.path.join(out_dir, file_name)
-    with open(file_path, "w") as f:
-        yaml.dump(data_dict, f)
+    with open(file_path, "w") as file_obj:
+        yaml.dump(data_dict, file_obj)
     return file_path
 
 
 def process_root_file(file_path: str, date: str, out_dir_base: str) -> bool:
-    """
-    Main function to process a ROOT file.
-
-    Parameters:
-        file_path: Path to the ROOT file to process
-        base_path: ROOT file base directory
-        out_dir_base: Output directory base path
-
-    Returns:
-        Whether processing was successful
-    """
+    """Process one ROOT file and write one YAML output file."""
     try:
-        # Ensure output directory exists
-        # Extract date from file path for directory structure
-
         out_dir = os.path.join(out_dir_base, date)
         mkdir(out_dir)
 
         logger.info(f"Processing file: {file_path}")
 
-        # Process data
-        result: Dict[str, List[Tuple[int, int]]] = {}
+        result: YamlData = {}
         process_single_file(file_path, result)
         logger.info(f"Processed events: {len(result)}")
 
-        # Write output file
         output_filename = f"{os.path.basename(file_path).replace('.root', '.yaml')}"
         out_path = write_output(result, out_dir, output_filename)
         logger.info(f"Written to: {out_path}")
         return True
-    except Exception as e:
-        logger.error(f"Processing failed: {e}")
+    except Exception as exc:
+        logger.error(f"Processing failed: {exc}")
         return False
 
 
 def main(argv: List[str]) -> int:
+    """CLI entry point."""
     args = parse_args(argv)
-
-    # Process ROOT file
     success = process_root_file(args.file_path, args.date, args.out_dir_base)
-
     return 0 if success else 2
 
 
