@@ -41,8 +41,8 @@ def optimized_read_matching_times(matching_file, detector_positions, min_detecto
         data_dict = yaml.load(file, Loader=yaml.FullLoader)
         
         for gps_time_str, data in data_dict.items():
-            matches = data['time']
-            signals = data.get('signal', None)
+            matches = data['du_ns']
+            signals = data.get('du_vs', None)
             event_number = data['event_number']
             index = data['index']
             try:
@@ -126,8 +126,8 @@ def optimized_read_matching_times_with_signal(file_path, detector_positions, min
         data_dict = yaml.load(file, Loader=yaml.FullLoader)
         
         for gps_time_str, data in data_dict.items():
-            time_matches = data['time']
-            signal_matches = data['signal']
+            time_matches = data['du_ns']
+            signal_matches = data['du_vs']
             event_number = data['event_number']
             index = data['index']
             try:

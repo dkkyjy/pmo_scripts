@@ -204,28 +204,29 @@ def build_event_payload(
 ) -> EventPayload:
     """Build one event payload with multi-trigger DU list values."""
     list_du_id: List[str] = []
-    dict_du_ns: Dict[str, List[int]] = {}
-    dict_du_amp: Dict[str, List[int]] = {}
+    time_map: Dict[str, List[int]] = {}
+    signal_map: Dict[str, List[int]] = {}
 
     for item_index, du_id in enumerate(du_ids):
         max_value = trace_adc_maxvalue[item_index] if item_index < len(trace_adc_maxvalue) else 10
         du_id_str = str(du_id)
-        dict_du_ns.setdefault(du_id_str, []).append(int(du_nanoseconds[item_index]))
-        dict_du_amp.setdefault(du_id_str, []).append(int(max_value))
+        time_map.setdefault(du_id_str, []).append(int(du_nanoseconds[item_index]))
+        signal_map.setdefault(du_id_str, []).append(int(max_value))
         list_du_id.append(du_id_str)
 
     date = gps_times[0]
-    time = gps_times[1]
+    hhmmss_time = gps_times[1]
     gps_time = gps_times[2]
+    time_str = f"{hhmmss_time:0>6}"
+    datetime_str = f"{date}T{time_str}"
 
     return {
         "run_number": run_number,
         "event_number": event_number,
-        "date": str(date),
-        "time": f"{time:0<6}",
+        "datetime": datetime_str,
         "gps_time": int(gps_time),
-        "du_ns": dict_du_ns,
-        "du_vs": dict_du_amp,
+        "time": time_map,
+        "signal": signal_map,
         "du_id": list_du_id,
         "file": file_path,
         "index": int(index),

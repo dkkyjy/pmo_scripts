@@ -104,25 +104,26 @@ def build_event_payload(
     file_path: str,
 ) -> EventPayload:
     """Build one event payload in the YAML output schema."""
-    dict_du_ns: Dict[str, List[int]] = {}
+    time: Dict[str, List[int]] = {}
     list_du_id: List[str] = []
 
     for du_id, du_ns in zip(du_ids, du_nanoseconds):
         du_id_str = str(du_id)
         list_du_id.append(du_id_str)
-        dict_du_ns.setdefault(du_id_str, []).append(int(du_ns))
+        time.setdefault(du_id_str, []).append(int(du_ns))
 
     date = gps_times[0]
-    time = gps_times[1]
+    hhmmss_time = gps_times[1]
     gps_time = gps_times[2]
+    time_str = f"{hhmmss_time:0>6}"
+    datetime_str = f"{date}T{time_str}"
 
     return {
         "run_number": run_number,
         "event_number": event_number,
-        "date": str(date),
-        "time": f"{time:0>6}",
+        "datetime": datetime_str,
         "gps_time": int(gps_time),
-        "du_ns": dict_du_ns,
+        "time": time,
         "du_id": list_du_id,
         "file": file_path,
         "index": index,

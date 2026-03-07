@@ -34,6 +34,7 @@ loop.py
 ├── loop.py
 ├── main.py
 ├── merge.py
+├── merge_trace.py
 ├── stats_trigger.py
 ├── stats_lookback.py
 ├── stats_du_pairs.py
@@ -167,4 +168,5 @@ export LOG_FILE=loop.log
 - `docs/loop.md`
 - `docs/main.md`
 - `docs/merge.md`
+- `docs/merge_trace.md`
 - `docs/stats_trigger.md`

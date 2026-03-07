@@ -69,7 +69,7 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
 
     for field, value in incoming.items():
         logger.debug("Processing field='{}' (type={})", field, type(value).__name__)
-        if field in {"du_ns", "du_vs"} and isinstance(value, dict):
+        if field in {"time", "signal"} and isinstance(value, dict):
             existing = merged.get(field)
             if not isinstance(existing, dict):
                 existing = {}

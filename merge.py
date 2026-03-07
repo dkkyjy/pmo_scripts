@@ -25,12 +25,13 @@ def event_key_sort_value(event_key: str) -> Any:
     """Sort event keys numerically when possible, else lexicographically."""
     return int(event_key) if event_key.isdigit() else event_key
 
+
 def payload_to_log_text(payload: Dict[str, Any]) -> str:
     """Convert one event payload into readable YAML text for logs."""
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
 
 
-def _to_scalar_or_list(value: Any) -> Any:
+def _to_scalar_or_list(value: Any) -> List[Any]:
     """Normalize one DU value into scalar-or-list form.
 
     - Lists are preserved.
@@ -41,8 +42,11 @@ def _to_scalar_or_list(value: Any) -> Any:
     return [value]
 
 
-def merge_du_ns_map(base_map: Dict[str, Any], incoming_map: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge du_ns maps and preserve multiple trigger samples per DU.
+def merge_sample_map(
+    base_map: Dict[str, Any],
+    incoming_map: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge DU sample maps and preserve multiple trigger samples per DU.
 
     Supports both legacy scalar values and new list values.
     When a DU appears in both maps, samples are concatenated in order.
@@ -61,6 +65,24 @@ def merge_du_ns_map(base_map: Dict[str, Any], incoming_map: Dict[str, Any]) -> D
     return merged
 
 
+def merge_du_id_list(
+    base_ids: Optional[List[Any]],
+    incoming_ids: List[Any],
+) -> List[str]:
+    """Merge DU id lists and keep insertion order with string values."""
+    existing_ids = base_ids if isinstance(base_ids, list) else []
+    merged_ids = [str(item) for item in existing_ids]
+    seen = set(merged_ids)
+
+    for item in incoming_ids:
+        item_str = str(item)
+        if item_str not in seen:
+            merged_ids.append(item_str)
+            seen.add(item_str)
+
+    return merged_ids
+
+
 def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
     """Merge two event payload dicts for the same event_number."""
     merged = dict(base)
@@ -72,12 +94,13 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
 
     for field, value in incoming.items():
         logger.debug("Processing field='{}' (type={})", field, type(value).__name__)
-        if field == "du_ns" and isinstance(value, dict):
+
+        if field in {"time", "signal"} and isinstance(value, dict):
             existing = merged.get(field)
             if not isinstance(existing, dict):
                 existing = {}
             before_count = len(existing)
-            merged[field] = merge_du_ns_map(existing, value)
+            merged[field] = merge_sample_map(existing, value)
             logger.debug(
                 "Merged dict field='{}': before_keys={}, incoming_keys={}, after_keys={}",
                 field,
@@ -87,39 +110,15 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
             )
             continue
 
-        if field == "du_vs" and isinstance(value, dict):
-            existing = merged.get(field)
-            if not isinstance(existing, dict):
-                existing = {}
-            before_count = len(existing)
-            existing.update(value)
-            merged[field] = existing
-            logger.debug(
-                "Merged dict field='{}': before_keys={}, incoming_keys={}, after_keys={}",
-                field,
-                before_count,
-                len(value),
-                len(existing),
-            )
-            continue
-
         if field == "du_id" and isinstance(value, list):
             existing_ids = merged.get("du_id")
-            if not isinstance(existing_ids, list):
-                existing_ids = []
-            before_count = len(existing_ids)
-            seen = set(str(item) for item in existing_ids)
-            for item in value:
-                item_str = str(item)
-                if item_str not in seen:
-                    existing_ids.append(item_str)
-                    seen.add(item_str)
-            merged["du_id"] = existing_ids
+            before_count = len(existing_ids) if isinstance(existing_ids, list) else 0
+            merged["du_id"] = merge_du_id_list(existing_ids, value)
             logger.debug(
                 "Merged du_id list: before_count={}, incoming_count={}, after_count={}",
                 before_count,
                 len(value),
-                len(existing_ids),
+                len(merged["du_id"]),
             )
             continue
 
