@@ -22,13 +22,14 @@ import numpy as np
 import yaml
 
 from logger_config import logger
+from stats import common as scommon
 
 plt.style.use(["science", "grid", "notebook"])
 
 
 SecondDateTimeMap = Dict[int, str]
-DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
-DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
+DATETIME_FORMAT = scommon.DATETIME_FORMAT
+DATETIME_HELP_FORMAT = scommon.DATETIME_HELP_FORMAT
 
 EVENT_RECORD_FIELDS = (
     "event_key",
@@ -72,41 +73,12 @@ AVG_DU_FIELDS = (
 )
 
 
-class NamedDefaultRow(defaultdict):
-    """Dict row with stable field order.
-
-    Rows are accessed by field names in implementation code.
-    """
-
-    def __init__(self, fields: Iterable[str], **values: Any) -> None:
-        super().__init__(lambda: None)
-        self.fields = tuple(fields)
-        for field in self.fields:
-            super().__setitem__(field, values.get(field))
-
-    def __getitem__(self, key: Any) -> Any:
-        if isinstance(key, int):
-            raise TypeError("NamedDefaultRow does not support integer indexing")
-        return super().__getitem__(key)
-
-    def __setitem__(self, key: Any, value: Any) -> None:
-        if isinstance(key, int):
-            raise TypeError("NamedDefaultRow does not support integer indexing")
-        super().__setitem__(key, value)
-
-    def __iter__(self):
-        for field in self.fields:
-            yield self[field]
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, dict):
-            return False
-        return dict(self) == dict(other)
+NamedDefaultRow = scommon.NamedDefaultDict
 
 
 def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultRow:
     """Create one named row based on a predefined field schema."""
-    return NamedDefaultRow(fields, **values)
+    return scommon.make_named_row(fields, **values)
 
 
 def build_second_datetime_map(
@@ -141,33 +113,12 @@ def apply_gps_datetime_ticks(
     max_ticks: int = 8,
 ) -> None:
     """Apply compact x ticks showing both GPS second and date/time."""
-    if second_datetime_map is None or not seconds:
-        return
-
-    unique_seconds = sorted(set(seconds))
-    if not unique_seconds:
-        return
-
-    tick_count = min(max_ticks, len(unique_seconds))
-    if tick_count <= 0:
-        return
-
-    if tick_count == 1:
-        tick_positions = [unique_seconds[0]]
-    else:
-        indices = np.linspace(0, len(unique_seconds) - 1, tick_count, dtype=int)
-        tick_positions = [unique_seconds[index] for index in indices]
-
-    tick_labels: List[str] = []
-    for second in tick_positions:
-        datetime_str = get_second_datetime(second, second_datetime_map)
-        if datetime_str:
-            tick_labels.append(f"{second}\n{datetime_str}")
-        else:
-            tick_labels.append(str(second))
-
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels, rotation=20, ha="right")
+    scommon.apply_gps_datetime_ticks(
+        ax,
+        seconds,
+        second_datetime_map,
+        max_ticks=max_ticks,
+    )
 
 
 def parse_event_second_from_payload(
@@ -205,26 +156,12 @@ def parse_event_datetime(payload: Dict[str, Any]) -> str:
 
 def parse_payload_datetime(payload: Dict[str, Any]) -> Optional[datetime]:
     """Parse payload datetime as ``datetime`` object for range filtering."""
-    datetime_value = payload.get("datetime", "")
-    datetime_text = str(datetime_value) if datetime_value is not None else ""
-    if not datetime_text:
-        return None
-
-    try:
-        return datetime.strptime(datetime_text, DATETIME_FORMAT)
-    except ValueError:
-        return None
+    return scommon.parse_payload_datetime(payload)
 
 
 def parse_cli_datetime(value: str) -> datetime:
     """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
-    try:
-        return datetime.strptime(value, DATETIME_FORMAT)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "Invalid datetime format: "
-            f"{value!r}. Expected format: {DATETIME_FORMAT}"
-        ) from exc
+    return scommon.parse_cli_datetime(value)
 
 
 def in_datetime_range(
@@ -233,11 +170,7 @@ def in_datetime_range(
     end_dt: Optional[datetime],
 ) -> bool:
     """Check whether event datetime is inside an inclusive range."""
-    if start_dt is not None and event_dt < start_dt:
-        return False
-    if end_dt is not None and event_dt > end_dt:
-        return False
-    return True
+    return scommon.in_datetime_range(event_dt, start_dt, end_dt)
 
 
 def filter_data_by_datetime_range(
@@ -246,32 +179,13 @@ def filter_data_by_datetime_range(
     end_dt: Optional[datetime],
 ) -> Dict[str, Dict[str, Any]]:
     """Filter YAML event payloads by datetime range from ``datetime``."""
-    if start_dt is None and end_dt is None:
-        return data
-
-    filtered_data: Dict[str, Dict[str, Any]] = {}
-    invalid_datetime_count = 0
-
-    for event_key, payload in data.items():
-        event_dt = parse_payload_datetime(payload)
-        if event_dt is None:
-            invalid_datetime_count += 1
-            continue
-
-        if in_datetime_range(event_dt, start_dt, end_dt):
-            filtered_data[event_key] = payload
-
-    logger.info(
-        "Datetime range filter on YAML events: {} -> {}",
-        len(data),
-        len(filtered_data),
+    return scommon.filter_data_by_datetime_range(
+        data,
+        start_dt,
+        end_dt,
+        logger=logger,
+        parse_payload_datetime_fn=parse_payload_datetime,
     )
-    if invalid_datetime_count > 0:
-        logger.warning(
-            "Skipped {} events with invalid/missing datetime while filtering",
-            invalid_datetime_count,
-        )
-    return filtered_data
 
 
 def get_du_ns_map(payload: Dict[str, Any]) -> Dict[str, Any]:

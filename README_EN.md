@@ -35,9 +35,11 @@ loop.py
 ├── main.py
 ├── merge.py
 ├── merge_trace.py
-├── stats_trigger.py
-├── stats_lookback.py
-├── stats_du_pairs.py
+├── stats/
+│   ├── common.py
+│   ├── stats_trigger.py
+│   ├── stats_lookback.py
+│   └── stats_du_pairs.py
 ├── read_header/
 │   ├── read_header.py
 │   └── read_trace.py
@@ -108,8 +110,8 @@ python merge.py 2026/02/14 -o ../Reco_Dir
 ### Statistics (examples)
 
 ```bash
-python stats_trigger.py ../Reco_Dir/Trigger_20260214_merged.yaml --avg-window=60 --no-plot
-python stats_lookback.py ../Reco_Dir/Trigger_20260214_merged.yaml --lookback 10
+python -m stats.stats_trigger ../Reco_Dir/Trigger_20260214_merged.yaml --avg-window=60 --no-plot
+python -m stats.stats_lookback ../Reco_Dir/Trigger_20260214_merged.yaml --lookback 10
 ```
 
 ### Run all tests with coverage
