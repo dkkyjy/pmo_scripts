@@ -26,6 +26,7 @@ import scienceplots
 import yaml
 
 from logger_config import logger
+from stats import common as scommon
 
 plt.style.use(["science", "grid", "notebook"])
 
@@ -33,36 +34,12 @@ DELTA_PLOT_MIN_NS = -5e4
 DELTA_PLOT_MAX_NS = 5e4
 
 
-class NamedDefaultDict(defaultdict):
-    """Dict row with stable field order for CSV serialization."""
-
-    def __init__(self, fields: Iterable[str], **values: Any) -> None:
-        super().__init__(lambda: None)
-        self.fields = tuple(fields)
-        for field in self.fields:
-            super().__setitem__(field, values.get(field))
-
-    def __iter__(self):
-        for field in self.fields:
-            yield super().__getitem__(field)
-
-    def __getitem__(self, key: Any) -> Any:
-        if isinstance(key, int):
-            raise TypeError("NamedDefaultDict only supports field-name access")
-        return super().__getitem__(key)
-
-    def __setitem__(self, key: Any, value: Any) -> None:
-        if isinstance(key, int):
-            raise TypeError("NamedDefaultDict only supports field-name access")
-        super().__setitem__(key, value)
-
-    def __eq__(self, other: object) -> bool:
-        return dict(self) == other
+NamedDefaultDict = scommon.NamedDefaultDict
 
 
 def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultDict:
     """Create one named row based on a predefined field schema."""
-    return NamedDefaultDict(fields, **values)
+    return scommon.make_named_row(fields, **values)
 
 
 EVENT_RECORD_FIELDS = (
@@ -113,35 +90,18 @@ AdjacentPairRow = NamedDefaultDict
 SharedPairCountRow = NamedDefaultDict
 SharedDuCountRow = NamedDefaultDict
 
-DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
-DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
+DATETIME_FORMAT = scommon.DATETIME_FORMAT
+DATETIME_HELP_FORMAT = scommon.DATETIME_HELP_FORMAT
 
 
 def normalize_cli_datetime_text(value: datetime | None) -> str:
     """Normalize optional CLI datetime to deterministic text."""
-    if value is None:
-        return ""
-    return value.strftime(DATETIME_FORMAT)
+    return scommon.normalize_cli_datetime_text(value)
 
 
 def cache_file_state(path: Path) -> Dict[str, Any]:
     """Build lightweight file signature for cache validation."""
-    resolved_path = str(path.resolve())
-    if not path.exists():
-        return {
-            "path": resolved_path,
-            "exists": False,
-            "size": 0,
-            "mtime_ns": 0,
-        }
-
-    stat_info = path.stat()
-    return {
-        "path": resolved_path,
-        "exists": True,
-        "size": int(stat_info.st_size),
-        "mtime_ns": int(stat_info.st_mtime_ns),
-    }
+    return scommon.cache_file_state(path)
 
 
 def cache_meta_path(csv_path: Path) -> Path:
@@ -208,20 +168,12 @@ def cache_meta_is_valid(
 
 def sort_du_id_key(du_id: str) -> tuple[int, str]:
     """Sort DU IDs numerically when possible, else lexicographically."""
-    return (0, f"{int(du_id):012d}") if du_id.isdigit() else (1, du_id)
+    return scommon.sort_du_id_key(du_id)
 
 
 def read_yaml_events(yaml_path: Path) -> YamlData:
     """Read Trigger YAML and validate top-level structure."""
-    with yaml_path.open("r", encoding="utf-8") as file_obj:
-        loaded = yaml.safe_load(file_obj)
-
-    if loaded is None:
-        logger.warning("Input YAML is empty: {}", yaml_path)
-        return {}
-    if not isinstance(loaded, dict):
-        raise ValueError("Input YAML top-level must be a dict")
-    return loaded
+    return scommon.read_yaml_events(yaml_path, logger)
 
 
 def parse_du_ns_map(payload: EventPayload) -> Dict[str, float]:
@@ -230,30 +182,7 @@ def parse_du_ns_map(payload: EventPayload) -> Dict[str, float]:
     Supports both scalar values and list values; for list values, the last
     numeric sample is used to keep backward-compatible per-event scalar math.
     """
-    time_map = payload.get("time")
-    if not isinstance(time_map, dict):
-        return {}
-
-    parsed: Dict[str, float] = {}
-    for key, value in time_map.items():
-        if isinstance(value, list):
-            numeric_values: List[float] = []
-            for item in value:
-                try:
-                    numeric_values.append(float(item))
-                except (TypeError, ValueError):
-                    continue
-            if not numeric_values:
-                logger.debug("Skip non-numeric time list for DU {}: {}", key, value)
-                continue
-            parsed[str(key)] = numeric_values[-1]
-            continue
-
-        try:
-            parsed[str(key)] = float(value)
-        except (TypeError, ValueError):
-            logger.debug("Skip non-numeric time value for DU {}: {}", key, value)
-    return parsed
+    return scommon.parse_du_ns_map(payload, logger)
 
 
 def parse_event_datetime(payload: EventPayload) -> str:
@@ -272,26 +201,12 @@ def parse_event_datetime(payload: EventPayload) -> str:
 
 def parse_cli_datetime(value: str) -> datetime:
     """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
-    try:
-        return datetime.strptime(value, DATETIME_FORMAT)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "Invalid datetime format: "
-            f"{value!r}. Expected format: {DATETIME_FORMAT}"
-        ) from exc
+    return scommon.parse_cli_datetime(value)
 
 
 def parse_payload_datetime(payload: EventPayload) -> datetime | None:
     """Parse payload ``datetime`` field for range filtering."""
-    datetime_value = payload.get("datetime", "")
-    datetime_text = str(datetime_value) if datetime_value is not None else ""
-    if not datetime_text:
-        return None
-
-    try:
-        return datetime.strptime(datetime_text, DATETIME_FORMAT)
-    except ValueError:
-        return None
+    return scommon.parse_payload_datetime(payload)
 
 
 def in_datetime_range(
@@ -300,11 +215,7 @@ def in_datetime_range(
     end_dt: datetime | None,
 ) -> bool:
     """Check whether event datetime is inside an inclusive range."""
-    if start_dt is not None and event_dt < start_dt:
-        return False
-    if end_dt is not None and event_dt > end_dt:
-        return False
-    return True
+    return scommon.in_datetime_range(event_dt, start_dt, end_dt)
 
 
 def filter_data_by_datetime_range(
@@ -313,64 +224,18 @@ def filter_data_by_datetime_range(
     end_dt: datetime | None,
 ) -> YamlData:
     """Filter YAML events by datetime range from payload datetime field."""
-    if start_dt is None and end_dt is None:
-        return data
-
-    filtered_data: YamlData = {}
-    invalid_datetime_count = 0
-
-    for event_key, payload in data.items():
-        event_dt = parse_payload_datetime(payload)
-        if event_dt is None:
-            invalid_datetime_count += 1
-            continue
-
-        if in_datetime_range(event_dt, start_dt, end_dt):
-            filtered_data[event_key] = payload
-
-    logger.info(
-        "Datetime range filter on YAML events: {} -> {}",
-        len(data),
-        len(filtered_data),
+    return scommon.filter_data_by_datetime_range(
+        data,
+        start_dt,
+        end_dt,
+        logger=logger,
+        parse_payload_datetime_fn=parse_payload_datetime,
     )
-    if invalid_datetime_count > 0:
-        logger.warning(
-            "Skipped {} events with invalid/missing datetime while filtering",
-            invalid_datetime_count,
-        )
-
-    return filtered_data
 
 
 def load_du_time_offsets(offset_file: Path) -> OffsetMap:
     """Load DU time offsets from file, format: du_id, offset, sigma."""
-    offsets: OffsetMap = {}
-    if not offset_file.exists():
-        logger.warning("Offset file not found, skip correction: {}", offset_file)
-        return offsets
-
-    with offset_file.open("r", encoding="utf-8") as file_obj:
-        for raw_line in file_obj:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            parts = [part.strip() for part in line.split(",")]
-            if len(parts) < 2:
-                logger.warning("Skip invalid offset line: {}", line)
-                continue
-
-            du_id = str(parts[0])
-            try:
-                offset_ns = float(parts[1])
-            except (TypeError, ValueError):
-                logger.warning("Skip invalid offset value for DU {}: {}", du_id, parts[1])
-                continue
-
-            offsets[du_id] = offset_ns
-
-    logger.info("Loaded DU offsets: {} from {}", len(offsets), offset_file)
-    return offsets
+    return scommon.load_du_time_offsets(offset_file, logger)
 
 
 def build_event_records(data: YamlData) -> List[EventRecord]:
@@ -766,36 +631,12 @@ def apply_time_ticks(
     max_ticks: int = 8,
 ) -> None:
     """Apply compact x-axis ticks as gps_time + datetime label."""
-    if not gps_times:
-        return
-
-    label_map: Dict[int, str] = {}
-    for gps_time, datetime_label in zip(gps_times, datetime_labels):
-        if gps_time not in label_map and datetime_label:
-            label_map[gps_time] = datetime_label
-
-    unique_gps_times = sorted(set(gps_times))
-    tick_count = min(max_ticks, len(unique_gps_times))
-    if tick_count == 0:
-        return
-
-    if tick_count == 1:
-        tick_positions = [unique_gps_times[0]]
-    else:
-        index_step = (len(unique_gps_times) - 1) / float(tick_count - 1)
-        indices = [int(round(i * index_step)) for i in range(tick_count)]
-        tick_positions = [unique_gps_times[index] for index in indices]
-
-    tick_labels: List[str] = []
-    for gps_time in tick_positions:
-        datetime_label = label_map.get(gps_time, "")
-        if datetime_label:
-            tick_labels.append(f"{gps_time}\n{datetime_label}")
-        else:
-            tick_labels.append(str(gps_time))
-
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels, rotation=20, ha="right")
+    scommon.apply_gps_datetime_ticks_from_labels(
+        ax,
+        gps_times,
+        datetime_labels,
+        max_ticks=max_ticks,
+    )
 
 
 def plot_adjacent_pair_delta_vs_time(
