@@ -15,10 +15,11 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import scienceplots
@@ -28,8 +29,8 @@ from logger_config import logger
 
 plt.style.use(["science", "grid", "notebook"])
 
-DELTA_PLOT_MIN_NS = -1e5
-DELTA_PLOT_MAX_NS = 1e5
+DELTA_PLOT_MIN_NS = -5e4
+DELTA_PLOT_MAX_NS = 5e4
 
 
 class NamedDefaultDict(defaultdict):
@@ -47,18 +48,15 @@ class NamedDefaultDict(defaultdict):
 
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, int):
-            return super().__getitem__(self.fields[key])
+            raise TypeError("NamedDefaultDict only supports field-name access")
         return super().__getitem__(key)
 
     def __setitem__(self, key: Any, value: Any) -> None:
         if isinstance(key, int):
-            super().__setitem__(self.fields[key], value)
-            return
+            raise TypeError("NamedDefaultDict only supports field-name access")
         super().__setitem__(key, value)
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, (tuple, list)):
-            return tuple(self) == tuple(other)
         return dict(self) == other
 
 
@@ -117,6 +115,95 @@ SharedDuCountRow = NamedDefaultDict
 
 DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
+
+
+def normalize_cli_datetime_text(value: datetime | None) -> str:
+    """Normalize optional CLI datetime to deterministic text."""
+    if value is None:
+        return ""
+    return value.strftime(DATETIME_FORMAT)
+
+
+def cache_file_state(path: Path) -> Dict[str, Any]:
+    """Build lightweight file signature for cache validation."""
+    resolved_path = str(path.resolve())
+    if not path.exists():
+        return {
+            "path": resolved_path,
+            "exists": False,
+            "size": 0,
+            "mtime_ns": 0,
+        }
+
+    stat_info = path.stat()
+    return {
+        "path": resolved_path,
+        "exists": True,
+        "size": int(stat_info.st_size),
+        "mtime_ns": int(stat_info.st_mtime_ns),
+    }
+
+
+def cache_meta_path(csv_path: Path) -> Path:
+    """Return cache meta path for one lookback CSV."""
+    return csv_path.with_name(f"{csv_path.stem}.meta.json")
+
+
+def build_cache_meta(
+    yaml_path: Path,
+    offset_path: Path,
+    lookback: int,
+    start_dt: datetime | None,
+    end_dt: datetime | None,
+) -> Dict[str, Any]:
+    """Build cache metadata signature from runtime inputs."""
+    return {
+        "schema_version": 1,
+        "yaml": cache_file_state(yaml_path),
+        "offset": cache_file_state(offset_path),
+        "lookback": int(lookback),
+        "start_datetime": normalize_cli_datetime_text(start_dt),
+        "end_datetime": normalize_cli_datetime_text(end_dt),
+    }
+
+
+def write_cache_meta(path: Path, meta: Dict[str, Any]) -> None:
+    """Write cache metadata JSON file."""
+    with path.open("w", encoding="utf-8") as file_obj:
+        json.dump(meta, file_obj, ensure_ascii=True, sort_keys=True)
+
+
+def read_cache_meta(path: Path) -> Dict[str, Any]:
+    """Read cache metadata JSON file."""
+    with path.open("r", encoding="utf-8") as file_obj:
+        loaded = json.load(file_obj)
+    if not isinstance(loaded, dict):
+        raise ValueError("Lookback cache meta must be a JSON object")
+    return loaded
+
+
+def cache_meta_is_valid(
+    cached_meta: Dict[str, Any],
+    expected_meta: Dict[str, Any],
+) -> tuple[bool, str]:
+    """Check whether cached meta matches expected runtime signature."""
+    if int(cached_meta.get("schema_version", -1)) != int(
+        expected_meta.get("schema_version", -2)
+    ):
+        return False, "schema_version mismatch"
+
+    for key in ("yaml", "offset"):
+        if cached_meta.get(key) != expected_meta.get(key):
+            return False, f"{key} signature mismatch"
+
+    if int(cached_meta.get("lookback", -1)) != int(expected_meta.get("lookback", -2)):
+        return False, "lookback mismatch"
+
+    for key in ("start_datetime", "end_datetime"):
+        if str(cached_meta.get(key, "")) != str(expected_meta.get(key, "")):
+            return False, f"{key} mismatch"
+
+    return True, ""
 
 
 def sort_du_id_key(du_id: str) -> tuple[int, str]:
@@ -569,25 +656,65 @@ def write_adjacent_pair_csv(path: Path, rows: Sequence[AdjacentPairRow]) -> None
 def read_adjacent_pair_csv(path: Path) -> List[AdjacentPairRow]:
     """Read adjacent/common DU-pair rows from CSV cache."""
     rows: List[AdjacentPairRow] = []
+    invalid_row_count = 0
+    required_fields = {
+        "prev_event_number",
+        "curr_event_number",
+        "prev_gps_time",
+        "curr_gps_time",
+        "du_a",
+        "du_b",
+        "prev_pair_delta_ns",
+        "curr_pair_delta_ns",
+        "adjacent_pair_delta_ns",
+        "abs_adjacent_pair_delta_ns",
+        "curr_event_datetime",
+    }
+
     with path.open("r", encoding="utf-8", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    ADJACENT_PAIR_FIELDS,
-                    prev_event_number=int(row["prev_event_number"]),
-                    curr_event_number=int(row["curr_event_number"]),
-                    prev_second=int(row["prev_gps_time"]),
-                    curr_second=int(row["curr_gps_time"]),
-                    du_a=str(row["du_a"]),
-                    du_b=str(row["du_b"]),
-                    prev_delta_ns=float(row["prev_pair_delta_ns"]),
-                    curr_delta_ns=float(row["curr_pair_delta_ns"]),
-                    adjacent_delta_ns=float(row["adjacent_pair_delta_ns"]),
-                    abs_adjacent_delta_ns=float(row["abs_adjacent_pair_delta_ns"]),
-                    curr_event_datetime=str(row.get("curr_event_datetime", "")),
-                )
+        header_fields = set(reader.fieldnames or [])
+        if not required_fields.issubset(header_fields):
+            missing_fields = sorted(required_fields - header_fields)
+            raise ValueError(
+                "Lookback cache missing required columns: "
+                f"{','.join(missing_fields)}"
             )
+
+        for row_index, row in enumerate(reader, start=2):
+            try:
+                rows.append(
+                    make_named_row(
+                        ADJACENT_PAIR_FIELDS,
+                        prev_event_number=int(row["prev_event_number"]),
+                        curr_event_number=int(row["curr_event_number"]),
+                        prev_second=int(row["prev_gps_time"]),
+                        curr_second=int(row["curr_gps_time"]),
+                        du_a=str(row["du_a"]),
+                        du_b=str(row["du_b"]),
+                        prev_delta_ns=float(row["prev_pair_delta_ns"]),
+                        curr_delta_ns=float(row["curr_pair_delta_ns"]),
+                        adjacent_delta_ns=float(row["adjacent_pair_delta_ns"]),
+                        abs_adjacent_delta_ns=float(row["abs_adjacent_pair_delta_ns"]),
+                        curr_event_datetime=str(row.get("curr_event_datetime", "")),
+                    )
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                invalid_row_count += 1
+                logger.warning(
+                    "Skip invalid lookback cache row at line {}: {}",
+                    row_index,
+                    exc,
+                )
+                continue
+
+    if invalid_row_count > 0:
+        logger.warning(
+            "Skipped {} invalid rows while reading lookback cache: {}",
+            invalid_row_count,
+            path,
+        )
+
     return rows
 
 
@@ -894,11 +1021,13 @@ def main() -> int:
         return 2
 
     yaml_path = Path(args.yaml_file)
+    offset_path = Path(args.offset_file)
     normalized_lookback = max(1, args.lookback)
 
     csv_out = yaml_path.with_name(
         f"{yaml_path.stem}_lookback{normalized_lookback}_common_du_pair_delta_distribution.csv"
     )
+    meta_out = cache_meta_path(csv_out)
     plot_out = yaml_path.with_name(
         f"{yaml_path.stem}_lookback{normalized_lookback}_common_du_pair_delta_hist.png"
     )
@@ -924,53 +1053,113 @@ def main() -> int:
 
     if use_csv_cache:
         logger.info("Found CSV cache: {}", csv_out)
-        rows = read_adjacent_pair_csv(csv_out)
-        logger.info("Loaded rows from CSV cache: {}", len(rows))
-        count_rows = derive_shared_pair_count_rows_from_adjacent_rows(rows)
-        logger.info("Derived shared-count rows from pair-row cache: {}", len(count_rows))
-        du_count_rows: List[SharedDuCountRow] = []
+        expected_meta = build_cache_meta(
+            yaml_path,
+            offset_path,
+            normalized_lookback,
+            start_datetime,
+            end_datetime,
+        )
+        rows: Optional[List[AdjacentPairRow]] = None
 
-        if yaml_path.exists():
-            try:
-                data = read_yaml_events(yaml_path)
-                data = filter_data_by_datetime_range(data, start_datetime, end_datetime)
-                du_count_rows = build_shared_du_count_rows(
-                    build_event_records(data),
-                    lookback=args.lookback,
-                )
-            except Exception as exc:
+        if not meta_out.exists():
+            if not yaml_path.exists():
                 logger.warning(
-                    "Failed to build shared DU count rows from YAML in cache path: {}",
-                    exc,
+                    "Cache meta missing but YAML missing; using legacy cache: {}",
+                    csv_out,
                 )
-
-        if not args.no_plot:
-            plot_adjacent_pair_delta_histogram(plot_out, rows, args.bins)
-            plot_adjacent_pair_delta_vs_time(time_plot_out, rows)
-            plot_shared_pair_count_histogram(count_hist_out, count_rows, args.bins)
-            plot_shared_pair_count_vs_time(count_time_out, count_rows)
-            plot_shared_du_count_histogram(
-                du_count_hist_out,
-                du_count_rows,
-                args.bins,
-            )
-            plot_shared_du_count_vs_time(
-                du_count_time_out,
-                du_count_rows,
-            )
-            if rows:
-                logger.info("Plot written: {}", plot_out)
-                logger.info("Plot written: {}", time_plot_out)
-            if count_rows:
-                logger.info("Plot written: {}", count_hist_out)
-                logger.info("Plot written: {}", count_time_out)
-            if du_count_rows:
-                logger.info("Plot written: {}", du_count_hist_out)
-                logger.info("Plot written: {}", du_count_time_out)
+                try:
+                    rows = read_adjacent_pair_csv(csv_out)
+                except ValueError as exc:
+                    logger.error(
+                        "Invalid legacy cache without YAML fallback: {} ({})",
+                        csv_out,
+                        exc,
+                    )
+                    return 2
+            else:
+                logger.info(
+                    "Cache meta missing for {}, fallback to recompute",
+                    csv_out,
+                )
         else:
-            logger.info("Plotting is disabled by --no-plot")
+            try:
+                cached_meta = read_cache_meta(meta_out)
+                is_valid, reason = cache_meta_is_valid(cached_meta, expected_meta)
+                if not is_valid:
+                    logger.info(
+                        "Cache meta mismatch for {}: {}, fallback to recompute",
+                        csv_out,
+                        reason,
+                    )
+                else:
+                    rows = read_adjacent_pair_csv(csv_out)
+            except (ValueError, json.JSONDecodeError) as exc:
+                if not yaml_path.exists():
+                    logger.warning(
+                        "Invalid cache/meta {} / {} but YAML missing; using legacy cache ({})",
+                        csv_out,
+                        meta_out,
+                        exc,
+                    )
+                    rows = read_adjacent_pair_csv(csv_out)
+                else:
+                    logger.warning(
+                        "Invalid lookback cache/meta: {} / {} ({}). Falling back to recompute.",
+                        csv_out,
+                        meta_out,
+                        exc,
+                    )
 
-        return 0
+        if rows is None:
+            logger.info("Skip invalid cache and continue recompute path")
+        else:
+            logger.info("Loaded rows from CSV cache: {}", len(rows))
+            count_rows = derive_shared_pair_count_rows_from_adjacent_rows(rows)
+            logger.info("Derived shared-count rows from pair-row cache: {}", len(count_rows))
+            du_count_rows: List[SharedDuCountRow] = []
+
+            if yaml_path.exists():
+                try:
+                    data = read_yaml_events(yaml_path)
+                    data = filter_data_by_datetime_range(data, start_datetime, end_datetime)
+                    du_count_rows = build_shared_du_count_rows(
+                        build_event_records(data),
+                        lookback=args.lookback,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to build shared DU count rows from YAML in cache path: {}",
+                        exc,
+                    )
+
+            if not args.no_plot:
+                plot_adjacent_pair_delta_histogram(plot_out, rows, args.bins)
+                plot_adjacent_pair_delta_vs_time(time_plot_out, rows)
+                plot_shared_pair_count_histogram(count_hist_out, count_rows, args.bins)
+                plot_shared_pair_count_vs_time(count_time_out, count_rows)
+                plot_shared_du_count_histogram(
+                    du_count_hist_out,
+                    du_count_rows,
+                    args.bins,
+                )
+                plot_shared_du_count_vs_time(
+                    du_count_time_out,
+                    du_count_rows,
+                )
+                if rows:
+                    logger.info("Plot written: {}", plot_out)
+                    logger.info("Plot written: {}", time_plot_out)
+                if count_rows:
+                    logger.info("Plot written: {}", count_hist_out)
+                    logger.info("Plot written: {}", count_time_out)
+                if du_count_rows:
+                    logger.info("Plot written: {}", du_count_hist_out)
+                    logger.info("Plot written: {}", du_count_time_out)
+            else:
+                logger.info("Plotting is disabled by --no-plot")
+
+            return 0
 
     if csv_out.exists() and args.force_recompute:
         logger.info("Force recompute enabled, ignore existing CSV cache: {}", csv_out)
@@ -987,7 +1176,7 @@ def main() -> int:
 
     data = filter_data_by_datetime_range(data, start_datetime, end_datetime)
 
-    offset_map = load_du_time_offsets(Path(args.offset_file))
+    offset_map = load_du_time_offsets(offset_path)
     records = build_event_records(data)
     rows, count_rows = _build_common_pair_and_count_rows(
         records,
@@ -997,6 +1186,16 @@ def main() -> int:
     du_count_rows = build_shared_du_count_rows(records, lookback=args.lookback)
 
     write_adjacent_pair_csv(csv_out, rows)
+    write_cache_meta(
+        meta_out,
+        build_cache_meta(
+            yaml_path,
+            offset_path,
+            normalized_lookback,
+            start_datetime,
+            end_datetime,
+        ),
+    )
     logger.info("CSV written: {}", csv_out)
 
     if not args.no_plot:

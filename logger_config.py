@@ -7,7 +7,7 @@ from loguru import logger
 
 def setup_logger(
     log_file: Optional[str] = "loop.log",
-    level: str = "INFO",
+    level: str = "DEBUG",
     console: bool = True,
     rotation: Optional[str] = None,
     retention: Optional[str] = "30 days",

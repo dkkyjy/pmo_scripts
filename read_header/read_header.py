@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 import uproot
@@ -39,6 +40,7 @@ ReadHeaderResult = Tuple[
 EventPayload = Dict[str, Any]
 YamlData = Dict[str, EventPayload]
 
+DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     """Parse command line arguments and perform basic validation."""
@@ -116,7 +118,8 @@ def build_event_payload(
     hhmmss_time = gps_times[1]
     gps_time = gps_times[2]
     time_str = f"{hhmmss_time:0>6}"
-    datetime_str = f"{date}T{time_str}"
+    datetime_obj = datetime.strptime(f"{date}T{time_str}", '%Y%m%dT%H%M%S')
+    datetime_str = datetime_obj.strftime(DATETIME_FORMAT)
 
     return {
         "run_number": run_number,

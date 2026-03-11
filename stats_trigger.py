@@ -26,7 +26,7 @@ from logger_config import logger
 plt.style.use(["science", "grid", "notebook"])
 
 
-SecondDateTimeMap = Dict[int, Tuple[str, str, str]]
+SecondDateTimeMap = Dict[int, str]
 DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
 
@@ -35,9 +35,7 @@ EVENT_RECORD_FIELDS = (
     "event_second",
     "du_count",
     "event_number",
-    "index",
-    "event_date",
-    "event_time",
+    "event_datetime",
 )
 RATE_ROW_FIELDS = ("event_second", "event_count", "event_rate_hz")
 DELTA_DIST_FIELDS = ("delta_second", "event_pair_count")
@@ -47,6 +45,17 @@ DU_RATE_PER_SECOND_FIELDS = (
     "du_id",
     "trigger_count",
     "trigger_rate_hz",
+)
+TOTAL_DU_PER_SECOND_FIELDS = (
+    "event_second",
+    "total_du_trigger_count",
+    "total_du_trigger_rate_hz",
+)
+AVG_TOTAL_DU_FIELDS = (
+    "window_start_second",
+    "window_end_second_exclusive",
+    "total_du_trigger_count",
+    "avg_total_du_trigger_rate_hz",
 )
 AVG_EVENT_FIELDS = (
     "window_start_second",
@@ -64,10 +73,9 @@ AVG_DU_FIELDS = (
 
 
 class NamedDefaultRow(defaultdict):
-    """Dict row with stable field order and tuple-like compatibility.
+    """Dict row with stable field order.
 
-    Rows are accessed by field names in implementation code, while integer
-    indexing/iteration remains supported for backward compatibility.
+    Rows are accessed by field names in implementation code.
     """
 
     def __init__(self, fields: Iterable[str], **values: Any) -> None:
@@ -78,13 +86,12 @@ class NamedDefaultRow(defaultdict):
 
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, int):
-            return super().__getitem__(self.fields[key])
+            raise TypeError("NamedDefaultRow does not support integer indexing")
         return super().__getitem__(key)
 
     def __setitem__(self, key: Any, value: Any) -> None:
         if isinstance(key, int):
-            super().__setitem__(self.fields[key], value)
-            return
+            raise TypeError("NamedDefaultRow does not support integer indexing")
         super().__setitem__(key, value)
 
     def __iter__(self):
@@ -92,9 +99,9 @@ class NamedDefaultRow(defaultdict):
             yield self[field]
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, (tuple, list)):
-            return tuple(self) == tuple(other)
-        return dict(self) == other
+        if not isinstance(other, dict):
+            return False
+        return dict(self) == dict(other)
 
 
 def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultRow:
@@ -102,46 +109,29 @@ def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultRow:
     return NamedDefaultRow(fields, **values)
 
 
-def format_event_datetime(date_str: str, time_str: str) -> str:
-    """Format event date/time into a human-readable datetime string."""
-    if not date_str or not time_str:
-        return ""
-
-    try:
-        dt_obj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
-        return dt_obj.strftime(DATETIME_FORMAT)
-    except ValueError:
-        return f"{date_str} {time_str}".strip()
-
-
 def build_second_datetime_map(
     records: List[NamedDefaultRow],
 ) -> SecondDateTimeMap:
-    """Build mapping: gps second -> (date, time, datetime string)."""
+    """Build mapping: gps second -> datetime string."""
     second_map: SecondDateTimeMap = {}
     for record in records:
         second = int(record["event_second"])
         if second in second_map:
             continue
-        date_str = str(record["event_date"])
-        time_str = str(record["event_time"])
-        second_map[second] = (
-            date_str,
-            time_str,
-            format_event_datetime(date_str, time_str),
-        )
+        datetime_str = str(record["event_datetime"])
+        second_map[second] = datetime_str
     logger.debug(f"Built second-datetime map with {len(second_map)} unique seconds")
     return second_map
 
 
-def get_second_datetime_tuple(
+def get_second_datetime(
     second: int,
     second_datetime_map: Optional[SecondDateTimeMap],
-) -> Tuple[str, str, str]:
-    """Get datetime tuple for a gps second from mapping."""
+) -> str:
+    """Get datetime string for a gps second from mapping."""
     if second_datetime_map is None:
-        return "", "", ""
-    return second_datetime_map.get(second, ("", "", ""))
+        return ""
+    return second_datetime_map.get(second, "")
 
 
 def apply_gps_datetime_ticks(
@@ -170,7 +160,7 @@ def apply_gps_datetime_ticks(
 
     tick_labels: List[str] = []
     for second in tick_positions:
-        _, _, datetime_str = get_second_datetime_tuple(second, second_datetime_map)
+        datetime_str = get_second_datetime(second, second_datetime_map)
         if datetime_str:
             tick_labels.append(f"{second}\n{datetime_str}")
         else:
@@ -178,6 +168,7 @@ def apply_gps_datetime_ticks(
 
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=20, ha="right")
+
 
 def parse_event_second_from_payload(
     event_key: str,
@@ -198,18 +189,31 @@ def parse_event_second_from_payload(
         raise ValueError(f"Invalid gps_time={gps_time} for event {event_key}") from exc
 
 
-def parse_event_date_time(payload: Dict[str, Any]) -> Tuple[str, str]:
-    """Parse event date/time strings from payload ``datetime``."""
+def parse_event_datetime(payload: Dict[str, Any]) -> str:
+    """Parse event datetime string from payload ``datetime``."""
     datetime_value = payload.get("datetime", "")
     datetime_text = str(datetime_value) if datetime_value is not None else ""
     if not datetime_text:
-        return "", ""
+        return ""
 
     try:
         dt_obj = datetime.strptime(datetime_text, DATETIME_FORMAT)
-        return dt_obj.strftime("%Y%m%d"), dt_obj.strftime("%H%M%S")
+        return dt_obj.strftime(DATETIME_FORMAT)
     except ValueError:
-        return "", ""
+        return ""
+
+
+def parse_payload_datetime(payload: Dict[str, Any]) -> Optional[datetime]:
+    """Parse payload datetime as ``datetime`` object for range filtering."""
+    datetime_value = payload.get("datetime", "")
+    datetime_text = str(datetime_value) if datetime_value is not None else ""
+    if not datetime_text:
+        return None
+
+    try:
+        return datetime.strptime(datetime_text, DATETIME_FORMAT)
+    except ValueError:
+        return None
 
 
 def parse_cli_datetime(value: str) -> datetime:
@@ -221,19 +225,6 @@ def parse_cli_datetime(value: str) -> datetime:
             "Invalid datetime format: "
             f"{value!r}. Expected format: {DATETIME_FORMAT}"
         ) from exc
-
-
-def parse_payload_datetime(payload: Dict[str, Any]) -> Optional[datetime]:
-    """Parse event datetime from payload ``datetime`` field."""
-    datetime_value = payload.get("datetime", "")
-    datetime_text = str(datetime_value) if datetime_value is not None else ""
-    if not datetime_text:
-        return None
-
-    try:
-        return datetime.strptime(datetime_text, DATETIME_FORMAT)
-    except ValueError:
-        return None
 
 
 def in_datetime_range(
@@ -313,9 +304,7 @@ def parse_event_records(
                 event_second,
                 du_count,
                 event_number,
-                index,
-                event_date,
-                event_time,
+                event_datetime,
             ),
             ...,
         ]
@@ -326,9 +315,8 @@ def parse_event_records(
         event_second = parse_event_second_from_payload(event_key, payload)
         du_count = len(get_event_du_ids(payload))
 
-        event_number = int(payload.get("event_number", -1))
-        index = int(payload.get("index", -1))
-        event_date, event_time = parse_event_date_time(payload)
+        event_number = payload.get("event_number", -1)
+        event_datetime = parse_event_datetime(payload)
 
         records.append(
             make_named_row(
@@ -337,16 +325,13 @@ def parse_event_records(
                 event_second=event_second,
                 du_count=du_count,
                 event_number=event_number,
-                index=index,
-                event_date=event_date,
-                event_time=event_time,
+                event_datetime=event_datetime,
             )
         )
 
     records.sort(
         key=lambda item: (
             int(item["event_second"]),
-            int(item["index"]),
             int(item["event_number"]),
         )
     )
@@ -508,6 +493,70 @@ def build_du_rate_per_second_rows(
     return rows
 
 
+def build_total_du_trigger_per_second_rows(
+    per_second_du: Dict[int, Counter[str]],
+) -> List[NamedDefaultRow]:
+    """Build per-second total DU trigger count rows."""
+    rows: List[NamedDefaultRow] = []
+    for second in sorted(per_second_du.keys()):
+        total_count = sum(int(count) for count in per_second_du[second].values())
+        rows.append(
+            make_named_row(
+                TOTAL_DU_PER_SECOND_FIELDS,
+                event_second=second,
+                total_du_trigger_count=total_count,
+                total_du_trigger_rate_hz=float(total_count),
+            )
+        )
+    logger.debug(f"Built per-second total DU trigger rows: {len(rows)}")
+    return rows
+
+
+def build_avg_total_du_trigger_rows(
+    total_du_rows: List[NamedDefaultRow],
+    window_seconds: int,
+) -> List[NamedDefaultRow]:
+    """Build window-averaged total DU trigger count/rate rows."""
+    if not total_du_rows:
+        return []
+
+    second_to_total_count: Dict[int, int] = {
+        int(row["event_second"]): int(row["total_du_trigger_count"])
+        for row in total_du_rows
+    }
+    start_second = min(second_to_total_count.keys())
+    end_second_inclusive = max(second_to_total_count.keys())
+    stop_second_exclusive = end_second_inclusive + 1
+
+    rows: List[NamedDefaultRow] = []
+    window_start = start_second
+    while window_start < stop_second_exclusive:
+        window_end_exclusive = min(window_start + window_seconds, stop_second_exclusive)
+        duration = window_end_exclusive - window_start
+
+        total_count = 0
+        for second in range(window_start, window_end_exclusive):
+            total_count += second_to_total_count.get(second, 0)
+
+        rows.append(
+            make_named_row(
+                AVG_TOTAL_DU_FIELDS,
+                window_start_second=window_start,
+                window_end_second_exclusive=window_end_exclusive,
+                total_du_trigger_count=total_count,
+                avg_total_du_trigger_rate_hz=total_count / duration,
+            )
+        )
+        window_start += window_seconds
+
+    logger.debug(
+        "Built window-averaged total DU rows: rows={}, window_seconds={}",
+        len(rows),
+        window_seconds,
+    )
+    return rows
+
+
 def build_window_averages(
     records: List[NamedDefaultRow],
     per_second_du: Dict[int, Counter[str]],
@@ -632,6 +681,9 @@ def build_output_paths(yaml_path: Path) -> Dict[str, Path]:
         ),
         "rate_png": yaml_path.with_name(f"{stem}_rate_per_second.png"),
         "du_rate_png": yaml_path.with_name(f"{stem}_du_trigger_rate.png"),
+        "total_du_rate_png": yaml_path.with_name(
+            f"{stem}_total_du_trigger_per_second.png"
+        ),
         "delta_hist_png": yaml_path.with_name(
             f"{stem}_adjacent_time_delta_hist.png"
         ),
@@ -639,6 +691,9 @@ def build_output_paths(yaml_path: Path) -> Dict[str, Path]:
             f"{stem}_du_rate_per_second_heatmap.png"
         ),
         "avg_event_png": yaml_path.with_name(f"{stem}_avg_event_rate.png"),
+        "avg_total_du_png": yaml_path.with_name(
+            f"{stem}_avg_total_du_trigger_rate.png"
+        ),
         "avg_du_heatmap_png": yaml_path.with_name(
             f"{stem}_avg_du_trigger_rate_heatmap.png"
         ),
@@ -697,8 +752,7 @@ def write_event_csv(
             [
                 "event_number",
                 "event_second",
-                "event_date",
-                "event_time",
+                "event_datetime",
                 "du_count",
                 "du_ids",
             ]
@@ -707,8 +761,7 @@ def write_event_csv(
             (
                 record["event_number"],
                 record["event_second"],
-                record["event_date"],
-                record["event_time"],
+                record["event_datetime"],
                 record["du_count"],
                 serialize_du_ids(
                     event_du_ids_map.get(
@@ -723,248 +776,6 @@ def write_event_csv(
     logger.debug(f"Wrote event CSV rows: {len(records)} -> {path}")
 
 
-def write_rate_csv(
-    path: Path,
-    rates: List[NamedDefaultRow],
-    second_datetime_map: Optional[SecondDateTimeMap] = None,
-) -> None:
-    """Write per-second event-rate CSV."""
-    with path.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(
-            [
-                "event_second",
-                "event_date",
-                "event_time",
-                "event_datetime",
-                "event_count",
-                "event_rate_hz",
-            ]
-        )
-        rows: List[NamedDefaultRow] = []
-        for rate_row in rates:
-            second = int(rate_row["event_second"])
-            count = int(rate_row["event_count"])
-            rate = float(rate_row["event_rate_hz"])
-            date_str, time_str, datetime_str = get_second_datetime_tuple(
-                second,
-                second_datetime_map,
-            )
-            rows.append(
-                make_named_row(
-                    (
-                        "event_second",
-                        "event_date",
-                        "event_time",
-                        "event_datetime",
-                        "event_count",
-                        "event_rate_hz",
-                    ),
-                    event_second=second,
-                    event_date=date_str,
-                    event_time=time_str,
-                    event_datetime=datetime_str,
-                    event_count=count,
-                    event_rate_hz=rate,
-                )
-            )
-        writer.writerows([tuple(row) for row in rows])
-    logger.debug(f"Wrote rate CSV rows: {len(rates)} -> {path}")
-
-
-def write_du_rate_csv(path: Path, du_rates: List[NamedDefaultRow]) -> None:
-    """Write per-DU trigger count/rate CSV."""
-    with path.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(["du_id", "trigger_count", "trigger_rate_hz"])
-        writer.writerows(
-            [
-                (row["du_id"], row["trigger_count"], row["trigger_rate_hz"])
-                for row in du_rates
-            ]
-        )
-    logger.debug(f"Wrote DU-rate CSV rows: {len(du_rates)} -> {path}")
-
-
-def write_adjacent_time_delta_csv(
-    path: Path,
-    rows: List[NamedDefaultRow],
-) -> None:
-    """Write adjacent event time-delta distribution CSV."""
-    with path.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(["delta_second", "event_pair_count"])
-        writer.writerows(
-            [(row["delta_second"], row["event_pair_count"]) for row in rows]
-        )
-    logger.debug(f"Wrote adjacent time-delta CSV rows: {len(rows)} -> {path}")
-
-
-def write_du_per_second_csv(
-    path: Path,
-    rows: List[NamedDefaultRow],
-    second_datetime_map: Optional[SecondDateTimeMap] = None,
-) -> None:
-    """Write per-second per-DU trigger-rate CSV."""
-    with path.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(
-            [
-                "event_second",
-                "event_date",
-                "event_time",
-                "event_datetime",
-                "du_id",
-                "trigger_count",
-                "trigger_rate_hz",
-            ]
-        )
-        output_rows: List[NamedDefaultRow] = []
-        for row in rows:
-            second = int(row["event_second"])
-            du_id = str(row["du_id"])
-            count = int(row["trigger_count"])
-            rate = float(row["trigger_rate_hz"])
-            date_str, time_str, datetime_str = get_second_datetime_tuple(
-                second,
-                second_datetime_map,
-            )
-            output_rows.append(
-                make_named_row(
-                    (
-                        "event_second",
-                        "event_date",
-                        "event_time",
-                        "event_datetime",
-                        "du_id",
-                        "trigger_count",
-                        "trigger_rate_hz",
-                    ),
-                    event_second=second,
-                    event_date=date_str,
-                    event_time=time_str,
-                    event_datetime=datetime_str,
-                    du_id=du_id,
-                    trigger_count=count,
-                    trigger_rate_hz=rate,
-                )
-            )
-        writer.writerows([tuple(row) for row in output_rows])
-    logger.debug(f"Wrote per-second DU CSV rows: {len(rows)} -> {path}")
-
-
-def write_avg_event_csv(
-    path: Path,
-    rows: List[NamedDefaultRow],
-    second_datetime_map: Optional[SecondDateTimeMap] = None,
-) -> None:
-    """Write window-averaged event-rate CSV."""
-    with path.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(
-            [
-                "window_start_second",
-                "window_end_second_exclusive",
-                "window_start_datetime",
-                "window_end_datetime",
-                "event_count",
-                "avg_event_rate_hz",
-            ]
-        )
-        output_rows: List[NamedDefaultRow] = []
-        for row in rows:
-            start_second = int(row["window_start_second"])
-            end_second = int(row["window_end_second_exclusive"])
-            event_count = int(row["event_count"])
-            avg_rate = float(row["avg_event_rate_hz"])
-            _, _, start_datetime = get_second_datetime_tuple(
-                start_second,
-                second_datetime_map,
-            )
-            _, _, end_datetime = get_second_datetime_tuple(
-                end_second - 1,
-                second_datetime_map,
-            )
-            output_rows.append(
-                make_named_row(
-                    (
-                        "window_start_second",
-                        "window_end_second_exclusive",
-                        "window_start_datetime",
-                        "window_end_datetime",
-                        "event_count",
-                        "avg_event_rate_hz",
-                    ),
-                    window_start_second=start_second,
-                    window_end_second_exclusive=end_second,
-                    window_start_datetime=start_datetime,
-                    window_end_datetime=end_datetime,
-                    event_count=event_count,
-                    avg_event_rate_hz=avg_rate,
-                )
-            )
-        writer.writerows([tuple(row) for row in output_rows])
-    logger.debug(f"Wrote avg-event CSV rows: {len(rows)} -> {path}")
-
-
-def write_avg_du_csv(
-    path: Path,
-    rows: List[NamedDefaultRow],
-    second_datetime_map: Optional[SecondDateTimeMap] = None,
-) -> None:
-    """Write window-averaged per-DU trigger-rate CSV."""
-    with path.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(
-            [
-                "window_start_second",
-                "window_end_second_exclusive",
-                "window_start_datetime",
-                "window_end_datetime",
-                "du_id",
-                "trigger_count",
-                "avg_trigger_rate_hz",
-            ]
-        )
-        output_rows: List[NamedDefaultRow] = []
-        for row in rows:
-            start_second = int(row["window_start_second"])
-            end_second = int(row["window_end_second_exclusive"])
-            du_id = str(row["du_id"])
-            trigger_count = int(row["trigger_count"])
-            avg_rate = float(row["avg_trigger_rate_hz"])
-            _, _, start_datetime = get_second_datetime_tuple(
-                start_second,
-                second_datetime_map,
-            )
-            _, _, end_datetime = get_second_datetime_tuple(
-                end_second - 1,
-                second_datetime_map,
-            )
-            output_rows.append(
-                make_named_row(
-                    (
-                        "window_start_second",
-                        "window_end_second_exclusive",
-                        "window_start_datetime",
-                        "window_end_datetime",
-                        "du_id",
-                        "trigger_count",
-                        "avg_trigger_rate_hz",
-                    ),
-                    window_start_second=start_second,
-                    window_end_second_exclusive=end_second,
-                    window_start_datetime=start_datetime,
-                    window_end_datetime=end_datetime,
-                    du_id=du_id,
-                    trigger_count=trigger_count,
-                    avg_trigger_rate_hz=avg_rate,
-                )
-            )
-        writer.writerows([tuple(row) for row in output_rows])
-    logger.debug(f"Wrote avg-DU CSV rows: {len(rows)} -> {path}")
-
-
 def read_event_csv(
     path: Path,
 ) -> List[NamedDefaultRow]:
@@ -972,8 +783,9 @@ def read_event_csv(
     rows: List[NamedDefaultRow] = []
     with path.open("r", newline="", encoding="utf-8") as fp:
         reader = csv.DictReader(fp)
-        for row_index, row in enumerate(reader):
+        for row in reader:
             event_number = int(row["event_number"])
+            event_datetime = str(row.get("event_datetime", ""))
             rows.append(
                 make_named_row(
                     EVENT_RECORD_FIELDS,
@@ -981,9 +793,7 @@ def read_event_csv(
                     event_second=int(row["event_second"]),
                     du_count=int(row["du_count"]),
                     event_number=event_number,
-                    index=row_index,
-                    event_date=str(row.get("event_date", "")),
-                    event_time=str(row.get("event_time", "")),
+                    event_datetime=event_datetime,
                 )
             )
     return rows
@@ -1000,142 +810,6 @@ def read_event_csv_du_ids(path: Path) -> Dict[str, List[str]]:
                 str(row.get("du_ids", ""))
             )
     return event_du_ids_map
-
-
-def read_rate_csv(path: Path) -> List[NamedDefaultRow]:
-    """Read per-second event-rate CSV."""
-    rows: List[NamedDefaultRow] = []
-    with path.open("r", newline="", encoding="utf-8") as fp:
-        reader = csv.DictReader(fp)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    RATE_ROW_FIELDS,
-                    event_second=int(row["event_second"]),
-                    event_count=int(row["event_count"]),
-                    event_rate_hz=float(row["event_rate_hz"]),
-                )
-            )
-    return rows
-
-
-def read_du_rate_csv(path: Path) -> List[NamedDefaultRow]:
-    """Read per-DU trigger-rate CSV."""
-    rows: List[NamedDefaultRow] = []
-    with path.open("r", newline="", encoding="utf-8") as fp:
-        reader = csv.DictReader(fp)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    DU_RATE_FIELDS,
-                    du_id=str(row["du_id"]),
-                    trigger_count=int(row["trigger_count"]),
-                    trigger_rate_hz=float(row["trigger_rate_hz"]),
-                )
-            )
-    return rows
-
-
-def read_adjacent_time_delta_csv(path: Path) -> List[NamedDefaultRow]:
-    """Read adjacent event time-delta distribution CSV."""
-    rows: List[NamedDefaultRow] = []
-    with path.open("r", newline="", encoding="utf-8") as fp:
-        reader = csv.DictReader(fp)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    DELTA_DIST_FIELDS,
-                    delta_second=int(row["delta_second"]),
-                    event_pair_count=int(row["event_pair_count"]),
-                )
-            )
-    return rows
-
-
-def read_du_per_second_csv(path: Path) -> List[NamedDefaultRow]:
-    """Read per-second per-DU trigger-rate CSV."""
-    rows: List[NamedDefaultRow] = []
-    with path.open("r", newline="", encoding="utf-8") as fp:
-        reader = csv.DictReader(fp)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    DU_RATE_PER_SECOND_FIELDS,
-                    event_second=int(row["event_second"]),
-                    du_id=str(row["du_id"]),
-                    trigger_count=int(row["trigger_count"]),
-                    trigger_rate_hz=float(row["trigger_rate_hz"]),
-                )
-            )
-    return rows
-
-
-def read_avg_event_csv(path: Path) -> List[NamedDefaultRow]:
-    """Read window-averaged event-rate CSV."""
-    rows: List[NamedDefaultRow] = []
-    with path.open("r", newline="", encoding="utf-8") as fp:
-        reader = csv.DictReader(fp)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    AVG_EVENT_FIELDS,
-                    window_start_second=int(row["window_start_second"]),
-                    window_end_second_exclusive=int(
-                        row["window_end_second_exclusive"]
-                    ),
-                    event_count=int(row["event_count"]),
-                    avg_event_rate_hz=float(row["avg_event_rate_hz"]),
-                )
-            )
-    return rows
-
-
-def read_avg_du_csv(path: Path) -> List[NamedDefaultRow]:
-    """Read window-averaged per-DU trigger-rate CSV."""
-    rows: List[NamedDefaultRow] = []
-    with path.open("r", newline="", encoding="utf-8") as fp:
-        reader = csv.DictReader(fp)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    AVG_DU_FIELDS,
-                    window_start_second=int(row["window_start_second"]),
-                    window_end_second_exclusive=int(
-                        row["window_end_second_exclusive"]
-                    ),
-                    du_id=str(row["du_id"]),
-                    trigger_count=int(row["trigger_count"]),
-                    avg_trigger_rate_hz=float(row["avg_trigger_rate_hz"]),
-                )
-            )
-    return rows
-
-
-def expand_adjacent_time_deltas_from_distribution(
-    rows: List[NamedDefaultRow],
-) -> List[int]:
-    """Expand (delta_second, event_pair_count) rows back to delta samples."""
-    deltas: List[int] = []
-    for row in rows:
-        delta_second = int(row["delta_second"])
-        pair_count = int(row["event_pair_count"])
-        deltas.extend([delta_second] * max(0, pair_count))
-    return deltas
-
-
-def build_per_second_du_from_rows(
-    rows: List[NamedDefaultRow],
-) -> Dict[int, Counter[str]]:
-    """Rebuild per-second DU counters from flattened CSV rows."""
-    per_second_du: Dict[int, Counter[str]] = {}
-    for row in rows:
-        second = int(row["event_second"])
-        du_id = str(row["du_id"])
-        trigger_count = int(row["trigger_count"])
-        if second not in per_second_du:
-            per_second_du[second] = Counter()
-        per_second_du[second][du_id] = trigger_count
-    return per_second_du
 
 
 def plot_du_count_histogram(
@@ -1266,6 +940,33 @@ def plot_du_trigger_rate(path: Path, du_rates: List[NamedDefaultRow]) -> None:
     plt.close(fig)
 
 
+def plot_total_du_trigger_per_second(
+    path: Path,
+    rows: List[NamedDefaultRow],
+    second_datetime_map: Optional[SecondDateTimeMap] = None,
+) -> None:
+    """Plot line chart of total DU trigger count per second."""
+    if not rows:
+        logger.warning(
+            "No per-second total DU trigger data; skip total DU trend plot"
+        )
+        return
+
+    seconds = [int(row["event_second"]) for row in rows]
+    total_counts = [float(row["total_du_trigger_count"]) for row in rows]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(seconds, total_counts, marker="o", markersize=2, linewidth=1)
+    ax.set_xlabel("Event second (GPS)")
+    ax.set_ylabel("Total DU trigger count per second")
+    ax.set_title("Total DU Trigger Count Per Second")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    apply_gps_datetime_ticks(ax, seconds, second_datetime_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
 def plot_du_rate_per_second_heatmap(
     path: Path,
     per_second_du: Dict[int, Counter[str]],
@@ -1313,7 +1014,7 @@ def plot_du_rate_per_second_heatmap(
         tick_labels: List[str] = []
         for pos in tick_positions:
             second = seconds[pos]
-            _, _, datetime_str = get_second_datetime_tuple(second, second_datetime_map)
+            datetime_str = get_second_datetime(second, second_datetime_map)
             if datetime_str:
                 tick_labels.append(f"{second}\n{datetime_str}")
             else:
@@ -1345,6 +1046,32 @@ def plot_avg_event_rate(
     ax.set_xlabel("Window start second (GPS)")
     ax.set_ylabel("Average event rate (Hz)")
     ax.set_title(f"Average Event Rate (window={window_seconds}s)")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    apply_gps_datetime_ticks(ax, x_values, second_datetime_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def plot_avg_total_du_trigger_rate(
+    path: Path,
+    rows: List[NamedDefaultRow],
+    window_seconds: int,
+    second_datetime_map: Optional[SecondDateTimeMap] = None,
+) -> None:
+    """Plot line chart of window-averaged total DU trigger rate."""
+    if not rows:
+        logger.warning("No window-averaged total-DU data; skip plotting")
+        return
+
+    x_values = [int(row["window_start_second"]) for row in rows]
+    y_values = [float(row["avg_total_du_trigger_rate_hz"]) for row in rows]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(x_values, y_values, marker="o", linewidth=1)
+    ax.set_xlabel("Window start second (GPS)")
+    ax.set_ylabel("Average total DU trigger rate (Hz)")
+    ax.set_title(f"Average Total DU Trigger Rate (window={window_seconds}s)")
     ax.grid(True, linestyle=":", alpha=0.6)
     apply_gps_datetime_ticks(ax, x_values, second_datetime_map)
     fig.tight_layout()
@@ -1413,7 +1140,7 @@ def plot_avg_du_rate_heatmap(
         tick_labels: List[str] = []
         for pos in tick_positions:
             start_second = windows[pos][0]
-            _, _, datetime_str = get_second_datetime_tuple(start_second, second_datetime_map)
+            datetime_str = get_second_datetime(start_second, second_datetime_map)
             if datetime_str:
                 tick_labels.append(f"{start_second}\n{datetime_str}")
             else:
@@ -1590,6 +1317,7 @@ def main() -> int:
     du_rates: List[NamedDefaultRow] = []
     per_second_du: Dict[int, Counter[str]] = {}
     du_second_rows: List[NamedDefaultRow] = []
+    total_du_rows: List[NamedDefaultRow] = []
     data_for_aggregates: Dict[str, Dict[str, Any]] = {}
     event_du_ids_map: Dict[str, List[str]] = {}
 
@@ -1632,8 +1360,10 @@ def main() -> int:
         per_second_du,
         du_second_rows,
     ) = compute_core_statistics(data_for_aggregates, records)
+    total_du_rows = build_total_du_trigger_per_second_rows(per_second_du)
 
     avg_event_rows: List[NamedDefaultRow] = []
+    avg_total_du_rows: List[NamedDefaultRow] = []
     avg_du_rows: List[NamedDefaultRow] = []
 
     effective_avg_du_window = args.avg_window
@@ -1647,6 +1377,10 @@ def main() -> int:
         avg_event_rows, _ = build_window_averages(
             records,
             per_second_du,
+            args.avg_window,
+        )
+        avg_total_du_rows = build_avg_total_du_trigger_rows(
+            total_du_rows,
             args.avg_window,
         )
 
@@ -1670,6 +1404,11 @@ def main() -> int:
         )
         plot_rate_line(output_paths["rate_png"], rates, second_datetime_map)
         plot_du_trigger_rate(output_paths["du_rate_png"], du_rates)
+        plot_total_du_trigger_per_second(
+            output_paths["total_du_rate_png"],
+            total_du_rows,
+            second_datetime_map,
+        )
         plot_adjacent_time_delta_histogram(
             output_paths["delta_hist_png"],
             adjacent_time_deltas,
@@ -1692,6 +1431,12 @@ def main() -> int:
             plot_avg_event_rate(
                 output_paths["avg_event_png"],
                 avg_event_rows,
+                args.avg_window,
+                second_datetime_map,
+            )
+            plot_avg_total_du_trigger_rate(
+                output_paths["avg_total_du_png"],
+                avg_total_du_rows,
                 args.avg_window,
                 second_datetime_map,
             )
@@ -1731,6 +1476,10 @@ def main() -> int:
             f"{output_paths['du_rate_png']}"
         )
         logger.info(
+            "Per-second total DU trigger-count line plot written to: "
+            f"{output_paths['total_du_rate_png']}"
+        )
+        logger.info(
             "Adjacent time-delta histogram written to: "
             f"{output_paths['delta_hist_png']}"
         )
@@ -1747,6 +1496,10 @@ def main() -> int:
             logger.info(
                 "Window-averaged event-rate line plot written to: "
                 f"{output_paths['avg_event_png']}"
+            )
+            logger.info(
+                "Window-averaged total-DU trigger-rate line plot written to: "
+                f"{output_paths['avg_total_du_png']}"
             )
         if effective_avg_du_window > 0:
             logger.info(

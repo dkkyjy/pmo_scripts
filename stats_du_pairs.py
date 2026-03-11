@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -55,7 +56,6 @@ def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultDict:
 
 OBSERVED_PAIR_DELTA_FIELDS = (
     "event_number",
-    "index",
     "event_time",
     "du_a",
     "du_b",
@@ -104,6 +104,94 @@ EventTimeLabelMap = Dict[int, str]
 
 DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
+
+
+def normalize_cli_datetime_text(value: Optional[datetime]) -> str:
+    """Normalize optional CLI datetime to deterministic text for cache meta."""
+    if value is None:
+        return ""
+    return value.strftime(DATETIME_FORMAT)
+
+
+def cache_file_state(path: Path) -> Dict[str, Any]:
+    """Build lightweight file signature for cache validation."""
+    resolved_path = str(path.resolve())
+    if not path.exists():
+        return {
+            "path": resolved_path,
+            "exists": False,
+            "size": 0,
+            "mtime_ns": 0,
+        }
+
+    stat_info = path.stat()
+    return {
+        "path": resolved_path,
+        "exists": True,
+        "size": int(stat_info.st_size),
+        "mtime_ns": int(stat_info.st_mtime_ns),
+    }
+
+
+def distribution_meta_path(distribution_csv: Path) -> Path:
+    """Return meta file path for one distribution cache CSV."""
+    return distribution_csv.with_name(f"{distribution_csv.stem}.meta.json")
+
+
+def build_distribution_cache_meta(
+    yaml_path: Path,
+    det_pos_path: Path,
+    offset_path: Path,
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> Dict[str, Any]:
+    """Build cache metadata signature from inputs and filter parameters."""
+    return {
+        "schema_version": 1,
+        "yaml": cache_file_state(yaml_path),
+        "det_pos": cache_file_state(det_pos_path),
+        "offset": cache_file_state(offset_path),
+        "start_datetime": normalize_cli_datetime_text(start_dt),
+        "end_datetime": normalize_cli_datetime_text(end_dt),
+    }
+
+
+def write_distribution_cache_meta(path: Path, meta: Dict[str, Any]) -> None:
+    """Write distribution cache metadata file."""
+    with path.open("w", encoding="utf-8") as file_obj:
+        json.dump(meta, file_obj, ensure_ascii=True, sort_keys=True)
+
+
+def read_distribution_cache_meta(path: Path) -> Dict[str, Any]:
+    """Read distribution cache metadata file."""
+    with path.open("r", encoding="utf-8") as file_obj:
+        loaded = json.load(file_obj)
+    if not isinstance(loaded, dict):
+        raise ValueError("Distribution cache meta must be a JSON object")
+    return loaded
+
+
+def distribution_cache_meta_is_valid(
+    cached_meta: Dict[str, Any],
+    expected_meta: Dict[str, Any],
+) -> tuple[bool, str]:
+    """Check whether cached meta matches expected runtime signature."""
+    if int(cached_meta.get("schema_version", -1)) != int(
+        expected_meta.get("schema_version", -2)
+    ):
+        return False, "schema_version mismatch"
+
+    for key in ("yaml", "det_pos", "offset"):
+        cached_file_state = cached_meta.get(key)
+        expected_file_state = expected_meta.get(key)
+        if cached_file_state != expected_file_state:
+            return False, f"{key} signature mismatch"
+
+    for key in ("start_datetime", "end_datetime"):
+        if str(cached_meta.get(key, "")) != str(expected_meta.get(key, "")):
+            return False, f"{key} mismatch"
+
+    return True, ""
 
 
 def sort_du_id_key(du_id: str) -> tuple[int, str]:
@@ -243,14 +331,10 @@ def parse_cli_datetime(value: str) -> datetime:
 
 def parse_event_datetime(payload: EventPayload) -> Optional[datetime]:
     """Parse one event payload datetime from ``datetime`` field."""
-    datetime_value = payload.get("datetime", "")
-    datetime_text = str(datetime_value) if datetime_value is not None else ""
-    if not datetime_text:
-        return None
-
     try:
-        return datetime.strptime(datetime_text, DATETIME_FORMAT)
-    except ValueError:
+        datetime_value = payload.get("datetime", "")
+        return datetime.strptime(datetime_value, DATETIME_FORMAT)
+    except (TypeError, ValueError):
         return None
 
 
@@ -445,9 +529,8 @@ def build_observed_pair_deltas(
         offsets = {}
 
     for _, payload in data.items():
-        event_number = int(payload.get("event_number", -1))
-        index = int(payload.get("index", -1))
-        event_time = int(payload.get("gps_time", -1))
+        event_number = payload.get("event_number", -1)
+        event_time = payload.get("gps_time", -1)
         du_ns_map = parse_du_ns_map(payload)
 
         du_ids = sorted(du_ns_map.keys(), key=sort_du_id_key)
@@ -461,7 +544,6 @@ def build_observed_pair_deltas(
                 make_named_row(
                     OBSERVED_PAIR_DELTA_FIELDS,
                     event_number=event_number,
-                    index=index,
                     event_time=event_time,
                     du_a=du_a,
                     du_b=du_b,
@@ -473,7 +555,7 @@ def build_observed_pair_deltas(
     rows.sort(
         key=lambda row: (
             int(row["event_time"]),
-            int(row["index"]),
+            int(row["event_number"]),
             sort_du_id_key(str(row["du_a"])),
             sort_du_id_key(str(row["du_b"])),
         )
@@ -529,13 +611,34 @@ def write_theoretical_cache(path: Path, rows: Sequence[ExpectedPairDelta]) -> No
 def read_theoretical_cache(path: Path) -> List[ExpectedPairDelta]:
     """Read shared theoretical DU-pair cache CSV."""
     rows: List[ExpectedPairDelta] = []
+    invalid_row_count = 0
+    required_fields = {"du_a", "du_b", "distance_m", "theoretical_delta_ns"}
+
     with path.open("r", newline="", encoding="utf-8") as file_obj:
         reader = csv.DictReader(file_obj)
-        for row in reader:
-            du_a = str(row["du_a"])
-            du_b = str(row["du_b"])
-            distance_m = float(row["distance_m"])
-            theoretical_delta_ns = float(row["theoretical_delta_ns"])
+        header_fields = set(reader.fieldnames or [])
+        if not required_fields.issubset(header_fields):
+            missing_fields = sorted(required_fields - header_fields)
+            raise ValueError(
+                "Theoretical cache missing required columns: "
+                f"{','.join(missing_fields)}"
+            )
+
+        for row_index, row in enumerate(reader, start=2):
+            try:
+                du_a = str(row["du_a"])
+                du_b = str(row["du_b"])
+                distance_m = float(row["distance_m"])
+                theoretical_delta_ns = float(row["theoretical_delta_ns"])
+            except (TypeError, ValueError, KeyError) as exc:
+                invalid_row_count += 1
+                logger.warning(
+                    "Skip invalid theoretical cache row at line {}: {}",
+                    row_index,
+                    exc,
+                )
+                continue
+
             rows.append(
                 make_named_row(
                     EXPECTED_PAIR_DELTA_FIELDS,
@@ -545,6 +648,14 @@ def read_theoretical_cache(path: Path) -> List[ExpectedPairDelta]:
                     theoretical_delta_ns=theoretical_delta_ns,
                 )
             )
+
+    if invalid_row_count > 0:
+        logger.warning(
+            "Skipped {} invalid rows while reading theoretical cache: {}",
+            invalid_row_count,
+            path,
+        )
+
     return rows
 
 
@@ -642,23 +753,61 @@ def write_pair_distribution_csv(path: Path, rows: Sequence[PairDistributionRow])
 def read_pair_distribution_csv(path: Path) -> List[PairDistributionRow]:
     """Read DU-pair distribution CSV with observed and theoretical deltas."""
     rows: List[PairDistributionRow] = []
+    invalid_row_count = 0
+    required_fields = {
+        "event_number",
+        "event_time",
+        "du_a",
+        "du_b",
+        "observed_delta_ns",
+        "observed_abs_delta_ns",
+        "theoretical_delta_ns",
+        "distance_m",
+        "event_datetime",
+    }
+
     with path.open("r", newline="", encoding="utf-8") as file_obj:
         reader = csv.DictReader(file_obj)
-        for row in reader:
-            rows.append(
-                make_named_row(
-                    PAIR_DISTRIBUTION_FIELDS,
-                    event_number=int(row["event_number"]),
-                    event_time=int(row["event_time"]),
-                    du_a=str(row["du_a"]),
-                    du_b=str(row["du_b"]),
-                    observed_delta_ns=float(row["observed_delta_ns"]),
-                    observed_abs_delta_ns=float(row["observed_abs_delta_ns"]),
-                    theoretical_delta_ns=float(row["theoretical_delta_ns"]),
-                    distance_m=float(row["distance_m"]),
-                    event_datetime=str(row.get("event_datetime", "")),
-                )
+        header_fields = set(reader.fieldnames or [])
+        if not required_fields.issubset(header_fields):
+            missing_fields = sorted(required_fields - header_fields)
+            raise ValueError(
+                "Distribution cache missing required columns: "
+                f"{','.join(missing_fields)}"
             )
+
+        for row_index, row in enumerate(reader, start=2):
+            try:
+                rows.append(
+                    make_named_row(
+                        PAIR_DISTRIBUTION_FIELDS,
+                        event_number=int(row["event_number"]),
+                        event_time=int(row["event_time"]),
+                        du_a=str(row["du_a"]),
+                        du_b=str(row["du_b"]),
+                        observed_delta_ns=float(row["observed_delta_ns"]),
+                        observed_abs_delta_ns=float(row["observed_abs_delta_ns"]),
+                        theoretical_delta_ns=float(row["theoretical_delta_ns"]),
+                        distance_m=float(row["distance_m"]),
+                        event_datetime=str(row.get("event_datetime", "")),
+                    )
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                invalid_row_count += 1
+                logger.warning(
+                    "Skip invalid distribution cache row at line {}: {}",
+                    row_index,
+                    exc,
+                )
+                continue
+
+    if invalid_row_count > 0:
+        logger.warning(
+            "Skipped {} invalid rows while reading distribution cache: {}",
+            invalid_row_count,
+            path,
+        )
+
     return rows
 
 
@@ -789,6 +938,77 @@ def plot_ratio_vs_event_time(
     ax.grid(True, linestyle=":", alpha=0.6)
     ax.set_yscale("log")
     apply_time_ticks(ax, x_values, event_time_label_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def plot_theoretical_delta_vs_event_time(
+    path: Path,
+    rows: Sequence[PairDistributionRow],
+    event_time_label_map: Optional[EventTimeLabelMap] = None,
+) -> None:
+    """Plot theoretical delta scatter against event time."""
+    samples = [
+        (int(row["event_time"]), float(row["theoretical_delta_ns"]))
+        for row in rows
+        if int(row["event_time"]) >= 0 and float(row["theoretical_delta_ns"]) > 0
+    ]
+    if not samples:
+        logger.warning(
+            "No event-time theoretical-delta samples available; "
+            "skip theoretical-delta-vs-time plot"
+        )
+        return
+
+    x_values = np.array([sample[0] for sample in samples])
+    y_values = np.array([sample[1] for sample in samples], dtype=float)
+
+    floor_value = non_zero_floor_magnitude(y_values)
+    y_values[y_values <= 0] = floor_value
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.scatter(x_values, y_values, s=8, alpha=0.6)
+    ax.set_xlabel("Event time (gps_time)")
+    ax.set_ylabel("Theoretical Δt (ns)")
+    ax.set_title("Theoretical DU-pair delta vs event time")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
+    apply_time_ticks(ax, x_values, event_time_label_map)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def plot_theoretical_delta_histogram(
+    path: Path,
+    rows: Sequence[PairDistributionRow],
+) -> None:
+    """Plot histogram of theoretical delta values."""
+    theoretical_values = np.array(
+        [
+            float(row["theoretical_delta_ns"])
+            for row in rows
+            if float(row["theoretical_delta_ns"]) > 0
+        ],
+        dtype=float,
+    )
+    if theoretical_values.size == 0:
+        logger.warning(
+            "No positive theoretical deltas available; "
+            "skip theoretical-delta histogram"
+        )
+        return
+
+    floor_value = non_zero_floor_magnitude(theoretical_values)
+    theoretical_values[theoretical_values <= 0] = floor_value
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.hist(np.log10(theoretical_values), bins=80, edgecolor="black", alpha=0.8)
+    ax.set_xlabel("log(Theoretical Δt (ns))")
+    ax.set_ylabel("Count")
+    ax.set_title("Distribution of theoretical DU-pair delta")
+    ax.grid(True, axis="y", linestyle=":", alpha=0.6)
+    ax.set_yscale("log")
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -1031,6 +1251,73 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def render_plots(
+    root: Path,
+    stem: str,
+    distribution_rows: Sequence[PairDistributionRow],
+    event_time_label_map: Optional[EventTimeLabelMap] = None,
+) -> List[Path]:
+    """Render all DU-pair plots and return generated plot paths."""
+    pair_delta_plot = root / f"{stem}_du_pair_delta_distribution.png"
+    ratio_plot = root / f"{stem}_observed_expected_ratio.png"
+    delta_time_plot = root / f"{stem}_du_pair_delta_vs_time.png"
+    ratio_time_plot = root / f"{stem}_observed_expected_ratio_vs_time.png"
+    theoretical_time_plot = root / f"{stem}_theoretical_delta_vs_time.png"
+    theoretical_hist_plot = root / f"{stem}_theoretical_delta_hist.png"
+    event_pair_count_time_plot = root / f"{stem}_event_du_pair_count_vs_time.png"
+    event_pair_count_hist_plot = root / f"{stem}_event_du_pair_count_hist.png"
+    event_max_ratio_time_plot = root / f"{stem}_event_max_ratio_vs_time.png"
+    event_max_ratio_hist_plot = root / f"{stem}_event_max_ratio_hist.png"
+
+    event_pair_count_rows = build_event_pair_count_rows(distribution_rows)
+    event_max_ratio_rows = build_event_max_ratio_rows(distribution_rows)
+
+    plot_pair_delta_distribution(
+        pair_delta_plot,
+        np.array([float(row["observed_abs_delta_ns"]) for row in distribution_rows]),
+    )
+    plot_observed_expected_ratio(ratio_plot, distribution_rows)
+    plot_delta_vs_event_time(delta_time_plot, distribution_rows, event_time_label_map)
+    plot_ratio_vs_event_time(ratio_time_plot, distribution_rows, event_time_label_map)
+    plot_theoretical_delta_vs_event_time(
+        theoretical_time_plot,
+        distribution_rows,
+        event_time_label_map,
+    )
+    plot_theoretical_delta_histogram(theoretical_hist_plot, distribution_rows)
+    plot_event_pair_count_vs_time(
+        event_pair_count_time_plot,
+        event_pair_count_rows,
+        event_time_label_map,
+    )
+    plot_event_pair_count_histogram(
+        event_pair_count_hist_plot,
+        event_pair_count_rows,
+    )
+    plot_event_max_ratio_vs_time(
+        event_max_ratio_time_plot,
+        event_max_ratio_rows,
+        event_time_label_map,
+    )
+    plot_event_max_ratio_histogram(
+        event_max_ratio_hist_plot,
+        event_max_ratio_rows,
+    )
+
+    return [
+        pair_delta_plot,
+        ratio_plot,
+        delta_time_plot,
+        ratio_time_plot,
+        theoretical_time_plot,
+        theoretical_hist_plot,
+        event_pair_count_time_plot,
+        event_pair_count_hist_plot,
+        event_max_ratio_time_plot,
+        event_max_ratio_hist_plot,
+    ]
+
+
 def main() -> int:
     """CLI entry point."""
     args = parse_args()
@@ -1049,76 +1336,75 @@ def main() -> int:
     stem = yaml_path.stem
     root = yaml_path.parent
     distribution_csv = root / f"{stem}_du_pair_delta_distribution.csv"
+    det_pos_path = Path(args.det_pos)
+    offset_path = Path(args.offset_file)
+    distribution_meta = distribution_meta_path(distribution_csv)
 
     if distribution_csv.exists() and not args.force_recompute:
         logger.info("Found distribution CSV cache: {}", distribution_csv)
-        distribution_rows = filter_distribution_rows_by_datetime_range(
-            read_pair_distribution_csv(distribution_csv),
+        expected_meta = build_distribution_cache_meta(
+            yaml_path,
+            det_pos_path,
+            offset_path,
             start_datetime,
             end_datetime,
         )
-        logger.info("Loaded distribution rows from cache: {}", len(distribution_rows))
-        event_time_label_map = build_event_time_label_map_from_rows(distribution_rows)
+        cached_rows = None
 
-        if not args.no_plot:
-            pair_delta_plot = root / f"{stem}_du_pair_delta_distribution.png"
-            ratio_plot = root / f"{stem}_observed_expected_ratio.png"
-            delta_time_plot = root / f"{stem}_du_pair_delta_vs_time.png"
-            ratio_time_plot = root / f"{stem}_observed_expected_ratio_vs_time.png"
-            event_pair_count_time_plot = root / f"{stem}_event_du_pair_count_vs_time.png"
-            event_pair_count_hist_plot = root / f"{stem}_event_du_pair_count_hist.png"
-            event_max_ratio_time_plot = root / f"{stem}_event_max_ratio_vs_time.png"
-            event_max_ratio_hist_plot = root / f"{stem}_event_max_ratio_hist.png"
-            event_pair_count_rows = build_event_pair_count_rows(distribution_rows)
-            event_max_ratio_rows = build_event_max_ratio_rows(distribution_rows)
-            plot_pair_delta_distribution(
-                pair_delta_plot,
-                np.array([
-                    float(row["observed_abs_delta_ns"])
-                    for row in distribution_rows
-                ]),
+        if not distribution_meta.exists():
+            logger.info(
+                "Cache meta missing for {}, fallback to recompute",
+                distribution_csv,
             )
-            plot_observed_expected_ratio(ratio_plot, distribution_rows)
-            plot_delta_vs_event_time(
-                delta_time_plot,
-                distribution_rows,
-                event_time_label_map,
-            )
-            plot_ratio_vs_event_time(
-                ratio_time_plot,
-                distribution_rows,
-                event_time_label_map,
-            )
-            plot_event_pair_count_vs_time(
-                event_pair_count_time_plot,
-                event_pair_count_rows,
-                event_time_label_map,
-            )
-            plot_event_pair_count_histogram(
-                event_pair_count_hist_plot,
-                event_pair_count_rows,
-            )
-            plot_event_max_ratio_vs_time(
-                event_max_ratio_time_plot,
-                event_max_ratio_rows,
-                event_time_label_map,
-            )
-            plot_event_max_ratio_histogram(
-                event_max_ratio_hist_plot,
-                event_max_ratio_rows,
-            )
-            logger.info("Plot written: {}", pair_delta_plot)
-            logger.info("Plot written: {}", ratio_plot)
-            logger.info("Plot written: {}", delta_time_plot)
-            logger.info("Plot written: {}", ratio_time_plot)
-            logger.info("Plot written: {}", event_pair_count_time_plot)
-            logger.info("Plot written: {}", event_pair_count_hist_plot)
-            logger.info("Plot written: {}", event_max_ratio_time_plot)
-            logger.info("Plot written: {}", event_max_ratio_hist_plot)
         else:
-            logger.info("Plotting disabled by --no-plot")
+            try:
+                cached_meta = read_distribution_cache_meta(distribution_meta)
+                is_valid, reason = distribution_cache_meta_is_valid(
+                    cached_meta,
+                    expected_meta,
+                )
+                if not is_valid:
+                    logger.info(
+                        "Cache meta mismatch for {}: {}, fallback to recompute",
+                        distribution_csv,
+                        reason,
+                    )
+                else:
+                    cached_rows = read_pair_distribution_csv(distribution_csv)
+            except (ValueError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "Invalid distribution cache or meta: {} / {} ({}). "
+                    "Falling back to recompute.",
+                    distribution_csv,
+                    distribution_meta,
+                    exc,
+                )
+                cached_rows = None
 
-        return 0
+        if cached_rows is None:
+            logger.info("Skip invalid cache and continue recompute path")
+        else:
+            distribution_rows = filter_distribution_rows_by_datetime_range(
+                cached_rows,
+                start_datetime,
+                end_datetime,
+            )
+            logger.info("Loaded distribution rows from cache: {}", len(distribution_rows))
+            event_time_label_map = build_event_time_label_map_from_rows(distribution_rows)
+
+            if not args.no_plot:
+                plot_paths = render_plots(
+                    root,
+                    stem,
+                    distribution_rows,
+                    event_time_label_map,
+                )
+                for plot_path in plot_paths:
+                    logger.info("Plot written: {}", plot_path)
+            else:
+                logger.info("Plotting disabled by --no-plot")
+
+            return 0
 
     if distribution_csv.exists() and args.force_recompute:
         logger.info(
@@ -1140,8 +1426,15 @@ def main() -> int:
 
     event_time_label_map = build_event_time_label_map(data)
 
-    det_pos_path = Path(args.det_pos)
-    detector_positions = load_data_from_file(args.det_pos)
+    try:
+        detector_positions = load_data_from_file(args.det_pos)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error(
+            "Failed to load detector position file: {} ({})",
+            det_pos_path,
+            exc,
+        )
+        return 2
 
     offset_map = load_du_time_offsets(Path(args.offset_file))
     observed_rows = build_observed_pair_deltas(data, offset_map)
@@ -1170,58 +1463,28 @@ def main() -> int:
     )
 
     write_pair_distribution_csv(distribution_csv, distribution_rows)
+    expected_meta = build_distribution_cache_meta(
+        yaml_path,
+        det_pos_path,
+        offset_path,
+        start_datetime,
+        end_datetime,
+    )
+    write_distribution_cache_meta(distribution_meta, expected_meta)
 
     logger.info("Observed pair rows: {}", len(observed_rows))
     logger.info("Theoretical pair rows: {}", len(expected_rows))
     logger.info("Distribution rows: {} -> {}", len(distribution_rows), distribution_csv)
 
     if not args.no_plot:
-        pair_delta_plot = root / f"{stem}_du_pair_delta_distribution.png"
-        ratio_plot = root / f"{stem}_observed_expected_ratio.png"
-        delta_time_plot = root / f"{stem}_du_pair_delta_vs_time.png"
-        ratio_time_plot = root / f"{stem}_observed_expected_ratio_vs_time.png"
-        event_pair_count_time_plot = root / f"{stem}_event_du_pair_count_vs_time.png"
-        event_pair_count_hist_plot = root / f"{stem}_event_du_pair_count_hist.png"
-        event_max_ratio_time_plot = root / f"{stem}_event_max_ratio_vs_time.png"
-        event_max_ratio_hist_plot = root / f"{stem}_event_max_ratio_hist.png"
-        event_pair_count_rows = build_event_pair_count_rows(distribution_rows)
-        event_max_ratio_rows = build_event_max_ratio_rows(distribution_rows)
-        plot_pair_delta_distribution(
-            pair_delta_plot,
-            np.array([
-                float(row["observed_abs_delta_ns"])
-                for row in distribution_rows
-            ]),
-        )
-        plot_observed_expected_ratio(ratio_plot, distribution_rows)
-        plot_delta_vs_event_time(delta_time_plot, distribution_rows, event_time_label_map)
-        plot_ratio_vs_event_time(ratio_time_plot, distribution_rows, event_time_label_map)
-        plot_event_pair_count_vs_time(
-            event_pair_count_time_plot,
-            event_pair_count_rows,
+        plot_paths = render_plots(
+            root,
+            stem,
+            distribution_rows,
             event_time_label_map,
         )
-        plot_event_pair_count_histogram(
-            event_pair_count_hist_plot,
-            event_pair_count_rows,
-        )
-        plot_event_max_ratio_vs_time(
-            event_max_ratio_time_plot,
-            event_max_ratio_rows,
-            event_time_label_map,
-        )
-        plot_event_max_ratio_histogram(
-            event_max_ratio_hist_plot,
-            event_max_ratio_rows,
-        )
-        logger.info("Plot written: {}", pair_delta_plot)
-        logger.info("Plot written: {}", ratio_plot)
-        logger.info("Plot written: {}", delta_time_plot)
-        logger.info("Plot written: {}", ratio_time_plot)
-        logger.info("Plot written: {}", event_pair_count_time_plot)
-        logger.info("Plot written: {}", event_pair_count_hist_plot)
-        logger.info("Plot written: {}", event_max_ratio_time_plot)
-        logger.info("Plot written: {}", event_max_ratio_hist_plot)
+        for plot_path in plot_paths:
+            logger.info("Plot written: {}", plot_path)
     else:
         logger.info("Plotting disabled by --no-plot")
 

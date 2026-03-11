@@ -11,6 +11,7 @@
 ../kewen_scripts
 __pycache__
 docs/*
+todos/*
 tests/*
 scripts/*
 cov_annotate/*

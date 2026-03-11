@@ -19,15 +19,17 @@ Parameters:
     --out-dir-base Optional, passed to subcommands as --out-dir-base (default ../Reco_Dir)
 """
 from __future__ import annotations
+
 import argparse
 import datetime
+import glob
+import multiprocessing
+import os
 import subprocess
 import sys
-from typing import Iterable
-import glob
-import os
 from pathlib import Path
-import multiprocessing
+from typing import Iterable, Tuple
+
 from logger_config import logger
 
 try:
@@ -35,6 +37,10 @@ try:
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
+
+
+Task = Tuple[str, str, str, bool, bool, bool, bool, int, int, str]
+TaskResult = Tuple[str, int]
 
 def parse_datetime(s):
     """Parse datetime string in various formats."""
@@ -94,6 +100,72 @@ def get_file_list(file_start: int, file_end: int, date: str, base_path: str) -> 
             seen_files.add(f)
     logger.info(f"Found {len(selected)} matching files in {path}")
     return selected
+
+
+def get_file_bounds_for_date(
+    start: datetime.datetime,
+    end: datetime.datetime,
+    current_date: datetime.datetime,
+) -> tuple[int, int]:
+    """Get file datetime bounds for one processing date."""
+    file_start = int(start.strftime("%Y%m%d%H%M%S"))
+    file_end = int(end.strftime("%Y%m%d%H%M%S"))
+
+    tmp_start = file_start
+    tmp_end = file_end
+    if end - current_date > datetime.timedelta(days=1):
+        tmp_end = int(current_date.strftime("%Y%m%d") + "240000")
+    if current_date - start > datetime.timedelta(days=0):
+        tmp_start = int(current_date.strftime("%Y%m%d") + "000000")
+    return tmp_start, tmp_end
+
+
+def make_tasks_for_file_paths(
+    file_path_list: list[str],
+    date: str,
+    args: argparse.Namespace,
+) -> list[Task]:
+    """Build worker task tuples for one date and file list."""
+    return [
+        (
+            file_path,
+            date,
+            args.out_dir_base,
+            args.run,
+            args.skip_read,
+            args.only_read,
+            args.with_signal,
+            args.left,
+            args.right,
+            args.channel,
+        )
+        for file_path in file_path_list
+    ]
+
+
+def build_tasks(
+    start: datetime.datetime,
+    end: datetime.datetime,
+    args: argparse.Namespace,
+) -> list[Task]:
+    """Build all worker tasks for the date range."""
+    tasks: list[Task] = []
+    for date in times_between(start, end):
+        date_str = date.strftime("%Y/%m/%d")
+        logger.info(f"Processing date: {date_str}")
+        tmp_start, tmp_end = get_file_bounds_for_date(start, end, date)
+        file_path_list = get_file_list(tmp_start, tmp_end, date_str, args.base_path)
+        tasks.extend(make_tasks_for_file_paths(file_path_list, date_str, args))
+    return tasks
+
+
+def execute_tasks(tasks: list[Task], jobs: int) -> list[TaskResult]:
+    """Execute tasks sequentially or in multiprocessing mode."""
+    if jobs <= 1:
+        return [process_date(task) for task in tasks]
+
+    with multiprocessing.Pool(processes=jobs) as pool:
+        return pool.map(process_date, tasks)
 
 
 def make_readheader_command(file_path: str, date: str, out_dir_base: str) -> list[str]:
@@ -211,13 +283,24 @@ def merge_images_to_pdf(pdf_basename: str, with_signal: bool, search_dir: str | 
         return False
 
 
-def process_date(task: tuple) -> tuple[str, int]:
+def process_date(task: Task) -> TaskResult:
     """Worker function for a single date.
 
     task: (file_path, base_path, out_dir_base, do_run, skip_read, only_read, with_signal, left, right, channel)
     Returns (date_iso_str, exit_code)
     """
-    (file_path, date, out_dir_base, do_run, skip_read, only_read, with_signal, left, right, channel) = task
+    (
+        file_path,
+        date,
+        out_dir_base,
+        do_run,
+        skip_read,
+        only_read,
+        with_signal,
+        left,
+        right,
+        channel,
+    ) = task
 
     # Log/read command
     if skip_read:
@@ -312,42 +395,15 @@ def main() -> int:
     if not os.path.exists(args.base_path):
         logger.error(f"Base path does not exist: {args.base_path}")
         return 1
-    
-    
-    def _make_tasks(file_path_list: list[str], date) -> list[tuple]:
-        # task tuple: (date_iso, base_path, out_dir_base, do_run, skip_read, only_read, with_signal, left, right, channel)
-        return [
-            (file_path, date, args.out_dir_base, args.run, args.skip_read, args.only_read, args.with_signal, args.left, args.right, args.channel)
-            for file_path in file_path_list
-        ]
-
-    tasks = []
-    for date in times_between(start, end):
-        date_str = date.strftime('%Y/%m/%d')
-        logger.info(f"Processing date: {date_str}")
-        tmp_start = file_start
-        tmp_end = file_end
-        if (end - date > datetime.timedelta(days=1)):
-            tmp_end = int(date.strftime("%Y%m%d") + '240000')
-        if (date - start > datetime.timedelta(days=0)):
-            tmp_start = int(date.strftime("%Y%m%d") + '000000')
-        file_path_list = get_file_list(tmp_start, tmp_end, date_str, args.base_path)
-        tasks.extend(_make_tasks(file_path_list, date_str))  
+    tasks = build_tasks(start, end, args)
     
     # Limit the number of tasks if --limit is specified
     if args.limit > 0:
         tasks = tasks[:args.limit]
         logger.info(f"Limited to {len(tasks)} tasks due to --limit flag")
     
-    # When jobs==1 do it sequentially in the main process (preserves ordering and simpler debug prints)
-    results = []
-    if args.jobs <= 1:
-        for task in tasks:
-            results.append(process_date(task))
-    else:
-        # Use multiprocessing Pool.map to run process_date in parallel
-        with multiprocessing.Pool(processes=args.jobs) as pool:
-            results = pool.map(process_date, tasks)
+    # When jobs==1 run sequentially; otherwise use multiprocessing.
+    results = execute_tasks(tasks, args.jobs)
 
     # Aggregate results
     count = len(results)

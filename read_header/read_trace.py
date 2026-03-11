@@ -218,7 +218,8 @@ def build_event_payload(
     hhmmss_time = gps_times[1]
     gps_time = gps_times[2]
     time_str = f"{hhmmss_time:0>6}"
-    datetime_str = f"{date}T{time_str}"
+    datetime_obj = datetime.strptime(f"{date}T{time_str}", '%Y%m%dT%H%M%S')
+    datetime_str = datetime_obj.strftime(DATETIME_FORMAT)
 
     return {
         "run_number": run_number,

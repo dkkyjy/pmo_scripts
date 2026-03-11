@@ -122,6 +122,31 @@ def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[
             )
             continue
 
+        if field in {"file", "index"}:
+            existing_value = merged.get(field)
+            if existing_value is None:
+                merged[field] = value
+                logger.debug("Set field='{}' from incoming payload", field)
+                continue
+
+            existing_values = (
+                existing_value if isinstance(existing_value, list) else [existing_value]
+            )
+            incoming_values = value if isinstance(value, list) else [value]
+
+            combined_values = list(existing_values)
+            for item in incoming_values:
+                if item not in combined_values:
+                    combined_values.append(item)
+
+            merged[field] = combined_values
+            logger.debug(
+                "Merged field='{}' history values: count={}",
+                field,
+                len(combined_values),
+            )
+            continue
+
         if field not in merged or merged[field] is None:
             merged[field] = value
             logger.debug("Set field='{}' from incoming payload", field)
@@ -162,7 +187,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
         file_inserted = 0
         file_merged = 0
         file_skipped = 0
-        for _, payload in content.items():
+        for event_key, payload in content.items():
             if not isinstance(payload, dict):
                 skipped_count += 1
                 file_skipped += 1
@@ -174,7 +199,6 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 file_skipped += 1
                 continue
 
-            event_key = str(event_number)
             if event_key not in grouped:
                 grouped[event_key] = payload
                 file_inserted += 1

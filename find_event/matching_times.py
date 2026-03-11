@@ -34,17 +34,13 @@ def optimized_read_matching_times(matching_file, detector_positions, min_detecto
     matching_times = {}
     matching_signals = {}
     matching_du_ids = {}
-    matching_event_numbers = {}
-    matching_index = {}
 
     with open(matching_file, 'r') as file:
         data_dict = yaml.load(file, Loader=yaml.FullLoader)
         
-        for gps_time_str, data in data_dict.items():
-            matches = data['du_ns']
-            signals = data.get('du_vs', None)
-            event_number = data['event_number']
-            index = data['index']
+        for key, data in data_dict.items():
+            matches = data['time']
+            signals = data.get('signal', None)
             try:
                 if len(matches) < min_detectors:
                     continue  # Skip events with insufficient detectors directly
@@ -72,7 +68,7 @@ def optimized_read_matching_times(matching_file, detector_positions, min_detecto
                     for i in range(len(det_ids)):
                         for j in range(i+1, len(det_ids)):
                             di, dj = det_ids[i], det_ids[j]
-                            ti, tj = times[i], times[j]
+                            ti, tj = times[i][-1], times[j][-1]
                             if di not in detector_positions or dj not in detector_positions:
                                 continue
                             pos_i, pos_j = detector_positions[di], detector_positions[dj]
@@ -91,25 +87,23 @@ def optimized_read_matching_times(matching_file, detector_positions, min_detecto
                 
                     # Otherwise, eliminate the detector with the most violations
                     worst = max(violations, key=violations.get)
-                    logger.warning(f"{gps_time_str}: Eliminating outlier detector {worst}, violations={violations[worst]}")
+                    logger.warning(f"{key}: Eliminating outlier detector {worst}, violations={violations[worst]}")
                     valid_matches.pop(worst)
                 
                 # Final result
                 logger.info(f"length of matching {len(valid_matches)}")
                 if len(valid_matches) >= min_detectors:
-                    matching_times[gps_time_str] = valid_matches
-                    matching_du_ids[gps_time_str] = list(valid_matches.keys())
+                    matching_times[key] = valid_matches
+                    matching_du_ids[key] = list(valid_matches.keys())
                     if signals is not None:
-                        matching_signals[gps_time_str] = {key:signals[key] for key in valid_matches.keys()}
+                        matching_signals[key] = {key:signals[key] for key in valid_matches.keys()}
                     else:
-                        matching_signals[gps_time_str] = None
-                    matching_event_numbers[gps_time_str] = event_number
-                    matching_index[gps_time_str] = index
+                        matching_signals[key] = None
 
             except Exception as e:
                 logger.exception(f"Error parsing: {e}")
                 continue
-    return matching_times, matching_signals, matching_du_ids, matching_event_numbers, matching_index
+    return matching_times, matching_signals, matching_du_ids
 
 def optimized_read_matching_times_with_signal(file_path, detector_positions, min_detectors=4, speed_of_light_tolerance=1.01):
     """
@@ -119,17 +113,19 @@ def optimized_read_matching_times_with_signal(file_path, detector_positions, min
     matching_times = {}
     matching_signal = {}
     matching_du_ids = {}
-    matching_event_numbers = {}
-    matching_index = {}
 
     with open(file_path, 'r') as file:
         data_dict = yaml.load(file, Loader=yaml.FullLoader)
         
-        for gps_time_str, data in data_dict.items():
-            time_matches = data['du_ns']
-            signal_matches = data['du_vs']
+        for key, data in data_dict.items():
+            time_matches = data['time']
+            signal_matches = data['signal']
             event_number = data['event_number']
             index = data['index']
+            run_number = data['run_number']
+            gps_time = data['gps_time']
+            file = data['file']
+            datetime = data['datetime']
             try:
                 # Check data consistency
                 if len(time_matches) != len(signal_matches):
@@ -169,14 +165,11 @@ def optimized_read_matching_times_with_signal(file_path, detector_positions, min
                         final_signals[det_id] = amp
                 
                 if len(final_matches) >= min_detectors:
-                    matching_times[gps_time_str] = final_matches
-                    matching_signal[gps_time_str] = final_signals
-                    matching_du_ids[gps_time_str] = list(final_matches.keys())
-                    matching_event_numbers[gps_time_str] = event_number
-                    matching_index[gps_time_str] = index
-                    
+                    matching_times[key] = final_matches
+                    matching_signal[key] = final_signals
+                    matching_du_ids[key] = list(final_matches.keys())
             except Exception as e:
                 logger.error(f"Error parsing: {str(e)}")
                 continue
 
-    return matching_times, matching_signal, matching_du_ids, matching_event_numbers, matching_index
+    return matching_times, matching_signal, matching_du_ids
