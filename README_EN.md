@@ -59,6 +59,13 @@ loop.py
 pip install -r requirements.txt
 ```
 
+- Recommended test runtime: conda `base` (Python 3.8 in current CI-like setup)
+- If using a separate environment, ensure `pytest` and `pytest-cov` are installed
+
+```bash
+conda run -n base ./scripts/run_tests.sh
+```
+
 ## Quick start
 
 ### 1) Safe trial run (print commands only)
@@ -100,6 +107,16 @@ python main.py ../Reco_Dir/2026/02/14/Trigger_xxx.yaml \
   --fig_name Trigger_xxx \
   --det-pos _gp65_rtksort.txt
 ```
+
+### Stage-specific debug
+
+```bash
+python main.py ../Reco_Dir/2026/02/14/Trigger_xxx.yaml --run-matching
+python main.py ../Reco_Dir/2026/02/14/Trigger_xxx.yaml --run-pwm
+python main.py ../Reco_Dir/2026/02/14/Trigger_xxx.yaml --run-swm --with-signal
+```
+
+If none of `--run-matching`, `--run-pwm`, or `--run-swm` is provided, `main.py` runs the full chain by default.
 
 ### Daily merge
 
@@ -153,7 +170,7 @@ export LOG_FILE=loop.log
 - `YYYY/MM/DDHHMM`
 
 > [!NOTE]
-> `main.py` has an explicit `exit()` right after SWM plotting; the background-rejection branch below is unreachable by default.
+> `main.py` now supports independent stage execution. When a later stage is selected, required earlier stages are restored from cache first and recomputed automatically if needed.
 
 > [!IMPORTANT]
 > Do not change cache suffix conventions (`*_matched.yaml`, `*_PWM.yaml`, `*_SWM.yaml`), as downstream stages depend on them.

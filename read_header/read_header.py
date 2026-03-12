@@ -17,13 +17,21 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 import uproot
-import yaml
 
 from logger_config import logger
+from read_header.common import (
+    DATETIME_FORMAT,
+    EventPayload,
+    YamlData,
+    build_time_map_and_du_ids,
+    find_teventadc_key,
+    format_event_datetime,
+    mkdir as shared_mkdir,
+    write_yaml,
+)
 
 RunNumberList = List[int]
 EventNumberList = List[int]
@@ -39,8 +47,6 @@ ReadHeaderResult = Tuple[
 ]
 EventPayload = Dict[str, Any]
 YamlData = Dict[str, EventPayload]
-
-DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     """Parse command line arguments and perform basic validation."""
@@ -62,15 +68,6 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Output directory base path (default: ../Reco_Dir)",
     )
     return parser.parse_args(argv[1:])
-
-
-def find_teventadc_key(keys: List[str], file_name: str) -> str:
-    """Find and return the key containing the teventadc tree name."""
-    for key in keys:
-        if "teventadc" in str(key):
-            return key
-    raise KeyError(f"teventadc TTree not found in file: {file_name}")
-
 
 def read_file_du_time_ns(file_name: str) -> ReadHeaderResult:
     """Read event fields from teventadc TTree and return lists."""
@@ -106,20 +103,9 @@ def build_event_payload(
     file_path: str,
 ) -> EventPayload:
     """Build one event payload in the YAML output schema."""
-    time: Dict[str, List[int]] = {}
-    list_du_id: List[str] = []
-
-    for du_id, du_ns in zip(du_ids, du_nanoseconds):
-        du_id_str = str(du_id)
-        list_du_id.append(du_id_str)
-        time.setdefault(du_id_str, []).append(int(du_ns))
-
-    date = gps_times[0]
-    hhmmss_time = gps_times[1]
+    time, list_du_id = build_time_map_and_du_ids(du_ids, du_nanoseconds)
     gps_time = gps_times[2]
-    time_str = f"{hhmmss_time:0>6}"
-    datetime_obj = datetime.strptime(f"{date}T{time_str}", '%Y%m%dT%H%M%S')
-    datetime_str = datetime_obj.strftime(DATETIME_FORMAT)
+    datetime_str = format_event_datetime(gps_times)
 
     return {
         "run_number": run_number,
@@ -181,17 +167,16 @@ def process_single_file(file_path: str, result_dict: YamlData) -> None:
 
 def mkdir(path: str) -> None:
     """Create directory if it does not exist."""
-    if not os.path.exists(path):
-        os.makedirs(path)
-    else:
+    already_exists = os.path.exists(path)
+    shared_mkdir(path)
+    if already_exists:
         logger.debug(f"Directory already exists: {path}")
 
 
 def write_output(data_dict: YamlData, out_dir: str, file_name: str) -> str:
     """Write YAML results to ``out_dir/file_name`` and return file path."""
     file_path = os.path.join(out_dir, file_name)
-    with open(file_path, "w") as file_obj:
-        yaml.dump(data_dict, file_obj)
+    write_yaml(file_path, data_dict)
     return file_path
 
 

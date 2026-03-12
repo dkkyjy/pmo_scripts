@@ -8,14 +8,14 @@ Generate and invoke:
     
 Usage examples:
     # Print commands only, do not execute
-    ./loop.py
+    ./loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59
 
     # Actually execute (be careful)
-    ./loop.py --run
+    ./loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 --run
 
 Parameters:
-    --start YYYY-MM-DD hh:mm:ss Optional, override start time (default 2024-01-01 00:00:00)
-    --end YYYY-MM-DD hh:mm:ss Optional, override end time (default 2025-12-31 23:59:59)
+    start Required positional datetime, format YYYY-MM-DDThh:mm:ss
+    end Required positional datetime, format YYYY-MM-DDThh:mm:ss
     --out-dir-base Optional, passed to subcommands as --out-dir-base (default ../Reco_Dir)
 """
 from __future__ import annotations
@@ -27,6 +27,7 @@ import multiprocessing
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Tuple
 
@@ -39,7 +40,25 @@ except Exception:
     PIL_AVAILABLE = False
 
 
-Task = Tuple[str, str, str, bool, bool, bool, bool, int, int, str]
+@dataclass(frozen=True)
+class TaskSpec:
+    """Named task model for one ROOT file processing unit."""
+
+    file_path: str
+    date: str
+    out_dir_base: str
+    do_run: bool
+    skip_read: bool
+    only_read: bool
+    with_signal: bool
+    left: int
+    right: int
+    channel: str
+    run_matching: bool
+    run_pwm: bool
+    run_swm: bool
+
+
 TaskResult = Tuple[str, int]
 
 def parse_datetime(s):
@@ -80,7 +99,11 @@ def get_file_list(file_start: int, file_end: int, date: str, base_path: str) -> 
     if not os.path.isdir(path):
         logger.warning(f"Directory does not exist: {path}")
         return []  # Return empty list instead of raising exception
-    files = [os.path.join(path, f) for f in os.listdir(path) if (".root" in f and "Trigger" in f)]
+    files = [
+        os.path.join(path, f)
+        for f in os.listdir(path)
+        if (f.endswith(".root") and "Trigger" in f)
+    ]
     files.sort()
     selected: list[str] = []
     seen_files = set()  # Prevent duplicate entries
@@ -124,20 +147,23 @@ def make_tasks_for_file_paths(
     file_path_list: list[str],
     date: str,
     args: argparse.Namespace,
-) -> list[Task]:
+) -> list[TaskSpec]:
     """Build worker task tuples for one date and file list."""
     return [
-        (
-            file_path,
-            date,
-            args.out_dir_base,
-            args.run,
-            args.skip_read,
-            args.only_read,
-            args.with_signal,
-            args.left,
-            args.right,
-            args.channel,
+        TaskSpec(
+            file_path=file_path,
+            date=date,
+            out_dir_base=args.out_dir_base,
+            do_run=args.run,
+            skip_read=args.skip_read,
+            only_read=args.only_read,
+            with_signal=args.with_signal,
+            left=args.left,
+            right=args.right,
+            channel=args.channel,
+            run_matching=args.run_matching,
+            run_pwm=args.run_pwm,
+            run_swm=args.run_swm,
         )
         for file_path in file_path_list
     ]
@@ -147,9 +173,9 @@ def build_tasks(
     start: datetime.datetime,
     end: datetime.datetime,
     args: argparse.Namespace,
-) -> list[Task]:
+) -> list[TaskSpec]:
     """Build all worker tasks for the date range."""
-    tasks: list[Task] = []
+    tasks: list[TaskSpec] = []
     for date in times_between(start, end):
         date_str = date.strftime("%Y/%m/%d")
         logger.info(f"Processing date: {date_str}")
@@ -159,7 +185,7 @@ def build_tasks(
     return tasks
 
 
-def execute_tasks(tasks: list[Task], jobs: int) -> list[TaskResult]:
+def execute_tasks(tasks: list[TaskSpec], jobs: int) -> list[TaskResult]:
     """Execute tasks sequentially or in multiprocessing mode."""
     if jobs <= 1:
         return [process_date(task) for task in tasks]
@@ -200,7 +226,16 @@ def make_readtrace_command(file_path: str, date: str, out_dir_base: str, left: i
     return cmd
 
 
-def make_main_command(file_path: str, date: str, out_dir_base: str, with_signal: bool = False, channel: str = 'X') -> list[str]:
+def make_main_command(
+    file_path: str,
+    date: str,
+    out_dir_base: str,
+    with_signal: bool = False,
+    channel: str = 'X',
+    run_matching: bool = False,
+    run_pwm: bool = False,
+    run_swm: bool = False,
+) -> list[str]:
     """Construct the command for: python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml yyyy-mm-dd --out-dir-base"""
 
     out_dir = Path(out_dir_base) / date
@@ -223,6 +258,12 @@ def make_main_command(file_path: str, date: str, out_dir_base: str, with_signal:
     ]
     if with_signal:
         cmd.append("--with-signal")
+    if run_matching:
+        cmd.append("--run-matching")
+    if run_pwm:
+        cmd.append("--run-pwm")
+    if run_swm:
+        cmd.append("--run-swm")
     return cmd
 
 
@@ -239,18 +280,28 @@ def merge_images_to_pdf(pdf_basename: str, with_signal: bool, search_dir: str | 
         logger.warning(f"Pillow not available: skipping PDF creation. Install pillow to enable this feature.")
         return False
 
-    # Filename patterns that include the date
-    if with_signal:
-        png_path = Path(f"{pdf_basename}*_with_signal.png")
-    else:
-        png_path = Path(f"{pdf_basename}*.png")
-        
+    pattern_suffix = "*_with_signal.png" if with_signal else "*.png"
+    cwd_pattern = str(Path(f"{pdf_basename}{pattern_suffix}"))
+
     pdf_path = pdf_basename + ".pdf"
-    png_files = []
-    # If a search directory is provided, look there first
+    png_files: list[str] = []
     if search_dir is not None:
-        png_files.extend(glob.glob(str(png_path)))
+        search_root = Path(search_dir)
+        base_path = Path(pdf_basename)
+        try:
+            relative_base = base_path.relative_to(search_root)
+        except ValueError:
+            relative_base = base_path
+
+        search_pattern = str(search_root / f"{relative_base}{pattern_suffix}")
+        png_files.extend(glob.glob(search_pattern))
+        if not png_files:
+            logger.info(f"No PNG images found under search_dir={search_root}, falling back to cwd pattern")
+            png_files.extend(glob.glob(cwd_pattern))
     else:
+        png_files.extend(glob.glob(cwd_pattern))
+
+    if not png_files:
         logger.warning(f"No PNG images found for {pdf_path}, skipping PDF creation")
         return False
 
@@ -283,24 +334,25 @@ def merge_images_to_pdf(pdf_basename: str, with_signal: bool, search_dir: str | 
         return False
 
 
-def process_date(task: Task) -> TaskResult:
+def process_date(task: TaskSpec) -> TaskResult:
     """Worker function for a single date.
 
-    task: (file_path, base_path, out_dir_base, do_run, skip_read, only_read, with_signal, left, right, channel)
+    task: TaskSpec(file_path, date, out_dir_base, do_run, skip_read, only_read, with_signal, left, right, channel)
     Returns (date_iso_str, exit_code)
     """
-    (
-        file_path,
-        date,
-        out_dir_base,
-        do_run,
-        skip_read,
-        only_read,
-        with_signal,
-        left,
-        right,
-        channel,
-    ) = task
+    file_path = task.file_path
+    date = task.date
+    out_dir_base = task.out_dir_base
+    do_run = task.do_run
+    skip_read = task.skip_read
+    only_read = task.only_read
+    with_signal = task.with_signal
+    left = task.left
+    right = task.right
+    channel = task.channel
+    run_matching = task.run_matching
+    run_pwm = task.run_pwm
+    run_swm = task.run_swm
 
     # Log/read command
     if skip_read:
@@ -315,10 +367,11 @@ def process_date(task: Task) -> TaskResult:
                     p = subprocess.run(readtrace_cmd, check=False)
                     if p.returncode != 0:
                         logger.error(f"Command failed for {file_path} with exit {p.returncode}")
-                        # continue to attempt main.py even if read_header failed
+                        logger.info(f"Aborting task before main.py due to read stage failure: {file_path}")
                         return (file_path, p.returncode)
                 except FileNotFoundError:
                     logger.error(f"Executable not found when running: {readtrace_cmd[0]}")
+                    logger.info(f"Aborting task before main.py due to read stage executable error: {file_path}")
                     return (file_path, 2)
         else:
             readheader_cmd = make_readheader_command(file_path, date, out_dir_base)
@@ -329,15 +382,26 @@ def process_date(task: Task) -> TaskResult:
                     p = subprocess.run(readheader_cmd, check=False)
                     if p.returncode != 0:
                         logger.error(f"Command failed for {file_path} with exit {p.returncode}")
+                        logger.info(f"Aborting task before main.py due to read stage failure: {file_path}")
                         return (file_path, p.returncode)
                 except FileNotFoundError:
                     logger.error(f"Executable not found when running: {readheader_cmd[0]}")
+                    logger.info(f"Aborting task before main.py due to read stage executable error: {file_path}")
                     return (file_path, 2)
 
     if only_read:
         logger.info(f"Skipping main.py for {file_path} (only-read)")
     else:
-        main_cmd = make_main_command(file_path, date, out_dir_base, with_signal, channel)
+        main_cmd = make_main_command(
+            file_path,
+            date,
+            out_dir_base,
+            with_signal,
+            channel,
+            run_matching,
+            run_pwm,
+            run_swm,
+        )
         logger.info(f"{' '.join(main_cmd)}")
         
         if do_run:
@@ -359,7 +423,8 @@ def process_date(task: Task) -> TaskResult:
     return (file_path, 0)
 
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build CLI argument parser for loop orchestration."""
     ap = argparse.ArgumentParser(description="Run read_header and find_events over dates")
     ap.add_argument("start", help="start time YYYY-MM-DDThh:mm:ss")
     ap.add_argument("end", help="end time YYYY-MM-DDThh:mm:ss")
@@ -379,7 +444,46 @@ def main() -> int:
     ap.add_argument("--left", type=int, default=0, help="left parameter for read_trace.py (default 0)")
     ap.add_argument("--right", type=int, default=512, help="right parameter for read_trace.py (default 512)")
     ap.add_argument("--channel", choices=['F', 'X', 'Y', 'Z', 'XY'], default='X', help="Channel suffix for matching files when --with-signal is set (default X)")
+    ap.add_argument("--run-matching", action="store_true", help="pass --run-matching through to main.py")
+    ap.add_argument("--run-pwm", action="store_true", help="pass --run-pwm through to main.py")
+    ap.add_argument("--run-swm", action="store_true", help="pass --run-swm through to main.py")
+    return ap
+
+
+def parse_cli_args() -> argparse.Namespace:
+    """Parse and validate command-line arguments."""
+    ap = build_arg_parser()
     args = ap.parse_args()
+
+    if args.jobs < 1:
+        ap.error("--jobs must be >= 1")
+
+    return args
+
+
+def apply_task_limit(tasks: list[TaskSpec], limit: int) -> list[TaskSpec]:
+    """Apply optional task list cap from CLI."""
+    if limit > 0:
+        tasks = tasks[:limit]
+        logger.info(f"Limited to {len(tasks)} tasks due to --limit flag")
+    return tasks
+
+
+def summarize_results(results: list[TaskResult], start: datetime.datetime, end: datetime.datetime) -> int:
+    """Aggregate worker results and compute final process exit code."""
+    count = len(results)
+    exit_code = 0
+    for ds, code in results:
+        if code != 0:
+            logger.error(f"Task for {ds} returned non-zero exit {code}")
+            exit_code = 2
+
+    logger.info(f"Processed {count} files from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}")
+    return exit_code
+
+
+def main() -> int:
+    args = parse_cli_args()
 
     start = parse_datetime(args.start)
     end = parse_datetime(args.end)
@@ -396,26 +500,12 @@ def main() -> int:
         logger.error(f"Base path does not exist: {args.base_path}")
         return 1
     tasks = build_tasks(start, end, args)
-    
-    # Limit the number of tasks if --limit is specified
-    if args.limit > 0:
-        tasks = tasks[:args.limit]
-        logger.info(f"Limited to {len(tasks)} tasks due to --limit flag")
+    tasks = apply_task_limit(tasks, args.limit)
     
     # When jobs==1 run sequentially; otherwise use multiprocessing.
     results = execute_tasks(tasks, args.jobs)
 
-    # Aggregate results
-    count = len(results)
-    exit_code = 0
-    for ds, code in results:
-        if code != 0:
-            logger.error(f"Task for {ds} returned non-zero exit {code}")
-            exit_code = 2
-
-    logger.info(f"Processed {count} files from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}")
-    
-    return exit_code
+    return summarize_results(results, start, end)
 
 
 if __name__ == "__main__":

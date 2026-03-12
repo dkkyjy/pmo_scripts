@@ -199,36 +199,43 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 file_skipped += 1
                 continue
 
-            if event_key not in grouped:
-                grouped[event_key] = payload
+            grouped_key = str(event_number)
+
+            if grouped_key not in grouped:
+                grouped[grouped_key] = payload
                 file_inserted += 1
-                logger.debug("Inserted new event key={} from file={}", event_key, path)
+                logger.debug(
+                    "Inserted new event_number={} (source key={}) from file={}",
+                    grouped_key,
+                    event_key,
+                    path,
+                )
             else:
-                original_payload = grouped[event_key]
+                original_payload = grouped[grouped_key]
                 logger.debug(
                     "Merging duplicate event_number={} from file={}",
-                    event_key,
+                    grouped_key,
                     path,
                 )
                 logger.debug(
                     "Original record before merge for event_number={}:\n{}",
-                    event_key,
+                    grouped_key,
                     payload_to_log_text(original_payload),
                 )
                 logger.debug(
                     "Incoming record for event_number={}:\n{}",
-                    event_key,
+                    grouped_key,
                     payload_to_log_text(payload),
                 )
 
                 merged_payload = merge_event_payload(original_payload, payload)
-                grouped[event_key] = merged_payload
+                grouped[grouped_key] = merged_payload
                 merged_count += 1
                 file_merged += 1
-                merged_event_keys.add(event_key)
+                merged_event_keys.add(grouped_key)
                 logger.debug(
                     "Merged result for event_number={}:\n{}",
-                    event_key,
+                    grouped_key,
                     payload_to_log_text(merged_payload),
                 )
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -162,6 +163,70 @@ def parse_payload_datetime(payload: Dict[str, Any]) -> Optional[datetime]:
 def parse_cli_datetime(value: str) -> datetime:
     """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
     return scommon.parse_cli_datetime(value)
+
+
+def normalize_cli_datetime_text(value: Optional[datetime]) -> str:
+    """Normalize optional CLI datetime to deterministic text."""
+    return scommon.normalize_cli_datetime_text(value)
+
+
+def cache_file_state(path: Path) -> Dict[str, Any]:
+    """Build lightweight file signature for cache validation."""
+    return scommon.cache_file_state(path)
+
+
+def event_cache_meta_path(event_csv_path: Path) -> Path:
+    """Return sidecar meta path for one event CSV cache."""
+    return event_csv_path.with_name(f"{event_csv_path.stem}.meta.json")
+
+
+def build_event_cache_meta(
+    yaml_path: Path,
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> Dict[str, Any]:
+    """Build cache metadata signature from runtime inputs."""
+    return {
+        "schema_version": 1,
+        "yaml": cache_file_state(yaml_path),
+        "start_datetime": normalize_cli_datetime_text(start_dt),
+        "end_datetime": normalize_cli_datetime_text(end_dt),
+    }
+
+
+def write_event_cache_meta(path: Path, meta: Dict[str, Any]) -> None:
+    """Write event CSV cache metadata file."""
+    with path.open("w", encoding="utf-8") as file_obj:
+        json.dump(meta, file_obj, ensure_ascii=True, sort_keys=True)
+
+
+def read_event_cache_meta(path: Path) -> Dict[str, Any]:
+    """Read event CSV cache metadata file."""
+    with path.open("r", encoding="utf-8") as file_obj:
+        loaded = json.load(file_obj)
+    if not isinstance(loaded, dict):
+        raise ValueError("Event CSV cache meta must be a JSON object")
+    return loaded
+
+
+def event_cache_meta_is_valid(
+    cached_meta: Dict[str, Any],
+    expected_meta: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Check whether cached meta matches expected runtime signature."""
+    if int(cached_meta.get("schema_version", -1)) != int(
+        expected_meta.get("schema_version", -2)
+    ):
+        return False, "schema_version mismatch"
+
+    if cached_meta.get("yaml") != expected_meta.get("yaml"):
+        return False, "yaml signature mismatch"
+
+    for key in ("start_datetime", "end_datetime"):
+        if str(cached_meta.get(key, "")) != str(expected_meta.get(key, "")):
+            return False, f"{key} mismatch"
+
+    return True, ""
 
 
 def in_datetime_range(
@@ -1219,10 +1284,9 @@ def main() -> int:
     logger.info(f"Start stats workflow for YAML: {yaml_path}")
     output_paths = build_output_paths(yaml_path)
     event_out = output_paths["event_csv"]
+    event_meta_out = event_cache_meta_path(event_out)
 
     use_csv_cache = event_out.exists() and not args.force_recompute
-    if start_datetime is not None or end_datetime is not None:
-        use_csv_cache = False
 
     records: List[NamedDefaultRow] = []
     rates: List[NamedDefaultRow] = []
@@ -1234,13 +1298,60 @@ def main() -> int:
     total_du_rows: List[NamedDefaultRow] = []
     data_for_aggregates: Dict[str, Dict[str, Any]] = {}
     event_du_ids_map: Dict[str, List[str]] = {}
+    expected_event_meta = build_event_cache_meta(
+        yaml_path,
+        start_datetime,
+        end_datetime,
+    )
 
     if use_csv_cache:
         logger.info("Found event CSV cache, load directly without YAML recompute")
-        records = read_event_csv(event_out)
-        event_du_ids_map = read_event_csv_du_ids(event_out)
-        data_for_aggregates = build_data_from_cached_events(records, event_du_ids_map)
-    else:
+        cached_records: Optional[List[NamedDefaultRow]] = None
+        cached_event_du_ids_map: Dict[str, List[str]] = {}
+
+        if not event_meta_out.exists():
+            logger.warning(
+                "Event CSV cache meta missing for {}, fallback to recompute",
+                event_out,
+            )
+        else:
+            try:
+                cached_meta = read_event_cache_meta(event_meta_out)
+                is_valid, reason = event_cache_meta_is_valid(
+                    cached_meta,
+                    expected_event_meta,
+                )
+                if not is_valid:
+                    logger.warning(
+                        "Event CSV cache meta mismatch for {}: {}, "
+                        "fallback to recompute",
+                        event_out,
+                        reason,
+                    )
+                else:
+                    cached_records = read_event_csv(event_out)
+                    cached_event_du_ids_map = read_event_csv_du_ids(event_out)
+            except (ValueError, json.JSONDecodeError, OSError) as exc:
+                logger.warning(
+                    "Invalid event CSV cache or meta: {} / {} ({}). "
+                    "Fallback to recompute",
+                    event_out,
+                    event_meta_out,
+                    exc,
+                )
+
+        if cached_records is None:
+            use_csv_cache = False
+            logger.info("Skip invalid event CSV cache and continue recompute path")
+        else:
+            records = cached_records
+            event_du_ids_map = cached_event_du_ids_map
+            data_for_aggregates = build_data_from_cached_events(
+                records,
+                event_du_ids_map,
+            )
+
+    if not use_csv_cache:
         if args.force_recompute and event_out.exists():
             logger.info("Force recompute enabled, ignore existing event CSV cache")
 
@@ -1307,6 +1418,7 @@ def main() -> int:
 
     if not use_csv_cache:
         write_event_csv(event_out, records, event_du_ids_map)
+        write_event_cache_meta(event_meta_out, expected_event_meta)
 
     if not args.no_plot:
         logger.info("Plotting is enabled; generating figures")

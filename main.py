@@ -10,6 +10,7 @@ This module is responsible for:
 # Standard libraries
 import os
 import sys
+import json
 import yaml
 import argparse
 import numpy as np
@@ -20,7 +21,6 @@ from find_event.io import load_data_from_file
 from find_event import plotting as fe_plot
 from find_event import estimation as fe_est
 from find_event import matching_times as fe_mt
-from find_event import background_rejection as fe_br
 
 
 def _load_event_metadata_map(matching_file):
@@ -84,13 +84,581 @@ def parse_args(argv):
         action="store_true",
         help="Ignore existing _matched/_PWM/_SWM cache files and recompute.",
     )
+    parser.add_argument(
+        "--run-matching",
+        dest="run_matching",
+        action="store_true",
+        help="Run the matching stage explicitly.",
+    )
+    parser.add_argument(
+        "--run-pwm",
+        dest="run_pwm",
+        action="store_true",
+        help="Run the PWM stage explicitly.",
+    )
+    parser.add_argument(
+        "--run-swm",
+        dest="run_swm",
+        action="store_true",
+        help="Run the SWM stage explicitly.",
+    )
     return parser.parse_args(argv[1:])
+
+
+def _resolve_selected_stages(run_matching, run_pwm, run_swm):
+    """Resolve stage selection from three CLI flags."""
+    if not any([run_matching, run_pwm, run_swm]):
+        return {
+            "matching": True,
+            "pwm": True,
+            "swm": True,
+        }
+    return {
+        "matching": run_matching,
+        "pwm": run_pwm,
+        "swm": run_swm,
+    }
+
+
+def _new_stage_state():
+    """Create an empty mutable state container shared across stages."""
+    return {
+        "times": {},
+        "signals": {},
+        "du_ids": {},
+        "run_numbers": {},
+        "event_numbers": {},
+        "files": {},
+        "index": {},
+        "datetimes": {},
+        "gps_times": {},
+        "azimuths": {},
+        "zeniths": {},
+        "directions": {},
+        "chi_squares": {},
+    }
+
+
+def _read_yaml_dict(file_path):
+    """Load YAML mapping from disk, returning empty dict for null payloads."""
+    with open(file_path, "r") as file_obj:
+        return yaml.load(file_obj, Loader=yaml.FullLoader) or {}
+
+
+def _write_yaml_dict(file_path, payload):
+    """Write mapping payload to YAML file."""
+    with open(file_path, "w") as file_obj:
+        yaml.dump(payload, file_obj)
+
+
+def _meta_file_for(cache_file):
+    """Return the sidecar meta file path for a cache file."""
+    return f"{cache_file}.meta.json"
+
+
+def _build_file_signature(file_path):
+    """Build a basic file signature used for cache validation."""
+    absolute_path = os.path.abspath(file_path)
+    exists = os.path.exists(absolute_path)
+    if not exists:
+        return {
+            "path": absolute_path,
+            "exists": False,
+        }
+    file_stat = os.stat(absolute_path)
+    return {
+        "path": absolute_path,
+        "exists": True,
+        "size": file_stat.st_size,
+        "mtime_ns": file_stat.st_mtime_ns,
+    }
+
+
+def _build_stage_cache_meta(stage, inputs):
+    """Build cache metadata payload for one stage."""
+    return {
+        "schema_version": 1,
+        "stage": stage,
+        "inputs": inputs,
+    }
+
+
+def _read_cache_meta(meta_file):
+    """Read cache metadata from disk with resilient parsing."""
+    if not os.path.exists(meta_file):
+        return None
+    try:
+        with open(meta_file, "r") as file_obj:
+            payload = json.load(file_obj)
+        if not isinstance(payload, dict):
+            logger.warning(f"Invalid cache meta payload type in {meta_file}, expected object.")
+            return None
+        return payload
+    except Exception as exc:
+        logger.warning(f"Failed to read cache meta file {meta_file}: {exc}")
+        return None
+
+
+def _write_cache_meta(meta_file, payload):
+    """Write cache metadata sidecar file."""
+    with open(meta_file, "w") as file_obj:
+        json.dump(payload, file_obj, indent=2, sort_keys=True)
+
+
+def _cache_meta_is_valid(meta_file, expected_meta):
+    """Check whether cache metadata matches the expected signature."""
+    cached_meta = _read_cache_meta(meta_file)
+    if cached_meta is None:
+        return False, "missing-or-unreadable"
+    if cached_meta != expected_meta:
+        return False, "signature-mismatch"
+    return True, "ok"
+
+
+def _required_fields_for_stage(stage, with_signal):
+    """Return required cache fields for one stage payload row."""
+    base_fields = {
+        "run_number",
+        "event_number",
+        "gps_time",
+        "datetime",
+        "du_id",
+        "file",
+        "index",
+        "time",
+    }
+    if stage == "matching":
+        required = set(base_fields)
+    elif stage in ("pwm", "swm"):
+        required = base_fields | {
+            "chi_square",
+            "zenith",
+            "azimuth",
+            "x",
+            "y",
+            "z",
+        }
+    else:
+        raise ValueError(f"Unsupported stage for cache validation: {stage}")
+
+    if with_signal:
+        required.add("signal")
+    return required
+
+
+def _validate_stage_cache_payload(stage, payload, with_signal):
+    """Validate stage cache payload shape and required fields."""
+    if not isinstance(payload, dict):
+        return False, "top-level payload is not a dict"
+
+    required_fields = _required_fields_for_stage(stage, with_signal)
+    for event_key, row in payload.items():
+        if not isinstance(row, dict):
+            return False, f"row is not a dict for event {event_key}"
+        missing = sorted(required_fields - set(row.keys()))
+        if missing:
+            return False, f"missing fields {missing} for event {event_key}"
+
+    return True, "ok"
+
+
+def _plot_pwm_if_needed(state, fig_prefix):
+    """Plot PWM outputs while isolating plotting failures from cache generation."""
+    if len(state["times"]) < 2:
+        logger.warning("No events after filtering, skipping PWM plotting.")
+        return
+    try:
+        fe_plot.plot_reconstructed_positions_PWM(
+            state["gps_times"],
+            state["directions"],
+            state["chi_squares"],
+            fig_prefix + "_PWM",
+        )
+        fe_plot.plot_fitting_parameters_PWM(
+            state["gps_times"],
+            state["directions"],
+            state["chi_squares"],
+            "PWM",
+            fig_prefix + "_PWM",
+        )
+    except Exception as exc:
+        logger.warning(f"PWM plotting failed after cache generation: {exc}")
+
+
+def _plot_swm_if_needed(state, fig_prefix):
+    """Plot SWM outputs while isolating plotting failures from cache generation."""
+    if len(state["times"]) < 2:
+        logger.warning("No events after filtering, skipping SWM plotting.")
+        return
+    try:
+        fe_plot.plot_reconstructed_positions_SWM(
+            state["gps_times"],
+            state["directions"],
+            state["chi_squares"],
+            fig_prefix + "_SWM",
+        )
+        fe_plot.plot_fitting_parameters_SWM(
+            state["gps_times"],
+            state["directions"],
+            state["chi_squares"],
+            "SWM",
+            fig_prefix + "_SWM",
+        )
+    except Exception as exc:
+        logger.warning(f"SWM plotting failed after cache generation: {exc}")
+
+
+def run_matching_stage(
+    matching_file,
+    metadata,
+    detector_positions,
+    det_pos_file,
+    with_signal,
+    force_recompute,
+    state,
+):
+    """Ensure matching-stage data is available in memory and cache."""
+    if state["times"]:
+        return state, False
+
+    matched_file = matching_file.replace(".yaml", "_matched.yaml")
+    matched_meta_file = _meta_file_for(matched_file)
+    matching_computed = False
+    expected_meta = _build_stage_cache_meta(
+        "matching",
+        {
+            "matching_file": _build_file_signature(matching_file),
+            "det_pos_file": _build_file_signature(det_pos_file),
+            "with_signal": bool(with_signal),
+        },
+    )
+
+    use_cache = os.path.exists(matched_file) and not force_recompute
+    if use_cache:
+        is_valid, reason = _cache_meta_is_valid(matched_meta_file, expected_meta)
+        if not is_valid:
+            logger.info(
+                f"Ignoring matched cache due to {reason}: {matched_file}"
+            )
+            use_cache = False
+
+    if use_cache:
+        logger.info(f"Found cached matched file: {matched_file}, loading directly.")
+        try:
+            results = _read_yaml_dict(matched_file)
+            is_payload_valid, reason = _validate_stage_cache_payload(
+                "matching", results, with_signal
+            )
+        except Exception as exc:
+            is_payload_valid = False
+            reason = f"unreadable-cache: {exc}"
+
+        if is_payload_valid:
+            for key, result in results.items():
+                state["times"][key] = result["time"]
+                state["signals"][key] = result.get("signal", None) if with_signal else None
+                state["du_ids"][key] = result.get("du_id", None)
+                state["event_numbers"][key] = result.get("event_number", None)
+                state["index"][key] = result.get("index", None)
+                state["run_numbers"][key] = result.get("run_number", None)
+                state["datetimes"][key] = result.get("datetime", None)
+                state["files"][key] = result.get("file", None)
+                state["gps_times"][key] = result.get("gps_time", None)
+        else:
+            logger.warning(
+                f"Invalid matching cache payload in {matched_file}: {reason}; falling back to recompute."
+            )
+            use_cache = False
+
+    if not use_cache:
+        if force_recompute and os.path.exists(matched_file):
+            logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
+        times, signals, du_ids = fe_mt.optimized_read_matching_times(
+            matching_file,
+            detector_positions,
+            min_detectors=5,
+            speed_of_light_tolerance=1.05,
+        )
+
+        if len(times) < 1:
+            logger.warning("No events after filtering, skipping subsequent stages.")
+            return state, True
+
+        results = {}
+        for key in times.keys():
+            meta = metadata[key] if key in metadata else {}
+            signal = signals[key] if signals is not None else None
+            results[key] = {
+                "run_number": meta.get("run_number", None),
+                "event_number": meta.get("event_number", None),
+                "gps_time": meta.get("gps_time", None),
+                "datetime": meta.get("datetime", None),
+                "du_id": du_ids[key],
+                "file": meta.get("file", None),
+                "index": meta.get("index", None),
+                "time": times[key],
+            }
+            if with_signal:
+                results[key]["signal"] = signal
+
+        _write_yaml_dict(matched_file, results)
+        _write_cache_meta(matched_meta_file, expected_meta)
+        matching_computed = True
+
+        for key, result in results.items():
+            state["times"][key] = result["time"]
+            state["signals"][key] = result.get("signal", None) if with_signal else None
+            state["du_ids"][key] = result.get("du_id", None)
+            state["event_numbers"][key] = result.get("event_number", None)
+            state["index"][key] = result.get("index", None)
+            state["run_numbers"][key] = result.get("run_number", None)
+            state["datetimes"][key] = result.get("datetime", None)
+            state["files"][key] = result.get("file", None)
+            state["gps_times"][key] = result.get("gps_time", None)
+
+    logger.info(f"Number of events after reading and filtering: {len(state['times'])}")
+    logger.info(f"{matched_file} has been written with matched results.")
+    return state, matching_computed
+
+
+def run_pwm_stage(
+    matching_file,
+    detector_positions,
+    det_pos_file,
+    with_signal,
+    force_recompute,
+    state,
+    fig_prefix,
+    matching_computed,
+):
+    """Ensure PWM-stage data is available in memory and cache."""
+    pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
+    pwm_meta_file = _meta_file_for(pwm_fitted_file)
+    matched_file = matching_file.replace(".yaml", "_matched.yaml")
+    pwm_computed = False
+    expected_meta = _build_stage_cache_meta(
+        "pwm",
+        {
+            "matched_file": _build_file_signature(matched_file),
+            "det_pos_file": _build_file_signature(det_pos_file),
+            "with_signal": bool(with_signal),
+        },
+    )
+
+    use_cache = os.path.exists(pwm_fitted_file) and not force_recompute and not matching_computed
+    if use_cache:
+        is_valid, reason = _cache_meta_is_valid(pwm_meta_file, expected_meta)
+        if not is_valid:
+            logger.info(
+                f"Ignoring PWM cache due to {reason}: {pwm_fitted_file}"
+            )
+            use_cache = False
+
+    if use_cache:
+        logger.info(f"Found cached PWM fitted file: {pwm_fitted_file}, loading directly.")
+        try:
+            results = _read_yaml_dict(pwm_fitted_file)
+            is_payload_valid, reason = _validate_stage_cache_payload(
+                "pwm", results, with_signal
+            )
+        except Exception as exc:
+            is_payload_valid = False
+            reason = f"unreadable-cache: {exc}"
+
+        if is_payload_valid:
+            for key, result in results.items():
+                state["times"][key] = result["time"]
+                state["signals"][key] = result.get("signal", None) if with_signal else None
+                state["du_ids"][key] = result.get("du_id", None)
+                state["gps_times"][key] = result.get("gps_time", None)
+                state["event_numbers"][key] = result.get("event_number", None)
+                state["index"][key] = result.get("index", None)
+                state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
+                state["datetimes"][key] = result.get("datetime", state["datetimes"].get(key, None))
+                state["files"][key] = result.get("file", state["files"].get(key, matching_file))
+                state["azimuths"][key] = result.get("azimuth", None)
+                state["zeniths"][key] = result.get("zenith", None)
+                state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
+                state["chi_squares"][key] = result.get("chi_square", None)
+        else:
+            logger.warning(
+                f"Invalid PWM cache payload in {pwm_fitted_file}: {reason}; falling back to recompute."
+            )
+            use_cache = False
+
+    if not use_cache:
+        if force_recompute and os.path.exists(pwm_fitted_file):
+            logger.info(f"Force recompute enabled, ignoring cache: {pwm_fitted_file}")
+        gps_times, directions, zeniths, azimuths, chi_squares = fe_est.plane_wave_model(
+            state["times"],
+            state["signals"],
+            detector_positions,
+        )
+
+        results = {}
+        for key in state["times"].keys():
+            direction = directions[key]
+            results[key] = {
+                "run_number": state["run_numbers"].get(key, None),
+                "event_number": state["event_numbers"].get(key, None),
+                "gps_time": gps_times[key],
+                "datetime": state["datetimes"].get(key, None),
+                "du_id": state["du_ids"][key],
+                "file": state["files"].get(key, None),
+                "index": state["index"].get(key, None),
+                "time": state["times"][key],
+                "chi_square": chi_squares[key],
+                "zenith": zeniths[key],
+                "azimuth": azimuths[key],
+                "x": float(direction[0]),
+                "y": float(direction[1]),
+                "z": float(direction[2]),
+            }
+            if with_signal:
+                results[key]["signal"] = state["signals"][key]
+
+        _write_yaml_dict(pwm_fitted_file, results)
+        _write_cache_meta(pwm_meta_file, expected_meta)
+        pwm_computed = True
+
+        for key, result in results.items():
+            state["gps_times"][key] = result.get("gps_time", None)
+            state["azimuths"][key] = result.get("azimuth", None)
+            state["zeniths"][key] = result.get("zenith", None)
+            state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
+            state["chi_squares"][key] = result.get("chi_square", None)
+
+    logger.info(f"Number of events after plane wave fitting: {len(state['times'])}")
+    _plot_pwm_if_needed(state, fig_prefix)
+    return state, pwm_computed
+
+
+def run_swm_stage(
+    matching_file,
+    detector_positions,
+    det_pos_file,
+    with_signal,
+    force_recompute,
+    state,
+    fig_prefix,
+    pwm_computed,
+):
+    """Ensure SWM-stage data is available in memory and cache."""
+    swm_fitted_file = matching_file.replace(".yaml", "_SWM.yaml")
+    swm_meta_file = _meta_file_for(swm_fitted_file)
+    pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
+    expected_meta = _build_stage_cache_meta(
+        "swm",
+        {
+            "pwm_file": _build_file_signature(pwm_fitted_file),
+            "det_pos_file": _build_file_signature(det_pos_file),
+            "with_signal": bool(with_signal),
+        },
+    )
+
+    use_cache = os.path.exists(swm_fitted_file) and not force_recompute and not pwm_computed
+    if use_cache:
+        is_valid, reason = _cache_meta_is_valid(swm_meta_file, expected_meta)
+        if not is_valid:
+            logger.info(
+                f"Ignoring SWM cache due to {reason}: {swm_fitted_file}"
+            )
+            use_cache = False
+
+    if use_cache:
+        logger.info(f"Found cached SWM fitted file: {swm_fitted_file}, loading directly.")
+        try:
+            results = _read_yaml_dict(swm_fitted_file)
+            is_payload_valid, reason = _validate_stage_cache_payload(
+                "swm", results, with_signal
+            )
+        except Exception as exc:
+            is_payload_valid = False
+            reason = f"unreadable-cache: {exc}"
+
+        if is_payload_valid:
+            for key, result in results.items():
+                state["times"][key] = result["time"]
+                state["signals"][key] = result.get("signal", None) if with_signal else None
+                state["gps_times"][key] = result.get("gps_time", None)
+                state["chi_squares"][key] = result.get("chi_square", None)
+                state["du_ids"][key] = result.get("du_id", None)
+                state["event_numbers"][key] = result.get("event_number", None)
+                state["index"][key] = result.get("index", None)
+                state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
+                state["datetimes"][key] = result.get("datetime", state["datetimes"].get(key, None))
+                state["files"][key] = result.get("file", state["files"].get(key, matching_file))
+                state["azimuths"][key] = result.get("azimuth", None)
+                state["zeniths"][key] = result.get("zenith", None)
+                state["directions"][key] = np.array([
+                    result.get("x", None),
+                    result.get("y", None),
+                    result.get("z", None),
+                ])
+        else:
+            logger.warning(
+                f"Invalid SWM cache payload in {swm_fitted_file}: {reason}; falling back to recompute."
+            )
+            use_cache = False
+
+    if not use_cache:
+        if force_recompute and os.path.exists(swm_fitted_file):
+            logger.info(f"Force recompute enabled, ignoring cache: {swm_fitted_file}")
+        gps_times, directions, chi_squares = fe_est.spherical_wave_model(
+            state["times"],
+            state["signals"],
+            detector_positions,
+            state["directions"],
+        )
+
+        results = {}
+        for key in state["times"].keys():
+            direction = directions[key]
+            results[key] = {
+                "run_number": state["run_numbers"].get(key, None),
+                "event_number": state["event_numbers"].get(key, None),
+                "gps_time": gps_times[key],
+                "datetime": state["datetimes"].get(key, None),
+                "du_id": state["du_ids"][key],
+                "file": state["files"].get(key, None),
+                "index": state["index"].get(key, None),
+                "time": state["times"][key],
+                "azimuth": float(state["azimuths"][key]),
+                "zenith": float(state["zeniths"][key]),
+                "x": float(direction[0]),
+                "y": float(direction[1]),
+                "z": float(direction[2]),
+                "chi_square": float(chi_squares[key]),
+            }
+            if with_signal:
+                results[key]["signal"] = state["signals"][key]
+
+        _write_yaml_dict(swm_fitted_file, results)
+        _write_cache_meta(swm_meta_file, expected_meta)
+
+        for key, result in results.items():
+            state["gps_times"][key] = result.get("gps_time", None)
+            state["chi_squares"][key] = result.get("chi_square", None)
+            state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
+
+    logger.info(f"Number of events after spherical wave fitting: {len(state['times'])}")
+    _plot_swm_if_needed(state, fig_prefix)
+    return state
 
 
 # =========================
 # Main entry point (main)
 # =========================
-def main(matching_file, fig_name, with_signal, det_pos_file, force_recompute=False):
+def main(
+    matching_file,
+    fig_name,
+    with_signal,
+    det_pos_file,
+    force_recompute=False,
+    run_matching=False,
+    run_pwm=False,
+    run_swm=False,
+):
     """
     Main workflow:
       1. Load detector coordinates (from det_pos_file or script default path)
@@ -102,10 +670,14 @@ def main(matching_file, fig_name, with_signal, det_pos_file, force_recompute=Fal
     logger.info(f"Start processing: {matching_file}")
 
     if not os.path.exists(det_pos_file):
-        logger.warning(
-            f"Detector position file {det_pos_file} does not exist, attempting to continue (may cause subsequent function errors)"
-        )
-    detector_positions = load_data_from_file(det_pos_file)
+        logger.error(f"Detector position file does not exist: {det_pos_file}")
+        return 2
+
+    try:
+        detector_positions = load_data_from_file(det_pos_file)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error(f"Failed to load detector position file {det_pos_file}: {exc}")
+        return 2
     metadata = _load_event_metadata_map(matching_file)
 
     # Ensure plots are written into the same directory as the input matching file
@@ -114,326 +686,50 @@ def main(matching_file, fig_name, with_signal, det_pos_file, force_recompute=Fal
     if fig_name is None:
         fig_name = os.path.basename(matching_file).replace(".yaml", "")
     fig_prefix = os.path.join(output_dir, fig_name)
+    selected_stages = _resolve_selected_stages(run_matching, run_pwm, run_swm)
+    state = _new_stage_state()
+    matching_computed = False
+    pwm_computed = False
 
-    # Read and process matching_times (using more robust optimized reading function)
-    matched_file = matching_file.replace(".yaml", "_matched.yaml")
-    if os.path.exists(matched_file) and not force_recompute:
-        logger.info(f"Found cached matched file: {matched_file}, loading directly.")
-        times = {}
-        signals = {}
-        du_ids = {}
-        run_numbers = {}
-        event_numbers = {}
-        files = {}
-        index = {}
-        datetimes = {}
-        gps_times = {}
-        with open(matched_file, "r") as f:
-            results = yaml.load(f, Loader=yaml.FullLoader)
-        for key, result in results.items():
-            meta = metadata[key] if key in metadata else {}
-            times[key] = result["time"]
-            signals[key] = result.get("signal", None) if with_signal else None
-            du_ids[key] = result.get("du_id", None)
-            event_numbers[key] = result.get("event_number", None)
-            index[key] = result.get("index", None)
-            run_numbers[key] = result.get("run_number", None)
-            datetimes[key] = result.get("datetime", None)
-            files[key] = result.get("file", None)
-    else:
-        if force_recompute and os.path.exists(matched_file):
-            logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
-        (
-            times,
-            signals,
-            du_ids,
-        ) = fe_mt.optimized_read_matching_times(
+    if selected_stages["matching"] or selected_stages["pwm"] or selected_stages["swm"]:
+        state, matching_computed = run_matching_stage(
+            matching_file,
+            metadata,
+            detector_positions,
+            det_pos_file,
+            with_signal,
+            force_recompute,
+            state,
+        )
+
+    if not state["times"]:
+        return 0
+
+    if selected_stages["pwm"] or selected_stages["swm"]:
+        state, pwm_computed = run_pwm_stage(
             matching_file,
             detector_positions,
-            min_detectors=5,
-            speed_of_light_tolerance=1.05,
+            det_pos_file,
+            with_signal,
+            force_recompute,
+            state,
+            fig_prefix,
+            matching_computed,
         )
 
-        if len(times) < 1:
-            logger.warning("No events after filtering, exiting.")
-            return
-        
-        results = {}
-        for key in times.keys():
-            meta = metadata[key] if key in metadata else {}
-            time = times[key]
-            signal = signals[key] if signals is not None else None
-            du_id = du_ids[key]
-            event_number = meta.get("event_number", None)
-            index_value = meta.get("index", None)
-            gps_time = meta.get("gps_time", None)
-            run_number = meta.get("run_number", None)
-            event_datetime = meta.get("datetime", None)
-            source_file = meta.get("file", None)
-
-            results[key] = {
-                "run_number": run_number,
-                "event_number": event_number,
-                "gps_time": gps_time,
-                "datetime": event_datetime,
-                "du_id": du_id,
-                "file": source_file,
-                "index": index_value,
-                "time": time,
-            }
-            if with_signal:
-                results[key]["signal"] = signal
-        with open(matched_file, "w") as f:
-            yaml.dump(results, f)
-    logger.info(f"Number of events after reading and filtering: {len(times)}")
-    logger.info(f"{matched_file} has been written with matched results.")
-    exit()
-
-    # fe_plot.plot_du_frequencies(
-    #     du_ids,
-    #     fig_prefix,
-    # )
-    
-    
-    # Plane wave model fitting
-    pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
-    if os.path.exists(pwm_fitted_file) and not force_recompute:
-        logger.info(f"Found cached PWM fitted file: {pwm_fitted_file}, loading directly.")
-        times = {}
-        signals = {}
-        du_ids = {}
-        gps_times = {}
-        event_numbers = {}
-        index = {}
-        azimuths = {}
-        zeniths = {}
-        directions = {}
-        chi_squares = {}
-        with open(pwm_fitted_file, "r") as f:
-            results = yaml.load(f, Loader=yaml.FullLoader)
-        for key, result in results.items():
-            times[key] = result["time"]
-            signals[key] = result.get("signal", None) if with_signal else None
-            du_ids[key] = result.get("du_id", None)
-            gps_times[key] = result.get("gps_time", None)
-            event_numbers[key] = result.get("event_number", None)
-            index[key] = result.get("index", None)
-            run_numbers[key] = result.get("run_number", run_numbers.get(key, None))
-            datetimes[key] = result.get("datetime", datetimes.get(key, None))
-            files[key] = result.get("file", files.get(key, matching_file))
-            azimuths[key] = result.get("azimuth", None)
-            zeniths[key] = result.get("zenith", None)
-            directions[key] = np.array([result['x'], result['y'], result['z']])
-            chi_squares[key] = result.get("chi_square", None)
-    else:
-        if force_recompute and os.path.exists(pwm_fitted_file):
-            logger.info(f"Force recompute enabled, ignoring cache: {pwm_fitted_file}")
-        (   gps_times,
-            directions,
-            zeniths,
-            azimuths,
-            chi_squares,
-        ) = fe_est.plane_wave_model(times, signals, detector_positions)
-
-        results = {}
-        for key in times.keys():
-            chi_square = chi_squares[key]
-            zenith = zeniths[key]
-            azimuth = azimuths[key]
-            time = times[key]
-            signal = signals[key] if signals is not None else None
-            du_id = du_ids[key]
-            gps_time = gps_times[key]
-            event_number = event_numbers[key]
-            index_value = index[key]
-            run_number = run_numbers.get(key, None)
-            event_datetime = datetimes.get(key, None)
-            source_file = files.get(key, None)
-            x = directions[key][0]
-            y = directions[key][1]
-            z = directions[key][2]
-            results[key] = {
-                "run_number": run_number,
-                "event_number": event_number,
-                "gps_time": gps_time,
-                "datetime": event_datetime,
-                "du_id": du_id,
-                "file": source_file,
-                "index": index_value,
-                "time": time,
-                "chi_square": chi_square,
-                "zenith": zenith,
-                "azimuth": azimuth,
-                "x": float(x),
-                "y": float(y),
-                "z": float(z),
-            }
-            if with_signal:
-                results[key]["signal"] = signal
-        with open(pwm_fitted_file, "w") as f:
-            yaml.dump(results, f)
-    
-    logger.info(f"Number of events after plane wave fitting: {len(times)}")
-    
-    if len(times) < 2:
-        logger.warning("No events after filtering, skipping plotting.")
-    else:
-        fe_plot.plot_reconstructed_positions_PWM(
-            gps_times, directions, chi_squares, fig_prefix + "_PWM"
-        )
-        fe_plot.plot_fitting_parameters_PWM(
-            gps_times,
-            directions,
-            chi_squares,
-            "PWM",
-            fig_prefix + "_PWM",
-        )
-    
-    # Spherical wave model fitting
-    swm_fitted_file = matching_file.replace(".yaml", "_SWM.yaml")
-    if os.path.exists(swm_fitted_file) and not force_recompute:
-        logger.info(f"Found cached SWM fitted file: {swm_fitted_file}, loading directly.")
-        times = {}
-        signals = {}
-        du_ids = {}
-        gps_times = {}
-        directions = {}
-        chi_squares = {}
-        event_numbers = {}
-        index = {}
-        azimuths = {}
-        zeniths = {}
-        with open(swm_fitted_file, "r") as f:
-            results = yaml.load(f, Loader=yaml.FullLoader)
-        for key, result in results.items():
-            times[key] = result["time"]
-            signals[key] = result.get("signal", None) if with_signal else None
-            gps_times[key] = result.get("gps_time", None)
-            chi_squares[key] = result.get("chi_square", None)
-            du_ids[key] = result.get("du_id", None)
-            event_numbers[key] = result.get("event_number", None)
-            index[key] = result.get("index", None)
-            run_numbers[key] = result.get("run_number", run_numbers.get(key, None))
-            datetimes[key] = result.get("datetime", datetimes.get(key, None))
-            files[key] = result.get("file", files.get(key, matching_file))
-            azimuths[key] = result.get("azimuth", None)
-            zeniths[key] = result.get("zenith", None)
-            directions[key] = np.array(
-                [result.get("x", None), result.get("y", None), result.get("z", None)]
-            )
-    else:
-        if force_recompute and os.path.exists(swm_fitted_file):
-            logger.info(f"Force recompute enabled, ignoring cache: {swm_fitted_file}")
-        (gps_times, directions, chi_squares) = fe_est.spherical_wave_model(
-            times, signals, detector_positions, directions
+    if selected_stages["swm"]:
+        run_swm_stage(
+            matching_file,
+            detector_positions,
+            det_pos_file,
+            with_signal,
+            force_recompute,
+            state,
+            fig_prefix,
+            pwm_computed,
         )
 
-        results = {}
-        for key in times.keys():
-            gps_time = gps_times[key]
-            chi_square = chi_squares[key]
-            time = times[key]
-            signal = signals[key] if signals is not None else None
-            du_id = du_ids[key]
-            zenith = zeniths[key]
-            azimuth = azimuths[key]
-            direction = directions[key]
-            event_number = event_numbers[key]
-            index_value = index[key]
-            run_number = run_numbers.get(key, None)
-            event_datetime = datetimes.get(key, None)
-            source_file = files.get(key, None)
-            results[key] = {
-                "run_number": run_number,
-                "event_number": event_number,
-                "gps_time": gps_time,
-                "datetime": event_datetime,
-                "du_id": du_id,
-                "file": source_file,
-                "index": index_value,
-                "time": time,
-                "azimuth": float(azimuth),
-                "zenith": float(zenith),
-                "x": float(direction[0]),
-                "y": float(direction[1]),
-                "z": float(direction[2]),
-                "chi_square": float(chi_square),
-            }
-            if with_signal:
-                results[key]["signal"] = signal
-        with open(swm_fitted_file, "w") as f:
-            yaml.dump(results, f)
-    logger.info(f"Number of events after spherical wave fitting: {len(times)}")
-
-    if len(times) < 2:
-        logger.warning("No events after filtering, skipping plotting.")
-    else:
-        fe_plot.plot_reconstructed_positions_SWM(
-            gps_times,
-            directions,
-            chi_squares,
-            fig_prefix + "_SWM",
-        )
-        fe_plot.plot_fitting_parameters_SWM(
-            gps_times,
-            directions,
-            chi_squares,
-            "SWM",
-            fig_prefix + "_SWM",
-        )
-    exit()
-    
-    (
-        du_ids_filtered,
-        times_filtered,
-        signals_filtered,
-        chi_squares_filtered,
-        azimuths_filtered,
-        zeniths_filtered,
-        source_directions_filtered,
-        gps_time_filtered,
-    ) = fe_br.background_reject(
-        detector_positions,
-        du_ids,
-        times,
-        signals,
-        chi_squares,
-        azimuths,
-        zeniths,
-        directions,
-        gps_times,
-        index,
-        fig_prefix,
-        output_dir,
-        with_signal,
-    )
-    logger.info(f"Number of events after background rejection: {len(times_filtered)}")
-
-    filtered_file = matching_file.replace(".yaml", "_filtered.yaml")
-    results = {}
-    for key in times_filtered.keys():
-        gps_time = gps_time_filtered[key]
-        chi_square = chi_squares_filtered[key]
-        du_id = du_ids_filtered[key]
-        time = times_filtered[key]
-        signal = signals_filtered[key]
-        azimuth = azimuths_filtered[key]
-        zenith = zeniths_filtered[key]
-        direction = source_directions_filtered[key]
-        results[key] = {
-            "time": time,
-            "signal": signal,
-            "du_id": du_id,
-            "gps_time": gps_time,
-            "azimuth": float(azimuth),
-            "zenith": float(zenith),
-            "x": float(direction[0]),
-            "y": float(direction[1]),
-            "z": float(direction[2]),
-            "chi_square": float(chi_square),
-        }
-    with open(filtered_file, "w") as f:
-        yaml.dump(results, f)
+    return 0
 
 
 # =========================
@@ -441,10 +737,15 @@ def main(matching_file, fig_name, with_signal, det_pos_file, force_recompute=Fal
 # =========================
 if __name__ == "__main__":
     args = parse_args(sys.argv)
-    main(
-        args.matching_file,
-        args.fig_name,
-        args.with_signal,
-        det_pos_file=args.det_pos,
-        force_recompute=args.force_recompute,
+    raise SystemExit(
+        main(
+            args.matching_file,
+            args.fig_name,
+            args.with_signal,
+            det_pos_file=args.det_pos,
+            force_recompute=args.force_recompute,
+            run_matching=args.run_matching,
+            run_pwm=args.run_pwm,
+            run_swm=args.run_swm,
+        )
     )

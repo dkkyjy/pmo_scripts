@@ -24,9 +24,18 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import uproot
-import yaml
 
 from logger_config import logger
+from read_header.common import (
+    DATETIME_FORMAT,
+    EventPayload,
+    YamlData,
+    build_time_map_and_du_ids,
+    find_teventadc_key,
+    format_event_datetime,
+    mkdir as shared_mkdir,
+    write_yaml,
+)
 
 RunNumberList = List[int]
 EventNumberList = List[int]
@@ -128,15 +137,6 @@ def calculate_xy_combined_max_values(
         combined_max_list.append(channel_max)
     return combined_max_list
 
-
-def find_teventadc_key(keys: List[str], file_name: str) -> str:
-    """Find and return the key containing the teventadc tree name."""
-    for key in keys:
-        if "teventadc" in str(key):
-            return key
-    raise KeyError(f"teventadc TTree not found in file: {file_name}")
-
-
 def read_file_du_time_ns(file_name: str, left: int, right: int) -> ReadTraceResult:
     """Read fields from teventadc and compute per-channel max value lists."""
     root_file = uproot.open(file_name)
@@ -203,23 +203,15 @@ def build_event_payload(
     file_path: str,
 ) -> EventPayload:
     """Build one event payload with multi-trigger DU list values."""
-    list_du_id: List[str] = []
-    time_map: Dict[str, List[int]] = {}
+    time_map, list_du_id = build_time_map_and_du_ids(du_ids, du_nanoseconds)
     signal_map: Dict[str, List[int]] = {}
 
-    for item_index, du_id in enumerate(du_ids):
+    for item_index, du_id_str in enumerate(list_du_id):
         max_value = trace_adc_maxvalue[item_index] if item_index < len(trace_adc_maxvalue) else 10
-        du_id_str = str(du_id)
-        time_map.setdefault(du_id_str, []).append(int(du_nanoseconds[item_index]))
         signal_map.setdefault(du_id_str, []).append(int(max_value))
-        list_du_id.append(du_id_str)
 
-    date = gps_times[0]
-    hhmmss_time = gps_times[1]
     gps_time = gps_times[2]
-    time_str = f"{hhmmss_time:0>6}"
-    datetime_obj = datetime.strptime(f"{date}T{time_str}", '%Y%m%dT%H%M%S')
-    datetime_str = datetime_obj.strftime(DATETIME_FORMAT)
+    datetime_str = format_event_datetime(gps_times)
 
     return {
         "run_number": run_number,
@@ -312,16 +304,15 @@ def process_single_file(
 
 def mkdir(path: str) -> None:
     """Create directory if it does not exist."""
-    if not os.path.exists(path):
-        os.makedirs(path)
-    else:
+    already_exists = os.path.exists(path)
+    shared_mkdir(path)
+    if already_exists:
         logger.debug(f"Directory already exists, no need to create: {path}")
 
 
 def write_single_output(data_dict: YamlData, file_path: str) -> None:
     """Write one dictionary payload to YAML file."""
-    with open(file_path, "w") as file_obj:
-        yaml.dump(data_dict, file_obj)
+    write_yaml(file_path, data_dict)
 
 
 def write_outputs(
