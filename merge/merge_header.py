@@ -9,14 +9,18 @@ Behavior:
 from __future__ import annotations
 
 import argparse
-import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 from logger_config import logger
-
+from merge.common import (
+    build_traceability_header,
+    find_files,
+    parse_date_dir as _parse_date_dir,
+    resolve_input_dir,
+)
 
 PATTERN = "Trigger*.yaml"
 
@@ -274,14 +278,11 @@ def write_merged_yaml(outpath: Path, files: List[Path], merged_data: Dict[str, D
     outpath.parent.mkdir(parents=True, exist_ok=True)
     logger.debug(f"Writing merged YAML: {outpath}")
 
-    header_lines = [
-        f"# Merged: {outpath.name}",
-        f"# Time: {datetime.datetime.now().isoformat(timespec='seconds')}",
-        "# Source files:",
-    ]
-    header_lines.extend(f"#   - {path}" for path in files)
-    header_text = "\n".join(header_lines) + "\n\n"
-
+    header_text = build_traceability_header(
+        outpath.name,
+        files,
+        include_time=True,
+    )
     yaml_text = yaml.safe_dump(merged_data, allow_unicode=True, sort_keys=False)
     with outpath.open("w", encoding="utf-8") as file_obj:
         file_obj.write(header_text)
@@ -296,12 +297,9 @@ def merge_files_for_pattern(
 ) -> Tuple[int, str]:
     """Merge files matching pattern and write to outpath."""
     logger.info(f"Searching files in {dirpath} with pattern '{pattern}'")
-    if not dirpath.exists() or not dirpath.is_dir():
-        return 2, f"Directory not found: {dirpath}"
-
-    files = sorted(dirpath.glob(pattern))
-    if not files:
-        return 1, f"No files matching '{pattern}' in {dirpath}"
+    code, message, files = find_files(dirpath, pattern)
+    if code != 0:
+        return code, message
 
     logger.info(f"Found {len(files)} input files for merge")
     logger.debug("Input files:\n{}", "\n".join(str(file_path) for file_path in files))
@@ -330,9 +328,7 @@ def merge_trigger_files(dirpath: Path, ymd: str, outdir: Path) -> int:
 
 def parse_date_dir(date_dir: str) -> Tuple[Path, str]:
     """Parse yyyy/mm/dd directory string and return path + yyyymmdd."""
-    logger.debug(f"Parsing date directory: {date_dir}")
-    date_obj = datetime.datetime.strptime(date_dir, "%Y/%m/%d")
-    return Path(date_dir), date_obj.strftime("%Y%m%d")
+    return _parse_date_dir(date_dir)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -352,8 +348,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     logger.info(f"CLI arguments: dir={args.dir}, output={outdir}")
 
-    date_path, ymd = parse_date_dir(args.dir)
-    input_dir = outdir / date_path
+    input_dir, ymd = resolve_input_dir(args.dir, outdir)
     logger.info(f"Resolved date={ymd}, input_dir={input_dir}")
 
     return merge_trigger_files(input_dir, ymd, outdir)

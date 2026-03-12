@@ -24,7 +24,7 @@ loop.py
   │    ├─ find_event/matching_times.py
   │    ├─ find_event/estimation.py
   │    └─ find_event/plotting.py
-  └─ merge.py (optional, daily aggregation)
+  └─ merge package (optional, daily aggregation)
 ```
 
 ## Project structure
@@ -33,8 +33,10 @@ loop.py
 .
 ├── loop.py
 ├── main.py
-├── merge.py
-├── merge_trace.py
+├── merge/
+│   ├── merge_header.py
+│   ├── merge_trace.py
+│   └── merge_results.py
 ├── stats/
 │   ├── common.py
 │   ├── stats_trigger.py
@@ -121,7 +123,9 @@ If none of `--run-matching`, `--run-pwm`, or `--run-swm` is provided, `main.py` 
 ### Daily merge
 
 ```bash
-python merge.py 2026/02/14 -o ../Reco_Dir
+python -m merge.merge_header 2026/02/14 -o ../Reco_Dir
+python -m merge.merge_trace 2026/02/14 -o ../Reco_Dir
+python -m merge.merge_results 2026/02/14 -o ../Reco_Dir
 ```
 
 ### Statistics (examples)
