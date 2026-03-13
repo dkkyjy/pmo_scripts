@@ -190,6 +190,6 @@ export LOG_FILE=loop.log
 
 - `docs/loop.md`
 - `docs/main.md`
-- `docs/merge.md`
+- `docs/merge_header.md`
 - `docs/merge_trace.md`
 - `docs/stats_trigger.md`

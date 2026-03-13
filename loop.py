@@ -483,13 +483,14 @@ def summarize_results(results: list[TaskResult], start: datetime.datetime, end: 
 
 
 def main() -> int:
+    """Run the loop CLI workflow and return a process exit code."""
     args = parse_cli_args()
 
     start = parse_datetime(args.start)
     end = parse_datetime(args.end)
     logger.info(f"Processing from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}")
     if start > end:
-        ap.error("start must be <= end")
+        build_arg_parser().error("start must be <= end")
 
     file_start = int(start.strftime("%Y%m%d%H%M%S"))
     file_end = int(end.strftime("%Y%m%d%H%M%S"))
