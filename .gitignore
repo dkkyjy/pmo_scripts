@@ -1,21 +1,35 @@
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# Virtual environment
+.venv/
+
+# VSCode/IDE
+.vscode/
+.github/
+
+# Output files
 *.png
 *.pdf
 *.txt
 *.log
 *.zip
-.venv/*
-.vscode/*
-.github/*
-.pytest_cache/*
+
+# Project directories
+todos/
+scripts/
+cov_annotate/
+
+# External directories (如不需追踪)
 ../Reco_Dir
 ../kewen_scripts
-__pycache__
-docs/*
-todos/*
-tests/*
-scripts/*
-cov_annotate/*
-.pytest_cache/*
-.coverage
-read_header/__pycache__
-find_events/__pycache__
+
+# Module cache
+find_event/__pycache__/
+merge/__pycache__/
+readroot/__pycache__/
+
+# 其他临时文件

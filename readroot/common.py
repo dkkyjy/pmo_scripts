@@ -1,5 +1,6 @@
 """Shared helpers for read_header and read_trace workflows."""
 
+
 from __future__ import annotations
 
 import os

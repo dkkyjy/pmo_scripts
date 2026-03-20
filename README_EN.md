@@ -18,8 +18,8 @@ This project batch-processes `Trigger*.root` files, generates intermediate YAML 
 
 ```text
 loop.py
-  ├─ read_header/read_header.py (time mode)
-  ├─ read_header/read_trace.py (--with-signal)
+  ├─ readroot/read_header.py (time mode)
+  ├─ readroot/read_trace.py (--with-signal)
   ├─ main.py
   │    ├─ find_event/matching_times.py
   │    ├─ find_event/estimation.py
@@ -35,9 +35,9 @@ loop.py
 ├── main.py
 ├── merge/
 │   ├── merge_header.py
-│   ├── merge_trace.py
-│   └── merge_results.py
-├── stats/
+├── readroot/
+│   ├── read_header.py
+│   └── read_trace.py
 │   ├── common.py
 │   ├── stats_trigger.py
 │   ├── stats_lookback.py

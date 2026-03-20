@@ -198,7 +198,7 @@ def make_readheader_command(file_path: str, date: str, out_dir_base: str) -> lis
     """Construct the command for read_header with file_path, date, out_dir_base parameters."""
     cmd = [
         sys.executable,  # use current python interpreter
-        "read_header/read_header.py",
+        "readroot/read_header.py",
         file_path,
         "--date",
         date,
@@ -212,7 +212,7 @@ def make_readtrace_command(file_path: str, date: str, out_dir_base: str, left: i
     """Construct the command for read_trace with file_path, left, right, date, out_dir_base parameters."""
     cmd = [
         sys.executable,  # use current python interpreter
-        "read_header/read_trace.py",
+        "readroot/read_trace.py",
         file_path,
         "--left",
         str(left),
