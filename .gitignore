@@ -19,7 +19,9 @@ __pycache__/
 *.zip
 
 # Project directories
+docs/
 todos/
+tests/
 scripts/
 cov_annotate/
 

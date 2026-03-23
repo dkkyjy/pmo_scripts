@@ -20,7 +20,7 @@ from logger_config import logger
 from find_event.io import load_data_from_file
 from find_event import plotting as fe_plot
 from find_event import estimation as fe_est
-from find_event import matching_times as fe_mt
+from find_event import matching_times_graph as fe_mt
 
 
 def _load_event_metadata_map(matching_file):
@@ -373,8 +373,9 @@ def run_matching_stage(
     if not use_cache:
         if force_recompute and os.path.exists(matched_file):
             logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
-        times, signals, du_ids = fe_mt.optimized_read_matching_times(
+        times, signals, du_ids = fe_mt.optimized_read_matching_times_graph(
             matching_file,
+            det_pos_file,
             detector_positions,
             min_detectors=5,
             speed_of_light_tolerance=1.05,

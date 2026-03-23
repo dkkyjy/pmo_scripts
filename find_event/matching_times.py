@@ -5,18 +5,6 @@ import yaml
 
 c_val = 299792458.0/1e9/1.000259
 
-def parse_match_line(match_line):
-    """Concise version"""
-    parts = [part.strip().strip("'\"") for part in match_line.split(',')]
-    detector_id = parts[0]
-    nanoseconds = int(parts[1])
-    
-    if len(parts) >= 3:
-        signal = int(parts[2])
-        return (detector_id, nanoseconds), (detector_id, signal)
-    else:
-        return (detector_id, nanoseconds)
-    
     
 def optimized_read_matching_times(matching_file, detector_positions, min_detectors=4, speed_of_light_tolerance=1.01):
     """

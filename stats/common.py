@@ -19,45 +19,6 @@ DATETIME_HELP_FORMAT = DATETIME_FORMAT.replace("%", "%%")
 TData = TypeVar("TData", bound=MutableMapping[str, Dict[str, Any]])
 
 
-class NamedDefaultDict(defaultdict):
-    """Dict row with stable field order and strict field-name access."""
-
-    def __init__(self, fields: Iterable[str], **values: Any) -> None:
-        super().__init__(lambda: None)
-        self.fields = tuple(fields)
-        for field in self.fields:
-            super().__setitem__(field, values.get(field))
-
-    def __iter__(self):
-        for field in self.fields:
-            yield super().__getitem__(field)
-
-    def __getitem__(self, key: Any) -> Any:
-        if isinstance(key, int):
-            raise TypeError("NamedDefaultDict only supports field-name access")
-        return super().__getitem__(key)
-
-    def __setitem__(self, key: Any, value: Any) -> None:
-        if isinstance(key, int):
-            raise TypeError("NamedDefaultDict only supports field-name access")
-        super().__setitem__(key, value)
-
-    def __eq__(self, other: object) -> bool:
-        return dict(self) == other
-
-
-def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultDict:
-    """Create one named row based on a predefined field schema."""
-    return NamedDefaultDict(fields, **values)
-
-
-def normalize_cli_datetime_text(value: Optional[datetime]) -> str:
-    """Normalize optional CLI datetime to deterministic text."""
-    if value is None:
-        return ""
-    return value.strftime(DATETIME_FORMAT)
-
-
 def parse_cli_datetime(value: str) -> datetime:
     """Parse CLI datetime argument as ``YYYY-MM-DDTHH:MM:SS``."""
     try:
@@ -131,6 +92,12 @@ def filter_data_by_datetime_range(
         )
 
     return filtered_data
+
+def normalize_cli_datetime_text(value: Optional[datetime]) -> str:
+    """Normalize optional CLI datetime to deterministic text."""
+    if value is None:
+        return ""
+    return value.strftime(DATETIME_FORMAT)
 
 
 def cache_file_state(path: Path) -> Dict[str, Any]:

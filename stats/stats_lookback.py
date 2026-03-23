@@ -16,7 +16,7 @@ import argparse
 import csv
 import itertools
 import json
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -33,13 +33,17 @@ plt.style.use(["science", "grid", "notebook"])
 DELTA_PLOT_MIN_NS = -5e4
 DELTA_PLOT_MAX_NS = 5e4
 
-
-NamedDefaultDict = scommon.NamedDefaultDict
-
-
-def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultDict:
-    """Create one named row based on a predefined field schema."""
-    return scommon.make_named_row(fields, **values)
+def make_named_row(fields: Iterable[str], **values: Any):
+    """Create one named row based on a predefined field schema using namedtuple."""
+    tuple_type = {
+        EVENT_RECORD_FIELDS: EventRecord,
+        ADJACENT_PAIR_FIELDS: AdjacentPairRow,
+        SHARED_PAIR_COUNT_FIELDS: SharedPairCountRow,
+        SHARED_DU_COUNT_FIELDS: SharedDuCountRow,
+    }.get(fields)
+    if tuple_type is None:
+        raise ValueError(f"Unknown row fields: {fields}")
+    return tuple_type(**values)
 
 
 EVENT_RECORD_FIELDS = (
@@ -80,15 +84,11 @@ SHARED_DU_COUNT_FIELDS = (
     "curr_event_datetime",
 )
 
-EventPayload = Dict[str, Any]
-YamlData = Dict[str, EventPayload]
-EventRecord = NamedDefaultDict
-PairKey = Tuple[str, str]
-PairDeltaMap = Dict[PairKey, float]
-OffsetMap = Dict[str, float]
-AdjacentPairRow = NamedDefaultDict
-SharedPairCountRow = NamedDefaultDict
-SharedDuCountRow = NamedDefaultDict
+# Define namedtuple row models
+EventRecord = namedtuple("EventRecord", EVENT_RECORD_FIELDS)
+AdjacentPairRow = namedtuple("AdjacentPairRow", ADJACENT_PAIR_FIELDS)
+SharedPairCountRow = namedtuple("SharedPairCountRow", SHARED_PAIR_COUNT_FIELDS)
+SharedDuCountRow = namedtuple("SharedDuCountRow", SHARED_DU_COUNT_FIELDS)
 
 DATETIME_FORMAT = scommon.DATETIME_FORMAT
 DATETIME_HELP_FORMAT = scommon.DATETIME_HELP_FORMAT
@@ -277,12 +277,12 @@ def build_event_records(data: YamlData) -> List[EventRecord]:
         )
 
     records.sort(
-        key=lambda row: (
-            int(row["event_second"]),
-            int(row["index"]),
-            int(row["event_number"]),
-            str(row["event_key"]),
-        )
+            key=lambda row: (
+                int(row.event_second),
+                int(row.index),
+                int(row.event_number),
+                str(row.event_key),
+            )
     )
     logger.info("Built event records: {}", len(records))
     return records
@@ -333,20 +333,20 @@ def _build_common_pair_and_count_rows(
     count_rows: List[SharedPairCountRow] = []
     for row_index in range(1, len(records)):
         curr_row = records[row_index]
-        curr_second = int(curr_row["event_second"])
-        curr_index = int(curr_row["index"])
-        curr_event_number = int(curr_row["event_number"])
-        curr_du_ns = curr_row["du_ns_map"]
-        curr_event_datetime = str(curr_row["event_datetime"])
+        curr_second = int(curr_row.event_second)
+        curr_index = int(curr_row.index)
+        curr_event_number = int(curr_row.event_number)
+        curr_du_ns = curr_row.du_ns_map
+        curr_event_datetime = str(curr_row.event_datetime)
         curr_pair_map = build_pair_delta_map(curr_du_ns, offset_map)
 
         start_index = max(0, row_index - lookback)
         for prev_row_index in range(start_index, row_index):
             prev_row = records[prev_row_index]
-            prev_second = int(prev_row["event_second"])
-            prev_index = int(prev_row["index"])
-            prev_event_number = int(prev_row["event_number"])
-            prev_du_ns = prev_row["du_ns_map"]
+            prev_second = int(prev_row.event_second)
+            prev_index = int(prev_row.index)
+            prev_event_number = int(prev_row.event_number)
+            prev_du_ns = prev_row.du_ns_map
             prev_pair_map = build_pair_delta_map(prev_du_ns, offset_map)
             common_pairs = sorted(set(prev_pair_map) & set(curr_pair_map))
 
@@ -427,18 +427,18 @@ def build_shared_du_count_rows(
     rows: List[SharedDuCountRow] = []
     for row_index in range(1, len(records)):
         curr_row = records[row_index]
-        curr_second = int(curr_row["event_second"])
-        curr_event_number = int(curr_row["event_number"])
-        curr_du_ns = curr_row["du_ns_map"]
-        curr_event_datetime = str(curr_row["event_datetime"])
+        curr_second = int(curr_row.event_second)
+        curr_event_number = int(curr_row.event_number)
+        curr_du_ns = curr_row.du_ns_map
+        curr_event_datetime = str(curr_row.event_datetime)
         curr_du_ids = set(curr_du_ns.keys())
 
         start_index = max(0, row_index - lookback)
         for prev_row_index in range(start_index, row_index):
             prev_row = records[prev_row_index]
-            prev_second = int(prev_row["event_second"])
-            prev_event_number = int(prev_row["event_number"])
-            prev_du_ns = prev_row["du_ns_map"]
+            prev_second = int(prev_row.event_second)
+            prev_event_number = int(prev_row.event_number)
+            prev_du_ns = prev_row.du_ns_map
             prev_du_ids = set(prev_du_ns.keys())
             shared_du_count = len(curr_du_ids & prev_du_ids)
             rows.append(
@@ -468,11 +468,11 @@ def derive_shared_pair_count_rows_from_adjacent_rows(
     grouped: Dict[tuple[int, int, int, int, str], int] = {}
     for row in rows:
         key = (
-            int(row["prev_event_number"]),
-            int(row["curr_event_number"]),
-            int(row["prev_second"]),
-            int(row["curr_second"]),
-            str(row["curr_event_datetime"]),
+            int(row.prev_event_number),
+            int(row.curr_event_number),
+            int(row.prev_second),
+            int(row.curr_second),
+            str(row.curr_event_datetime),
         )
         grouped[key] = grouped.get(key, 0) + 1
 
@@ -648,9 +648,9 @@ def plot_adjacent_pair_delta_vs_time(
         logger.warning("No adjacent common DU-pair rows; skip time scatter plotting")
         return
 
-    gps_times = [int(row["curr_second"]) for row in rows]
-    delta_values = [float(row["adjacent_delta_ns"]) for row in rows]
-    datetime_labels = [str(row["curr_event_datetime"]) for row in rows]
+    gps_times = [int(row.curr_second) for row in rows]
+    delta_values = [float(row.adjacent_delta_ns) for row in rows]
+    datetime_labels = [str(row.curr_event_datetime) for row in rows]
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.scatter(gps_times, delta_values, s=8, alpha=0.6)
@@ -675,7 +675,7 @@ def plot_adjacent_pair_delta_histogram(
         logger.warning("No adjacent common DU-pair rows; skip plotting")
         return
 
-    deltas = [float(row["adjacent_delta_ns"]) for row in rows]
+    deltas = [float(row.adjacent_delta_ns) for row in rows]
 
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.hist(
@@ -704,7 +704,7 @@ def plot_shared_pair_count_histogram(
         logger.warning("No shared DU-pair count rows; skip plotting")
         return
 
-    counts = [int(row["shared_pair_count"]) for row in rows]
+    counts = [int(row.shared_pair_count) for row in rows]
 
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.hist(counts, bins=max(1, bins), edgecolor="black")
@@ -726,9 +726,9 @@ def plot_shared_pair_count_vs_time(
         logger.warning("No shared DU-pair count rows; skip time scatter plotting")
         return
 
-    gps_times = [int(row["curr_second"]) for row in rows]
-    count_values = [int(row["shared_pair_count"]) for row in rows]
-    datetime_labels = [str(row["curr_event_datetime"]) for row in rows]
+    gps_times = [int(row.curr_second) for row in rows]
+    count_values = [int(row.shared_pair_count) for row in rows]
+    datetime_labels = [str(row.curr_event_datetime) for row in rows]
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.scatter(gps_times, count_values, s=8, alpha=0.6)
@@ -753,7 +753,7 @@ def plot_shared_du_count_histogram(
         logger.warning("No shared DU count rows; skip plotting")
         return
 
-    counts = [int(row["shared_du_count"]) for row in rows]
+    counts = [int(row.shared_du_count) for row in rows]
 
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.hist(counts, bins=max(1, bins), edgecolor="black")
@@ -775,9 +775,9 @@ def plot_shared_du_count_vs_time(
         logger.warning("No shared DU count rows; skip time scatter plotting")
         return
 
-    gps_times = [int(row["curr_second"]) for row in rows]
-    count_values = [int(row["shared_du_count"]) for row in rows]
-    datetime_labels = [str(row["curr_event_datetime"]) for row in rows]
+    gps_times = [int(row.curr_second) for row in rows]
+    count_values = [int(row.shared_du_count) for row in rows]
+    datetime_labels = [str(row.curr_event_datetime) for row in rows]
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.scatter(gps_times, count_values, s=8, alpha=0.6)

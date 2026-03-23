@@ -16,7 +16,7 @@ import argparse
 import csv
 import itertools
 import json
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -28,20 +28,23 @@ import yaml
 
 from find_event.io import load_data_from_file
 from logger_config import logger
+from du_pair_theoretical import load_or_build_theoretical_rows
 from stats import common as scommon
 
 plt.style.use(["science", "grid", "notebook"])
 
-SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
-NS_PER_SECOND = 1e9
-
-
-NamedDefaultDict = scommon.NamedDefaultDict
-
-
-def make_named_row(fields: Iterable[str], **values: Any) -> NamedDefaultDict:
-    """Create one named row based on a predefined field schema."""
-    return scommon.make_named_row(fields, **values)
+def make_named_row(fields: Iterable[str], **values: Any):
+    """Create one named row based on a predefined field schema using namedtuple."""
+    tuple_type = {
+        OBSERVED_PAIR_DELTA_FIELDS: ObservedPairDelta,
+        EXPECTED_PAIR_DELTA_FIELDS: ExpectedPairDelta,
+        PAIR_DISTRIBUTION_FIELDS: PairDistributionRow,
+        EVENT_PAIR_COUNT_FIELDS: EventPairCountRow,
+        EVENT_MAX_RATIO_FIELDS: EventMaxRatioRow,
+    }.get(fields)
+    if tuple_type is None:
+        raise ValueError(f"Unknown row fields: {fields}")
+    return tuple_type(**values)
 
 
 OBSERVED_PAIR_DELTA_FIELDS = (
@@ -81,16 +84,12 @@ EVENT_MAX_RATIO_FIELDS = (
     "max_observed_theoretical_ratio",
 )
 
-EventPayload = Dict[str, Any]
-YamlData = Dict[str, EventPayload]
-OffsetMap = Dict[str, float]
-ObservedPairDelta = NamedDefaultDict
-ExpectedPairDelta = NamedDefaultDict
-PairDistributionRow = NamedDefaultDict
-EventPairCountRow = NamedDefaultDict
-EventMaxRatioRow = NamedDefaultDict
-
-EventTimeLabelMap = Dict[int, str]
+# Define namedtuple row models
+ObservedPairDelta = namedtuple("ObservedPairDelta", OBSERVED_PAIR_DELTA_FIELDS)
+ExpectedPairDelta = namedtuple("ExpectedPairDelta", EXPECTED_PAIR_DELTA_FIELDS)
+PairDistributionRow = namedtuple("PairDistributionRow", PAIR_DISTRIBUTION_FIELDS)
+EventPairCountRow = namedtuple("EventPairCountRow", EVENT_PAIR_COUNT_FIELDS)
+EventMaxRatioRow = namedtuple("EventMaxRatioRow", EVENT_MAX_RATIO_FIELDS)
 
 DATETIME_FORMAT = scommon.DATETIME_FORMAT
 DATETIME_HELP_FORMAT = scommon.DATETIME_HELP_FORMAT
@@ -292,7 +291,7 @@ def filter_distribution_rows_by_datetime_range(
     invalid_datetime_count = 0
 
     for row in rows:
-        event_dt = parse_row_datetime(str(row["event_datetime"]))
+        event_dt = parse_row_datetime(str(row.event_datetime))
         if event_dt is None:
             invalid_datetime_count += 1
             continue
@@ -337,10 +336,10 @@ def build_event_time_label_map_from_rows(
     """Build mapping: gps_time -> datetime label from cached rows."""
     label_map: EventTimeLabelMap = {}
     for row in rows:
-        gps_time = int(row["event_time"])
+        gps_time = int(row.event_time)
         if gps_time < 0 or gps_time in label_map:
             continue
-        event_datetime = str(row["event_datetime"])
+        event_datetime = str(row.event_datetime)
         if event_datetime:
             label_map[gps_time] = event_datetime
     return label_map
@@ -416,125 +415,14 @@ def build_observed_pair_deltas(
 
     rows.sort(
         key=lambda row: (
-            int(row["event_time"]),
-            int(row["event_number"]),
-            sort_du_id_key(str(row["du_a"])),
-            sort_du_id_key(str(row["du_b"])),
+            int(row.event_time),
+            int(row.event_number),
+            sort_du_id_key(str(row.du_a)),
+            sort_du_id_key(str(row.du_b)),
         )
     )
     return rows
 
-
-def build_expected_pair_deltas(
-    detector_positions: Dict[str, np.ndarray],
-    du_ids_in_data: Optional[Iterable[str]] = None,
-) -> List[ExpectedPairDelta]:
-    """Build expected DU-pair deltas from geometry as ``distance / c``."""
-    if du_ids_in_data is None:
-        usable_ids = sorted(detector_positions.keys(), key=sort_du_id_key)
-    else:
-        usable_ids = sorted(
-            [du_id for du_id in set(du_ids_in_data) if du_id in detector_positions],
-            key=sort_du_id_key,
-        )
-
-    rows: List[ExpectedPairDelta] = []
-    for du_a, du_b in itertools.combinations(usable_ids, 2):
-        pos_a = detector_positions[du_a]
-        pos_b = detector_positions[du_b]
-        distance_m = float(np.linalg.norm(pos_b - pos_a))
-        expected_delta_ns = distance_m / SPEED_OF_LIGHT_M_PER_S * NS_PER_SECOND
-        rows.append(
-            make_named_row(
-                EXPECTED_PAIR_DELTA_FIELDS,
-                du_a=du_a,
-                du_b=du_b,
-                distance_m=distance_m,
-                theoretical_delta_ns=expected_delta_ns,
-            )
-        )
-
-    return rows
-
-
-def theoretical_cache_path(det_pos_path: Path) -> Path:
-    """Return shared cache CSV path for theoretical DU-pair deltas."""
-    return det_pos_path.with_name(f"{det_pos_path.stem}_du_pair_theoretical.csv")
-
-
-def write_theoretical_cache(path: Path, rows: Sequence[ExpectedPairDelta]) -> None:
-    """Write shared theoretical DU-pair cache CSV."""
-    with path.open("w", newline="", encoding="utf-8") as file_obj:
-        writer = csv.writer(file_obj)
-        writer.writerow(["du_a", "du_b", "distance_m", "theoretical_delta_ns"])
-        writer.writerows(tuple(row) for row in rows)
-
-
-def read_theoretical_cache(path: Path) -> List[ExpectedPairDelta]:
-    """Read shared theoretical DU-pair cache CSV."""
-    rows: List[ExpectedPairDelta] = []
-    invalid_row_count = 0
-    required_fields = {"du_a", "du_b", "distance_m", "theoretical_delta_ns"}
-
-    with path.open("r", newline="", encoding="utf-8") as file_obj:
-        reader = csv.DictReader(file_obj)
-        header_fields = set(reader.fieldnames or [])
-        if not required_fields.issubset(header_fields):
-            missing_fields = sorted(required_fields - header_fields)
-            raise ValueError(
-                "Theoretical cache missing required columns: "
-                f"{','.join(missing_fields)}"
-            )
-
-        for row_index, row in enumerate(reader, start=2):
-            try:
-                du_a = str(row["du_a"])
-                du_b = str(row["du_b"])
-                distance_m = float(row["distance_m"])
-                theoretical_delta_ns = float(row["theoretical_delta_ns"])
-            except (TypeError, ValueError, KeyError) as exc:
-                invalid_row_count += 1
-                logger.warning(
-                    "Skip invalid theoretical cache row at line {}: {}",
-                    row_index,
-                    exc,
-                )
-                continue
-
-            rows.append(
-                make_named_row(
-                    EXPECTED_PAIR_DELTA_FIELDS,
-                    du_a=du_a,
-                    du_b=du_b,
-                    distance_m=distance_m,
-                    theoretical_delta_ns=theoretical_delta_ns,
-                )
-            )
-
-    if invalid_row_count > 0:
-        logger.warning(
-            "Skipped {} invalid rows while reading theoretical cache: {}",
-            invalid_row_count,
-            path,
-        )
-
-    return rows
-
-
-def load_or_build_theoretical_rows(
-    det_pos_path: Path,
-    detector_positions: Dict[str, np.ndarray],
-) -> List[ExpectedPairDelta]:
-    """Load shared theoretical cache if exists; otherwise build and persist."""
-    cache_path = theoretical_cache_path(det_pos_path)
-    if cache_path.exists():
-        logger.info("Using theoretical DU-pair cache: {}", cache_path)
-        return read_theoretical_cache(cache_path)
-
-    rows = build_expected_pair_deltas(detector_positions)
-    write_theoretical_cache(cache_path, rows)
-    logger.info("Wrote theoretical DU-pair cache: {}", cache_path)
-    return rows
 
 
 def build_pair_distribution_rows(
@@ -544,21 +432,21 @@ def build_pair_distribution_rows(
 ) -> List[PairDistributionRow]:
     """Join observed event-level pair deltas with theoretical pair deltas."""
     expected_map: Dict[tuple[str, str], tuple[float, float]] = {
-        (str(row["du_a"]), str(row["du_b"])): (
-            float(row["distance_m"]),
-            float(row["theoretical_delta_ns"]),
+        (str(row.du_a), str(row.du_b)): (
+            float(row.distance_m),
+            float(row.theoretical_delta_ns),
         )
         for row in expected_rows
     }
 
     rows: List[PairDistributionRow] = []
     for observed_row in observed_rows:
-        event_number = int(observed_row["event_number"])
-        event_time = int(observed_row["event_time"])
-        du_a = str(observed_row["du_a"])
-        du_b = str(observed_row["du_b"])
-        delta_ns = float(observed_row["observed_delta_ns"])
-        abs_delta_ns = float(observed_row["observed_abs_delta_ns"])
+        event_number = int(observed_row.event_number)
+        event_time = int(observed_row.event_time)
+        du_a = str(observed_row.du_a)
+        du_b = str(observed_row.du_b)
+        delta_ns = float(observed_row.observed_delta_ns)
+        abs_delta_ns = float(observed_row.observed_abs_delta_ns)
         expected = expected_map.get((du_a, du_b))
         if expected is None:
             continue
@@ -583,10 +471,10 @@ def build_pair_distribution_rows(
 
     rows.sort(
         key=lambda row: (
-            int(row["event_time"]),
-            int(row["event_number"]),
-            sort_du_id_key(str(row["du_a"])),
-            sort_du_id_key(str(row["du_b"])),
+            int(row.event_time),
+            int(row.event_number),
+            sort_du_id_key(str(row.du_a)),
+            sort_du_id_key(str(row.du_b)),
         )
     )
     return rows
@@ -675,10 +563,10 @@ def read_pair_distribution_csv(path: Path) -> List[PairDistributionRow]:
 
 def plot_pair_delta_distribution(
     path: Path,
-    observed_abs_delta: Sequence[float],
+    rows: Sequence[PairDistributionRow],
 ) -> None:
     """Plot observed DU-pair time-delta distribution only."""
-    observed_values = np.asarray(observed_abs_delta, dtype=float)
+    observed_values =  np.array([float(row.observed_abs_delta_ns) for row in rows])
     if observed_values.size == 0:
         logger.warning("No pair delta values available; skip pair delta plot")
         return
@@ -713,9 +601,9 @@ def plot_observed_expected_ratio(path: Path, rows: Sequence[PairDistributionRow]
         return
 
     ratios = np.array([
-        float(row["observed_abs_delta_ns"]) / float(row["theoretical_delta_ns"])
+        float(row.observed_abs_delta_ns) / float(row.theoretical_delta_ns)
         for row in rows
-        if float(row["theoretical_delta_ns"]) > 0
+        if float(row.theoretical_delta_ns) > 0
     ])
     if len(ratios) == 0:
         logger.warning("No positive theoretical deltas available; skip ratio plot")
@@ -743,9 +631,9 @@ def plot_delta_vs_event_time(
 ) -> None:
     """Plot observed absolute delta scatter against event time."""
     samples = [
-        (int(row["event_time"]), float(row["observed_abs_delta_ns"]))
+        (int(row.event_time), float(row.observed_abs_delta_ns))
         for row in rows
-        if int(row["event_time"]) >= 0
+        if int(row.event_time) >= 0
     ]
     if not samples:
         logger.warning("No event-time delta samples available; skip delta-vs-time plot")
@@ -777,11 +665,11 @@ def plot_ratio_vs_event_time(
     """Plot observed/theoretical ratio scatter against event time."""
     samples = [
         (
-            int(row["event_time"]),
-            float(row["observed_abs_delta_ns"]) / float(row["theoretical_delta_ns"]),
+            int(row.event_time),
+            float(row.observed_abs_delta_ns) / float(row.theoretical_delta_ns),
         )
         for row in rows
-        if int(row["event_time"]) >= 0 and float(row["theoretical_delta_ns"]) > 0
+        if int(row.event_time) >= 0 and float(row.theoretical_delta_ns) > 0
     ]
     if not samples:
         logger.warning("No event-time ratio samples available; skip ratio-vs-time plot")
@@ -812,9 +700,9 @@ def plot_theoretical_delta_vs_event_time(
 ) -> None:
     """Plot theoretical delta scatter against event time."""
     samples = [
-        (int(row["event_time"]), float(row["theoretical_delta_ns"]))
+        (int(row.event_time), float(row.theoretical_delta_ns))
         for row in rows
-        if int(row["event_time"]) >= 0 and float(row["theoretical_delta_ns"]) > 0
+        if int(row.event_time) >= 0 and float(row.theoretical_delta_ns) > 0
     ]
     if not samples:
         logger.warning(
@@ -848,9 +736,9 @@ def plot_theoretical_delta_histogram(
     """Plot histogram of theoretical delta values."""
     theoretical_values = np.array(
         [
-            float(row["theoretical_delta_ns"])
+            float(row.theoretical_delta_ns)
             for row in rows
-            if float(row["theoretical_delta_ns"]) > 0
+            if float(row.theoretical_delta_ns) > 0
         ],
         dtype=float,
     )
@@ -883,10 +771,10 @@ def build_event_max_ratio_rows(
     max_ratio_map: Dict[tuple[int, int], float] = {}
 
     for row in rows:
-        event_number = int(row["event_number"])
-        event_time = int(row["event_time"])
-        observed_abs_delta_ns = float(row["observed_abs_delta_ns"])
-        theoretical_delta_ns = float(row["theoretical_delta_ns"])
+        event_number = int(row.event_number)
+        event_time = int(row.event_time)
+        observed_abs_delta_ns = float(row.observed_abs_delta_ns)
+        theoretical_delta_ns = float(row.theoretical_delta_ns)
         if event_time < 0 or theoretical_delta_ns <= 0:
             continue
 
@@ -905,7 +793,7 @@ def build_event_max_ratio_rows(
         )
         for (event_number, event_time), max_ratio in max_ratio_map.items()
     ]
-    result_rows.sort(key=lambda item: (item["event_time"], item["event_number"]))
+    result_rows.sort(key=lambda item: (item.event_time, item.event_number))
     return result_rows
 
 
@@ -917,9 +805,9 @@ def build_event_pair_count_rows(
     event_datetime_map: Dict[tuple[int, int], str] = {}
 
     for row in rows:
-        event_number = int(row["event_number"])
-        event_time = int(row["event_time"])
-        event_datetime = str(row["event_datetime"])
+        event_number = int(row.event_number)
+        event_time = int(row.event_time)
+        event_datetime = str(row.event_datetime)
         key = (event_number, event_time)
         grouped_counts[key] += 1
         if key not in event_datetime_map and event_datetime:
@@ -950,9 +838,9 @@ def plot_event_max_ratio_vs_time(
         logger.warning("No per-event max-ratio samples available; skip time plot")
         return
 
-    x_values = np.array([int(row["event_time"]) for row in rows])
+    x_values = np.array([int(row.event_time) for row in rows])
     y_values = np.array(
-        [float(row["max_observed_theoretical_ratio"]) for row in rows],
+        [float(row.max_observed_theoretical_ratio) for row in rows],
         dtype=float,
     )
 
@@ -982,7 +870,7 @@ def plot_event_max_ratio_histogram(
         return
 
     ratio_values = np.array(
-        [float(row["max_observed_theoretical_ratio"]) for row in rows],
+        [float(row.max_observed_theoretical_ratio) for row in rows],
         dtype=float,
     )
     floor_value = non_zero_floor_magnitude(ratio_values)
@@ -1007,9 +895,9 @@ def plot_event_pair_count_vs_time(
 ) -> None:
     """Plot per-event DU-pair count against event time."""
     samples = [
-        (int(row["event_time"]), float(row["pair_count"]))
+        (int(row.event_time), float(row.pair_count))
         for row in rows
-        if int(row["event_time"]) >= 0
+        if int(row.event_time) >= 0
     ]
     if not samples:
         logger.warning("No per-event pair-count samples available; skip time plot")
@@ -1043,7 +931,7 @@ def plot_event_pair_count_histogram(
         logger.warning("No per-event pair-count samples available; skip histogram")
         return
 
-    count_values = np.array([float(row["pair_count"]) for row in rows], dtype=float)
+    count_values = np.array([float(row.pair_count) for row in rows], dtype=float)
     floor_value = non_zero_floor_magnitude(count_values)
     count_values[count_values <= 0] = floor_value
 
@@ -1136,8 +1024,7 @@ def render_plots(
 
     plot_pair_delta_distribution(
         pair_delta_plot,
-        np.array([float(row["observed_abs_delta_ns"]) for row in distribution_rows]),
-    )
+        distribution_rows)
     plot_observed_expected_ratio(ratio_plot, distribution_rows)
     plot_delta_vs_event_time(delta_time_plot, distribution_rows, event_time_label_map)
     plot_ratio_vs_event_time(ratio_time_plot, distribution_rows, event_time_label_map)
@@ -1304,7 +1191,7 @@ def main() -> int:
     du_ids_in_data = [
         str(du_id)
         for row in observed_rows
-        for du_id in (row["du_a"], row["du_b"])
+        for du_id in (row.du_a, row.du_b)
     ]
     missing_position_ids = sorted(
         set(du_ids_in_data) - set(detector_positions.keys()),
