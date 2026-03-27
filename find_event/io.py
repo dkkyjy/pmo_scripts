@@ -33,7 +33,7 @@ def load_data_from_file(filename):
                     parts = line.strip().split()
                     # Expect at least 4 columns: ID, x, y, z
                     if len(parts) >= 4:
-                        duid = parts[0]
+                        duid =int(parts[0])
                         try:
                             coords = np.array(
                                 [float(parts[1]), float(parts[2]), float(parts[3])]

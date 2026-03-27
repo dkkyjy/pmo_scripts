@@ -82,27 +82,6 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
         self.assertEqual(st.get_du_ns_map({"time": {"2": 5}}), {"2": 5})
         self.assertEqual(st.get_du_ns_map({"time": []}), {})
 
-    def test_named_default_row_setitem_branches(self) -> None:
-        """Cover NamedDefaultRow __setitem__ for named keys."""
-        row = st.make_named_row(("a", "b"), a=1, b=2)
-        row["a"] = 3
-        row["b"] = 4
-        self.assertEqual(row["a"], 3)
-        self.assertEqual(row["b"], 4)
-
-    def test_named_default_row_disallow_positional_access(self) -> None:
-        """Disallow positional get/set and tuple/list compatibility."""
-        row = st.make_named_row(("a", "b"), a=1, b=2)
-
-        with self.assertRaises(TypeError):
-            _ = row[0]
-
-        with self.assertRaises(TypeError):
-            row[0] = 5
-
-        self.assertNotEqual(row, (1, 2))
-        self.assertNotEqual(row, [1, 2])
-
     def test_parse_event_records_new_format(self) -> None:
         """Build records from new format and keep expected ordering/fields."""
         data = make_new_format_data()
@@ -110,13 +89,13 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
 
         self.assertEqual(len(records), 3)
         first = records[0]
-        self.assertEqual(first["event_second"], 1771027344)
-        self.assertEqual(first["du_count"], 2)
-        self.assertEqual(first["event_datetime"], "2026-02-14T00:02:24")
+        self.assertEqual(first.event_second, 1771027344)
+        self.assertEqual(first.du_count, 2)
+        self.assertEqual(first.event_datetime, "2026-02-14T00:02:24")
 
         second = records[1]
-        self.assertEqual(second["event_second"], 1771027345)
-        self.assertEqual(second["du_count"], 2)
+        self.assertEqual(second.event_second, 1771027345)
+        self.assertEqual(second.du_count, 2)
 
     def test_parse_event_records_requires_gps_time(self) -> None:
         """Fail when gps_time is missing in payload."""
@@ -142,14 +121,14 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
 
         rates = st.build_rate_per_second(records)
         rate_rows = [
-            (row["event_second"], row["event_count"], row["event_rate_hz"])
+            (row.event_second, row.event_count, row.event_rate_hz)
             for row in rates
         ]
         self.assertEqual(rate_rows, [(1771027344, 1, 1.0), (1771027345, 2, 2.0)])
 
         du_rates = st.build_du_trigger_rate(data, records)
         du_rate_dict = {
-            row["du_id"]: (row["trigger_count"], row["trigger_rate_hz"])
+            row.du_id: (row.trigger_count, row.trigger_rate_hz)
             for row in du_rates
         }
         self.assertEqual(du_rate_dict["1081"][0], 2)
@@ -164,7 +143,7 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
 
         distribution = st.build_adjacent_time_delta_distribution(deltas)
         distribution_rows = [
-            (row["delta_second"], row["event_pair_count"]) for row in distribution
+            (row.delta_second, row.event_pair_count) for row in distribution
         ]
         self.assertEqual(distribution_rows, [(0, 1), (1, 1)])
 
@@ -176,7 +155,7 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
 
         total_rows = st.build_total_du_trigger_per_second_rows(per_second)
         total_row_pairs = [
-            (row["event_second"], row["total_du_trigger_count"])
+            (row.event_second, row.total_du_trigger_count)
             for row in total_rows
         ]
         self.assertEqual(total_row_pairs, [(1771027344, 2), (1771027345, 3)])
@@ -184,13 +163,13 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
         rows = st.build_du_rate_per_second_rows(per_second)
         self.assertTrue(
             any(
-                row["event_second"] == 1771027344 and row["du_id"] == "1014"
+                row.event_second == 1771027344 and row.du_id == "1014"
                 for row in rows
             )
         )
         self.assertTrue(
             any(
-                row["event_second"] == 1771027345 and row["du_id"] == "1081"
+                row.event_second == 1771027345 and row.du_id == "1081"
                 for row in rows
             )
         )
@@ -203,11 +182,11 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
 
         event_rows, du_rows = st.build_window_averages(records, per_second, 2)
         self.assertEqual(len(event_rows), 1)
-        self.assertEqual(event_rows[0]["event_count"], 3)
-        self.assertAlmostEqual(event_rows[0]["avg_event_rate_hz"], 1.5)
+        self.assertEqual(event_rows[0].event_count, 3)
+        self.assertAlmostEqual(event_rows[0].avg_event_rate_hz, 1.5)
         self.assertTrue(
             any(
-                row["du_id"] == "1081" and row["trigger_count"] == 2
+                row.du_id == "1081" and row.trigger_count == 2
                 for row in du_rows
             )
         )
@@ -215,9 +194,9 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
         total_rows = st.build_total_du_trigger_per_second_rows(per_second)
         avg_total_rows = st.build_avg_total_du_trigger_rows(total_rows, 2)
         self.assertEqual(len(avg_total_rows), 1)
-        self.assertEqual(avg_total_rows[0]["total_du_trigger_count"], 5)
+        self.assertEqual(avg_total_rows[0].total_du_trigger_count, 5)
         self.assertAlmostEqual(
-            avg_total_rows[0]["avg_total_du_trigger_rate_hz"],
+            avg_total_rows[0].avg_total_du_trigger_rate_hz,
             2.5,
         )
 
@@ -453,8 +432,8 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
             loaded_du_ids_map = st.read_event_csv_du_ids(csv_path)
 
         self.assertEqual(
-            loaded_du_ids_map[str(records[0]["event_number"])],
-            event_du_ids_map[str(records[0]["event_number"])],
+                loaded_du_ids_map[str(records[0].event_number)],
+                event_du_ids_map[str(records[0].event_number)],
         )
 
     def test_adjacent_delta_plot_edge_branches(self) -> None:
@@ -772,7 +751,77 @@ class TestStatsTriggerYamlUnit(unittest.TestCase):
             ):
                 self.assertEqual(st.main(), 2)
 
-    def test_main_module_entrypoint(self) -> None:
+    def test_make_named_row_unknown_fields(self) -> None:
+        """Should raise ValueError for unknown field schema."""
+        with self.assertRaises(ValueError):
+            st.make_named_row(("unknown", "fields"), foo=1)
+
+    def test_read_event_cache_meta_non_dict(self) -> None:
+        """Should raise ValueError if meta JSON is not a dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_meta.json"
+            path.write_text("[1, 2, 3]", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                st.read_event_cache_meta(path)
+
+    def test_event_cache_meta_is_valid_signature_mismatch(self) -> None:
+        """Should return False if yaml signature mismatch."""
+        cached = {"schema_version": 1, "yaml": "sig1"}
+        expected = {"schema_version": 1, "yaml": "sigX"}
+        valid, reason = st.event_cache_meta_is_valid(cached, expected)
+        self.assertFalse(valid)
+        self.assertIn("yaml signature mismatch", reason)
+
+    def test_parse_payload_datetime_covers_scommon(self) -> None:
+        """Should call scommon.parse_payload_datetime."""
+        payload = {"datetime": "2026-01-01T00:00:00"}
+        dt = st.parse_payload_datetime(payload)
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.year, 2026)
+
+    def test_read_event_csv_skips_invalid_rows(self) -> None:
+        """Cache reader should skip bad rows and keep valid ones."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "bad_event_rows.csv"
+            csv_path.write_text(
+                "event_number,event_second,du_count,event_datetime\n"
+                "28862,1771027344,2,2026-02-14T00:02:24\n"
+                "28863,bad,2,2026-02-14T00:02:25\n",
+                encoding="utf-8",
+            )
+
+            rows = st.read_event_csv(csv_path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].event_number, 28862)
+
+    def test_get_second_datetime_none_map(self) -> None:
+        """Should return empty string if map is None."""
+        self.assertEqual(st.get_second_datetime(1, None), "")
+
+    def test_parse_event_datetime_empty_or_bad(self) -> None:
+        """Should return empty string for empty or invalid datetime text."""
+        self.assertEqual(st.parse_event_datetime({}), "")
+        self.assertEqual(st.parse_event_datetime({"datetime": "bad"}), "")
+
+    def test_main_cache_read_error_fallback(self) -> None:
+        """Main should fallback to recompute if cache reading raises Exception."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            yaml_path = root / "input.yaml"
+            yaml_path.write_text(yaml.safe_dump(make_new_format_data()), encoding="utf-8")
+            
+            # Write broken caches
+            output_paths = st.build_output_paths(yaml_path)
+            output_paths["event_csv"].write_text("bad,header\n1,2", encoding="utf-8")
+            
+            # Write valid meta to pass signature check
+            meta = st.build_event_cache_meta(yaml_path, None, None)
+            st.write_event_cache_meta(st.event_cache_meta_path(output_paths["event_csv"]), meta)
+
+            with mock.patch("sys.argv", ["stats_trigger.py", str(yaml_path), "--no-plot"]):
+                with self.assertRaises(SystemExit) as ctx:
+                    runpy.run_path(str(Path(st.__file__)), run_name="__main__")
+            self.assertEqual(ctx.exception.code, 0)
         """Cover __main__ SystemExit path."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

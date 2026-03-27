@@ -12,10 +12,21 @@ import scienceplots
 from matplotlib.markers import MarkerStyle
 plt.style.use(['science', 'notebook', 'grid'])
 
-from .utils import gps_to_utc
+from datetime import datetime
+from .utils import calculate_azimuth, calculate_zenith
 from .io import filter_and_write_to_file
 from pathlib import Path
 from logger_config import logger
+
+
+def _ensure_datetime(val):
+    """Helper to ensure a value is a datetime object if it is an ISO string."""
+    if isinstance(val, str):
+        try:
+            return datetime.fromisoformat(val)
+        except ValueError:
+            return val
+    return val
 
 
 def plot_histograms(time_wrt1023, fig_name):
@@ -96,14 +107,14 @@ def plot_du_frequencies(du_ids, fig_prefix):
 
 
 
-def plot_fitting_parameters_PWM(gps_times, directions, chi_squares, model_name, save_name):
+def plot_fitting_parameters_PWM(datetimes, directions, chi_squares, model_name, save_name):
     """
     Plot fitting parameters varying over time: zenith angle, azimuth angle, and chi-square values.
-    - gps_times: List of GPS times (seconds)
+    - datetimes: Dict of datetime strings or objects
     - directions: List of direction vectors for each event (Nx3)
     - chi_squares: Chi-square values for each event
     """
-    utc_times = [gps_to_utc(time) for time in gps_times.values()]
+    utc_times = [_ensure_datetime(time) for time in datetimes.values()]
     process_chi = np.array(list(chi_squares.values()))
     directions = np.array(list(directions.values()))
 
@@ -148,14 +159,14 @@ def plot_fitting_parameters_PWM(gps_times, directions, chi_squares, model_name, 
     plt.savefig(f'{save_name}_overtime.png')
 
 
-def plot_fitting_parameters_SWM(gps_times, directions, chi_squares, model_name, save_name):
+def plot_fitting_parameters_SWM(datetimes, directions, chi_squares, model_name, save_name):
     """
     Plot fitting parameters varying over time: zenith angle, azimuth angle, and chi-square values.
-    - gps_times: List of GPS times (seconds)
+    - datetimes: Dict of datetime strings or objects
     - directions: List of direction vectors for each event (Nx3)
     - chi_squares: Chi-square values for each event
     """
-    utc_times = [gps_to_utc(time) for time in gps_times.values()]
+    utc_times = [_ensure_datetime(time) for time in datetimes.values()]
     process_chi = np.array(list(chi_squares.values()))
     directions = np.array(list(directions.values()))
 
@@ -204,7 +215,7 @@ def plot_fitting_parameters_SWM(gps_times, directions, chi_squares, model_name, 
     plt.savefig(f'{save_name}_overtime.png')
 
 
-def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_name):
+def plot_reconstructed_positions_PWM(datetimes, directions, chi_squares, save_name):
     """
     Plot visualization combination chart of reconstructed signal source direction/position over time:
       - Top left: 3D direction scatter plot (color represents time)
@@ -213,7 +224,7 @@ def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_na
       - Bottom right: Chi-square distribution (log scale)
 
     Parameters:
-      - reconstructed_positions: List, each item is (direction_vector, gps_time)
+      - datetimes: Dict of datetime strings or objects
       - chi_squares: Array of chi-square values for each event
       - save_name: Save prefix name
       - output_file: File path for writing filtered results (optional)
@@ -225,9 +236,16 @@ def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_na
         logger.warning(f"Warning: directions array is empty, unable to calculate zenith angle.")
         return
 
-    # Convert GPS time to UTC (for colorbar labels)
-    gps_times = np.array(list(gps_times.values()))
-    utc_times = [gps_to_utc(time) for time in gps_times]
+    # Convert datetimes to UTC objects and numeric timestamps for coloring
+    utc_times = [_ensure_datetime(time) for time in datetimes.values()]
+    numeric_times = []
+    for dt in utc_times:
+        if hasattr(dt, 'timestamp'):
+            numeric_times.append(dt.timestamp())
+        else:
+            numeric_times.append(0)
+    numeric_times = np.array(numeric_times)
+    
     directions = np.array(list(directions.values()))
     chi_squares = np.array(list(chi_squares.values()))
 
@@ -246,7 +264,7 @@ def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_na
 
     # Top right subplot: Draw different projections based on whether SWM (XY or XZ)
     ax2 = fig.add_subplot(232)
-    sc2 = ax2.scatter(directions[:, 0], directions[:, 1], s=0.65, c=gps_times, cmap='viridis')
+    sc2 = ax2.scatter(directions[:, 0], directions[:, 1], s=0.65, c=numeric_times, cmap='viridis')
     ax2.set_xlabel(r'D_X', fontsize=20)
     ax2.tick_params(axis='both', labelsize=20)
     ax2.set_ylabel(r'D_Y', fontsize=20)
@@ -257,7 +275,7 @@ def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_na
 
     # 3D scatter plot (top left): Color represents time
     ax3 = fig.add_subplot(233, projection='3d')
-    sc3 = ax3.scatter(directions[:, 0], directions[:, 1], directions[:, 2], s=0.45, c=gps_times, cmap='viridis')
+    sc3 = ax3.scatter(directions[:, 0], directions[:, 1], directions[:, 2], s=0.45, c=numeric_times, cmap='viridis')
     ax3.tick_params(axis='both', labelsize=20)
     ax3.set_xlabel(r'D_X', fontsize=22)
     ax3.set_ylabel(r'D_Y', fontsize=22)
@@ -276,7 +294,7 @@ def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_na
 
     # Bottom left: Polar coordinate plot (azimuth vs zenith angle)
     ax5 = fig.add_subplot(235, projection='polar')
-    sc5 = ax5.scatter(np.deg2rad(azimuth_angles), zenith_angles, s=0.65, c=gps_times, cmap='viridis')
+    sc5 = ax5.scatter(np.deg2rad(azimuth_angles), zenith_angles, s=0.65, c=numeric_times, cmap='viridis')
     ax5.set_theta_zero_location('N')
     ax5.set_xticks(np.deg2rad([0, 315, 270, 225, 180, 135, 90, 45]))
     ax5.set_xticklabels(['N', '315°', 'E', '225°', 'S', '135°', 'W', '45°'], fontsize=22)
@@ -302,7 +320,7 @@ def plot_reconstructed_positions_PWM(gps_times, directions, chi_squares, save_na
 
 
 
-def plot_reconstructed_positions_SWM(gps_times, directions, chi_squares, save_name):
+def plot_reconstructed_positions_SWM(datetimes, directions, chi_squares, save_name):
     """
     Plot visualization combination chart of reconstructed signal source direction/position over time:
       - Top left: 3D direction scatter plot (color represents time)
@@ -311,7 +329,7 @@ def plot_reconstructed_positions_SWM(gps_times, directions, chi_squares, save_na
       - Bottom right: Chi-square distribution (log scale)
 
     Parameters:
-      - reconstructed_positions: List, each item is (direction_vector, gps_time)
+      - datetimes: Dict of datetime strings or objects
       - chi_squares: Array of chi-square values for each event
       - save_name: Save prefix name
       - output_file: File path for writing filtered results (optional)
@@ -323,9 +341,16 @@ def plot_reconstructed_positions_SWM(gps_times, directions, chi_squares, save_na
         logger.warning(f"Warning: directions array is empty, unable to calculate zenith angle.")
         return
 
-    # Convert GPS time to UTC (for colorbar labels)
-    gps_times = np.array(list(gps_times.values()))
-    utc_times = [gps_to_utc(time) for time in gps_times]
+    # Convert datetimes to UTC objects and numeric timestamps for coloring
+    utc_times = [_ensure_datetime(time) for time in datetimes.values()]
+    numeric_times = []
+    for dt in utc_times:
+        if hasattr(dt, 'timestamp'):
+            numeric_times.append(dt.timestamp())
+        else:
+            numeric_times.append(0)
+    numeric_times = np.array(numeric_times)
+
     directions = np.array(list(directions.values()))
     chi_squares = np.array(list(chi_squares.values()))
 
@@ -347,7 +372,7 @@ def plot_reconstructed_positions_SWM(gps_times, directions, chi_squares, save_na
     
     # Top right subplot: Draw different projections based on whether SWM (XY or XZ)
     ax4 = fig.add_subplot(234)
-    sc4 = ax4.scatter(directions[:, 0] / 1e3, directions[:, 2] / 1e3, s=0.65, c=gps_times, cmap='viridis')
+    sc4 = ax4.scatter(directions[:, 0] / 1e3, directions[:, 2] / 1e3, s=0.65, c=numeric_times, cmap='viridis')
     ax4.set_xlabel(r'Position X (km)', fontsize=20)
     ax4.set_ylabel(r'Position Z (km)', fontsize=20)
     ax4.tick_params(axis='both', labelsize=20)
@@ -361,7 +386,7 @@ def plot_reconstructed_positions_SWM(gps_times, directions, chi_squares, save_na
     
     # Top right subplot: Draw different projections based on whether SWM (XY or XZ)
     ax5 = fig.add_subplot(235)
-    sc5 = ax5.scatter(directions[:, 1] / 1e3, directions[:, 2] / 1e3, s=0.65, c=gps_times, cmap='viridis')
+    sc5 = ax5.scatter(directions[:, 1] / 1e3, directions[:, 2] / 1e3, s=0.65, c=numeric_times, cmap='viridis')
     ax5.set_xlabel(r'Position Y (km)', fontsize=20)
     ax5.set_ylabel(r'Position Z (km)', fontsize=20)
     ax5.tick_params(axis='both', labelsize=20)
@@ -387,7 +412,7 @@ def plot_reconstructed_positions_SWM(gps_times, directions, chi_squares, save_na
     plt.savefig(f'{save_name}_rec.png')
 
 
-def plot_detector_positions(detector_positions, current_du_ids, times, chi_square, index, azimuth, zenith, model_name, save_name, gps_time, output_dir):
+def plot_detector_positions(detector_positions, current_du_ids, times, chi_square, index, azimuth, zenith, model_name, save_name, event_datetime, output_dir):
     """Plot detector positions for a single SWM event and save the figure.
 
     Parameters:
@@ -398,7 +423,7 @@ def plot_detector_positions(detector_positions, current_du_ids, times, chi_squar
       - index: event index
       - azimuth, zenith: floats
       - save_name: base name used previously
-      - gps_time: gps time used to produce UTC label
+      - event_datetime: datetime string or object used to produce label
       - output_dir: optional dir to save the image into; if provided it will be created
 
     Returns the saved file path (str) on success, or None on failure.
@@ -436,7 +461,7 @@ def plot_detector_positions(detector_positions, current_du_ids, times, chi_squar
     arrow_dy = arrow_length * np.cos(np.deg2rad(azimuth))
     ax.arrow(0, 0, arrow_dx, arrow_dy, head_width=100, head_length=100, fc='red', ec='red', label=f'Azimuth {azimuth:.1f}°;Zenith {zenith:.1f}°')
 
-    event_time = gps_to_utc(gps_time)
+    event_time = _ensure_datetime(event_datetime)
     ax.set_xlabel('W-E [m]')#, fontsize=12)
     ax.set_ylabel('S-N [m]')#, fontsize=12)
     ax.set_title(rf'{model_name}: DU Positions for Event {index} ( A {azimuth:.1f}°, Z {zenith:.1f}°), $\chi^2$={chi_square:.2f} at {event_time}')#, fontsize=12)
@@ -463,7 +488,7 @@ def plot_detector_positions(detector_positions, current_du_ids, times, chi_squar
 
 
 
-def plot_detector_positions_with_signal(detector_positions, current_du_ids, times, signal_amps, chi_square, index, azimuth, zenith, model_name, save_name, gps_time, output_dir=None):
+def plot_detector_positions_with_signal(detector_positions, current_du_ids, times, signal_amps, chi_square, index, azimuth, zenith, model_name, save_name, event_datetime, output_dir=None):
     """
     Plot detector positions for the deep-seek SWM event and save the figure.
 
@@ -476,7 +501,7 @@ def plot_detector_positions_with_signal(detector_positions, current_du_ids, time
       - index: event index
       - azimuth, zenith: floats
       - save_name: base name used for saving files
-      - gps_time: GPS time for title
+      - event_datetime: datetime string or object for title
       - output_dir: optional directory to save into
       - cmap: colormap
 
@@ -530,7 +555,7 @@ def plot_detector_positions_with_signal(detector_positions, current_du_ids, time
     arrow_dy = arrow_length * np.cos(np.deg2rad(azimuth))
     ax.arrow(0, 0, arrow_dx, arrow_dy, head_width=100, head_length=100, fc='red', ec='red', label=f'Azimuth {azimuth:.1f}°;Zenith {zenith:.1f}°')
 
-    event_time = gps_to_utc(gps_time)
+    event_time = _ensure_datetime(event_datetime)
     ax.set_xlabel('W-E [m]')#, fontsize=12)
     ax.set_ylabel('S-N [m]')#, fontsize=12)
     ax.set_title(rf'{model_name}: DU Positions for Event {index} ( A {azimuth:.1f}°, Z {zenith:.1f}°), $\chi^2$={chi_square:.2f} at {event_time}')#, fontsize=12)
@@ -568,9 +593,6 @@ def plot_signal_fit_with_signal(save_name: str, index: int, x_data, y_data, det_
 
         def linear(x, m, b):
             return m * x + b
-
-        def gauss(x, a, x0, sigma):
-            return a * np.exp(-(x - x0) ** 2 / (2 * sigma ** 2))
 
         x = np.asarray(x_data)
         y = np.asarray(y_data)

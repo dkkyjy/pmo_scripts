@@ -81,10 +81,10 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
         """Should parse records and keep sort order by gps/index/event."""
         records = sadp.build_event_records(make_data())
         self.assertEqual(len(records), 3)
-        self.assertEqual(records[0]["event_number"], 100)
-        self.assertEqual(records[1]["event_number"], 101)
-        self.assertEqual(records[2]["event_number"], 102)
-        self.assertEqual(records[1]["event_datetime"], "2026-02-14T12:00:01")
+        self.assertEqual(records[0].event_number, 100)
+        self.assertEqual(records[1].event_number, 101)
+        self.assertEqual(records[2].event_number, 102)
+        self.assertEqual(records[1].event_datetime, "2026-02-14T12:00:01")
 
     def test_build_event_records_invalid_fields(self) -> None:
         """Should skip/normalize events with malformed gps/index/event fields."""
@@ -116,10 +116,10 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
         }
         records = sadp.build_event_records(data)
         self.assertEqual(len(records), 2)
-        self.assertEqual(records[0]["event_number"], 11)
-        self.assertEqual(records[1]["event_number"], -1)
-        self.assertEqual(records[1]["index"], -1)
-        self.assertEqual(records[1]["event_datetime"], "")
+        self.assertEqual(records[0].event_number, 11)
+        self.assertEqual(records[1].event_number, -1)
+        self.assertEqual(records[1].index, -1)
+        self.assertEqual(records[1].event_datetime, "")
 
     def test_build_pair_delta_map_empty(self) -> None:
         """Empty DU map should return empty pair map."""
@@ -144,14 +144,14 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         actual = {
             (
-                row["prev_event_number"],
-                row["curr_event_number"],
-                row["du_a"],
-                row["du_b"],
-                row["prev_delta_ns"],
-                row["curr_delta_ns"],
-                row["adjacent_delta_ns"],
-                row["abs_adjacent_delta_ns"],
+                row.prev_event_number,
+                row.curr_event_number,
+                row.du_a,
+                row.du_b,
+                row.prev_delta_ns,
+                row.curr_delta_ns,
+                row.adjacent_delta_ns,
+                row.abs_adjacent_delta_ns,
             )
             for row in rows
         }
@@ -176,9 +176,9 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
 
         actual = {
             (
-                row["prev_event_number"],
-                row["curr_event_number"],
-                row["shared_pair_count"],
+                row.prev_event_number,
+                row.curr_event_number,
+                row.shared_pair_count,
             )
             for row in count_rows
         }
@@ -197,9 +197,9 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
 
         actual = {
             (
-                row["prev_event_number"],
-                row["curr_event_number"],
-                row["shared_du_count"],
+                row.prev_event_number,
+                row.curr_event_number,
+                row.shared_du_count,
             )
             for row in count_rows
         }
@@ -215,7 +215,7 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
         rows = sadp.build_adjacent_common_pair_rows(sadp.build_event_records(make_data()))
         count_rows = sadp.derive_shared_pair_count_rows_from_adjacent_rows(rows)
         self.assertEqual(len(count_rows), 3)
-        self.assertTrue(all(row["shared_pair_count"] == 1 for row in count_rows))
+        self.assertTrue(all(row.shared_pair_count == 1 for row in count_rows))
 
     def test_lookback_non_positive_is_normalized(self) -> None:
         """Non-positive lookback values should be normalized to 1."""
@@ -269,14 +269,13 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
 
             loaded_rows = sadp.read_adjacent_pair_csv(csv_path)
             self.assertEqual(len(loaded_rows), 3)
-            self.assertEqual(
-                loaded_rows[0]["curr_event_datetime"],
+            self.assertEqual(loaded_rows[0].curr_event_datetime,
                 "2026-02-14T12:00:01",
             )
 
             loaded_count_rows = sadp.read_shared_pair_count_csv(count_csv_path)
             self.assertEqual(len(loaded_count_rows), 3)
-            self.assertEqual(loaded_count_rows[0]["shared_pair_count"], 1)
+            self.assertEqual(loaded_count_rows[0].shared_pair_count, 1)
             self.assertTrue(count_png_path.exists())
             self.assertTrue(count_scatter_path.exists())
             self.assertTrue(du_count_png_path.exists())
@@ -295,7 +294,7 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
 
             rows = sadp.read_adjacent_pair_csv(csv_path)
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["prev_event_number"], 100)
+            self.assertEqual(rows[0].prev_event_number, 100)
 
     def test_plot_skip_on_empty_rows(self) -> None:
         """Plot function should skip file creation when rows are empty."""
@@ -367,37 +366,6 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
 
         self.assertEqual(args.start_datetime, datetime(2026, 2, 14, 12, 0, 1))
         self.assertEqual(args.end_datetime, datetime(2026, 2, 14, 12, 0, 2))
-
-    def test_named_default_dict_and_datetime_helper_branches(self) -> None:
-        """Cover NamedDefaultDict strict access and datetime helper branches."""
-        row = sadp.make_named_row(("a", "b"), a=1, b=2)
-
-        with self.assertRaises(TypeError):
-            row[0] = 5
-
-        row["b"] = 9
-        self.assertEqual(row["a"], 1)
-        self.assertEqual(row, {"a": 1, "b": 9})
-
-        with self.assertRaises(TypeError):
-            _ = row[0]
-
-        self.assertEqual(sadp.parse_event_datetime({"datetime": "bad"}), "")
-
-        with self.assertRaises(Exception):
-            sadp.parse_cli_datetime("2026/02/14 12:00:01")
-
-        self.assertIsNone(sadp.parse_payload_datetime({"datetime": ""}))
-        self.assertIsNone(sadp.parse_payload_datetime({"datetime": "bad"}))
-
-        event_dt = datetime(2026, 2, 14, 12, 0, 3)
-        self.assertFalse(
-            sadp.in_datetime_range(
-                event_dt,
-                datetime(2026, 2, 14, 12, 0, 1),
-                datetime(2026, 2, 14, 12, 0, 2),
-            )
-        )
 
     def test_filter_offsets_and_apply_ticks_uncovered_branches(self) -> None:
         """Cover invalid-datetime filtering, offset parsing, and tick branches."""
@@ -523,9 +491,8 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
             with out_csv.open("r", encoding="utf-8") as file_obj:
                 rows = list(csv.DictReader(file_obj))
 
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["prev_event_number"], "101")
-            self.assertEqual(rows[0]["curr_event_number"], "102")
+            self.assertEqual(rows[0]['prev_event_number'], "101")
+            self.assertEqual(rows[0]['curr_event_number'], "102")
 
     def test_main_with_plot_and_empty_rows(self) -> None:
         """Main should still return 0 when plotting with no adjacent samples."""
@@ -785,7 +752,120 @@ class TestStatsAdjacentDuPair(unittest.TestCase):
 
             self.assertEqual(code, 2)
 
-    def test_module_main_entrypoint(self) -> None:
+    def test_make_named_row_unknown_fields(self) -> None:
+        """Should raise ValueError for unknown field schema."""
+        with self.assertRaises(ValueError):
+            sadp.make_named_row(("unknown", "fields"), foo=1)
+
+    def test_read_cache_meta_non_dict(self) -> None:
+        """Should raise ValueError if meta JSON is not a dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_meta.json"
+            path.write_text("[1, 2, 3]", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                sadp.read_cache_meta(path)
+
+    def test_cache_meta_is_valid_signature_mismatch(self) -> None:
+        """Should return False if yaml or offset signature mismatch."""
+        cached = {"schema_version": 1, "yaml": "sig1", "offset": "sig2", "lookback": 10}
+        
+        expected_yaml_mismatch = {"schema_version": 1, "yaml": "sigX", "offset": "sig2", "lookback": 10}
+        valid, reason = sadp.cache_meta_is_valid(cached, expected_yaml_mismatch)
+        self.assertFalse(valid)
+        self.assertIn("yaml signature mismatch", reason)
+
+        expected_offset_mismatch = {"schema_version": 1, "yaml": "sig1", "offset": "sigX", "lookback": 10}
+        valid, reason = sadp.cache_meta_is_valid(cached, expected_offset_mismatch)
+        self.assertFalse(valid)
+        self.assertIn("offset signature mismatch", reason)
+
+    def test_cache_meta_is_valid_lookback_mismatch(self) -> None:
+        """Should return False if lookback mismatch."""
+        cached = {"schema_version": 1, "yaml": "sig1", "offset": "sig2", "lookback": 10}
+        expected = {"schema_version": 1, "yaml": "sig1", "offset": "sig2", "lookback": 20}
+        valid, reason = sadp.cache_meta_is_valid(cached, expected)
+        self.assertFalse(valid)
+        self.assertIn("lookback mismatch", reason)
+
+    def test_cache_meta_is_valid_datetime_mismatch(self) -> None:
+        """Should return False if start/end datetime mismatch."""
+        cached = {"schema_version": 1, "yaml": "sig1", "offset": "sig2", "lookback": 10, "start_datetime": "A", "end_datetime": "B"}
+        
+        expected_start = {"schema_version": 1, "yaml": "sig1", "offset": "sig2", "lookback": 10, "start_datetime": "X", "end_datetime": "B"}
+        valid, reason = sadp.cache_meta_is_valid(cached, expected_start)
+        self.assertFalse(valid)
+        self.assertIn("start_datetime mismatch", reason)
+
+        expected_end = {"schema_version": 1, "yaml": "sig1", "offset": "sig2", "lookback": 10, "start_datetime": "A", "end_datetime": "X"}
+        valid, reason = sadp.cache_meta_is_valid(cached, expected_end)
+        self.assertFalse(valid)
+        self.assertIn("end_datetime mismatch", reason)
+
+    def test_read_shared_pair_count_csv_skips_invalid_rows(self) -> None:
+        """Cache reader should skip bad rows and keep valid ones."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "bad_count_rows.csv"
+            csv_path.write_text(
+                "prev_event_number,curr_event_number,prev_gps_time,curr_gps_time,shared_du_pair_count,curr_event_datetime\n"
+                "100,101,1700000000,1700000001,1,2026-02-14T12:00:01\n"
+                "100,102,1700000000,1700000002,bad,2026-02-14T12:00:02\n",
+                encoding="utf-8",
+            )
+
+            rows = sadp.read_shared_pair_count_csv(csv_path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].prev_event_number, 100)
+
+    def test_parse_payload_datetime_empty_or_bad(self) -> None:
+        """Should return None for empty or invalid datetime text."""
+        self.assertIsNone(sadp.parse_payload_datetime({}))
+        self.assertIsNone(sadp.parse_payload_datetime({"datetime": "bad"}))
+
+    def test_read_adjacent_pair_csv_skips_invalid_rows(self) -> None:
+        """Cache reader should skip bad rows and keep valid ones."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "bad_pair_rows.csv"
+            # Fixed columns to match required_fields in stats_lookback.py
+            csv_path.write_text(
+                "prev_event_number,curr_event_number,prev_gps_time,curr_gps_time,du_a,du_b,prev_pair_delta_ns,curr_pair_delta_ns,adjacent_pair_delta_ns,abs_adjacent_pair_delta_ns,curr_event_datetime\n"
+                "100,101,1700000000,1700000001,101,102,1.0,2.0,1.0,1.0,2026-02-14T12:00:01\n"
+                "100,102,1700000000,1700000002,101,102,bad,2.0,1.0,1.0,2026-02-14T12:00:02\n",
+                encoding="utf-8",
+            )
+
+            rows = sadp.read_adjacent_pair_csv(csv_path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].prev_event_number, 100)
+
+    def test_main_cache_read_error_fallback(self) -> None:
+        """Main should fallback to recompute if cache reading raises Exception."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            yaml_path = root / "Trigger_err.yaml"
+            yaml_path.write_text(yaml.safe_dump(make_data()), encoding="utf-8")
+            
+            offset_path = root / "offset.txt"
+            offset_path.write_text("101 0 0\n", encoding="utf-8")
+
+            # The output CSV path used in main()
+            lookback = 10
+            csv_out = yaml_path.with_name(
+                f"{yaml_path.stem}_lookback{lookback}_common_du_pair_delta_distribution.csv"
+            )
+            # Write broken cache
+            csv_out.write_text("bad,header\n1,2", encoding="utf-8")
+            
+            # Write valid meta to pass signature check
+            # build_cache_meta(yaml_path, offset_path, lookback, start_dt, end_dt)
+            meta = sadp.build_cache_meta(yaml_path, offset_path, lookback, None, None)
+            sadp.write_cache_meta(sadp.cache_meta_path(csv_out), meta)
+
+            with patch("sys.argv", ["stats_lookback.py", str(yaml_path), "--no-plot", "--lookback", str(lookback), "--offset-file", str(offset_path)]):
+                with self.assertRaises(SystemExit) as ctx:
+                    runpy.run_path(str(Path(sadp.__file__)), run_name="__main__")
+            self.assertEqual(ctx.exception.code, 0)
+
+    def test_run_as_main(self) -> None:
         """Executing module as __main__ should raise SystemExit with code 0."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

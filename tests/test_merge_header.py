@@ -93,29 +93,40 @@ class TestMerge(unittest.TestCase):
         merged = merge.merge_event_payload(base, incoming)
         self.assertEqual(merged["time"], {"2001": 456})
 
-    def test_merge_event_payload_time_same_du_multiple_triggers(self) -> None:
-        """Should keep multiple trigger samples when same DU appears in both payloads."""
-        base = {
-            "event_number": 30,
-            "du_id": ["101"],
-            "time": {"101": [100, 101], "102": 200},
-            "signal": {"101": [7, 8], "102": 9},
-        }
-        incoming = {
-            "event_number": 30,
-            "du_id": ["101", "102"],
-            "time": {"101": [102], "102": 201, "103": [300]},
-            "signal": {"101": [10], "102": 11, "103": [12]},
-        }
+    def test_merge_sample_map_concatenates_scalars(self) -> None:
+        """Should concatenate scalars into a list when merging."""
+        base = {"101": 1.0}
+        incoming = {"101": 2.0}
+        merged = merge.merge_sample_map(base, incoming)
+        self.assertEqual(merged["101"], [1.0, 2.0])
 
+    def test_merge_sample_map_concatenates_lists(self) -> None:
+        """Should concatenate lists when merging."""
+        base = {"101": [1.0, 2.0]}
+        incoming = {"101": [3.0, 4.0]}
+        merged = merge.merge_sample_map(base, incoming)
+        self.assertEqual(merged["101"], [1.0, 2.0, 3.0, 4.0])
+
+    def test_merge_event_payload_keeps_existing_non_none(self) -> None:
+        """Should keep existing field value if it's already set and incoming is provided."""
+        base = {"event_number": 50, "custom": "old"}
+        incoming = {"event_number": 50, "custom": "new"}
         merged = merge.merge_event_payload(base, incoming)
+        self.assertEqual(merged["custom"], "old")
 
-        self.assertEqual(merged["time"]["101"], [100, 101, 102])
-        self.assertEqual(merged["time"]["102"], [200, 201])
-        self.assertEqual(merged["time"]["103"], [300])
-        self.assertEqual(merged["signal"]["101"], [7, 8, 10])
-        self.assertEqual(merged["signal"]["102"], [9, 11])
-        self.assertEqual(merged["signal"]["103"], [12])
+    def test_merge_event_payload_sets_if_missing_or_none(self) -> None:
+        """Should set field from incoming if it's missing or None in base."""
+        base = {"event_number": 51, "custom": None}
+        incoming = {"event_number": 51, "custom": "set"}
+        merged = merge.merge_event_payload(base, incoming)
+        self.assertEqual(merged["custom"], "set")
+
+    def test_load_yaml_dict_non_dict(self) -> None:
+        """load_yaml_dict should return empty dict if YAML is not a dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "list.yaml"
+            path.write_text("- item1\n- item2", encoding="utf-8")
+            self.assertEqual(merge.load_yaml_dict(path), {})
 
     def test_merge_event_payload_preserves_file_and_index_values(self) -> None:
         """Should preserve both existing and incoming values for file/index."""

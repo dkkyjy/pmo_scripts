@@ -44,6 +44,7 @@ def _load_event_metadata_map(matching_file):
             "run_number": payload.get("run_number", None),
             "event_number": payload.get("event_number", None),
             "datetime": payload.get("datetime", None),
+            "gps_time": payload.get("gps_time", None),
             "file": payload.get("file", None),
             "index": payload.get("index", None),
         }
@@ -132,6 +133,7 @@ def _new_stage_state():
         "files": {},
         "index": {},
         "datetimes": {},
+        "gps_times": {},
         "azimuths": {},
         "zeniths": {},
         "directions": {},
@@ -221,6 +223,7 @@ def _required_fields_for_stage(stage, with_signal):
         "run_number",
         "event_number",
         "datetime",
+        "gps_time",
         "du_id",
         "file",
         "index",
@@ -360,6 +363,7 @@ def run_matching_stage(
                 state["index"][key] = result.get("index", None)
                 state["run_numbers"][key] = result.get("run_number", None)
                 state["datetimes"][key] = result.get("datetime", None)
+                state["gps_times"][key] = result.get("gps_time", None)
                 state["files"][key] = result.get("file", None)
         else:
             logger.warning(
@@ -387,6 +391,7 @@ def run_matching_stage(
             det_pos_file,
             min_detectors=5,
             speed_of_light_tolerance=1.05,
+            force_recompute=force_recompute,
         )
 
         if len(times) < 1:
@@ -401,6 +406,7 @@ def run_matching_stage(
                 "run_number": meta.get("run_number", None),
                 "event_number": meta.get("event_number", None),
                 "datetime": meta.get("datetime", None),
+                "gps_time": meta.get("gps_time", None),
                 "du_id": du_ids[key],
                 "file": meta.get("file", None),
                 "index": meta.get("index", None),
@@ -421,6 +427,7 @@ def run_matching_stage(
             state["index"][key] = result.get("index", None)
             state["run_numbers"][key] = result.get("run_number", None)
             state["datetimes"][key] = result.get("datetime", None)
+            state["gps_times"][key] = result.get("gps_time", None)
             state["files"][key] = result.get("file", None)
 
     logger.info(f"Number of events after reading and filtering: {len(state['times'])}")
@@ -481,6 +488,7 @@ def run_pwm_stage(
                 state["index"][key] = result.get("index", None)
                 state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
                 state["datetimes"][key] = result.get("datetime", state["datetimes"].get(key, None))
+                state["gps_times"][key] = result.get("gps_time", state["gps_times"].get(key, None))
                 state["files"][key] = result.get("file", state["files"].get(key, matching_file))
                 state["azimuths"][key] = result.get("azimuth", None)
                 state["zeniths"][key] = result.get("zenith", None)
@@ -509,6 +517,7 @@ def run_pwm_stage(
                 "run_number": state["run_numbers"].get(key, None),
                 "event_number": state["event_numbers"].get(key, None),
                 "datetime": state["datetimes"].get(key, None),
+                "gps_time": state["gps_times"].get(key, None),
                 "du_id": state["du_ids"][key],
                 "file": state["files"].get(key, None),
                 "index": state["index"].get(key, None),
@@ -591,6 +600,7 @@ def run_swm_stage(
                 state["index"][key] = result.get("index", None)
                 state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
                 state["datetimes"][key] = result.get("datetime", state["datetimes"].get(key, None))
+                state["gps_times"][key] = result.get("gps_time", state["gps_times"].get(key, None))
                 state["files"][key] = result.get("file", state["files"].get(key, matching_file))
                 state["azimuths"][key] = result.get("azimuth", None)
                 state["zeniths"][key] = result.get("zenith", None)
@@ -622,6 +632,7 @@ def run_swm_stage(
                 "run_number": state["run_numbers"].get(key, None),
                 "event_number": state["event_numbers"].get(key, None),
                 "datetime": state["datetimes"].get(key, None),
+                "gps_time": state["gps_times"].get(key, None),
                 "du_id": state["du_ids"][key],
                 "file": state["files"].get(key, None),
                 "index": state["index"].get(key, None),

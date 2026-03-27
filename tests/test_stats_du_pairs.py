@@ -14,6 +14,7 @@ import numpy as np
 import yaml
 
 import stats.stats_du_pairs as sdn
+import du_pair_theoretical as dpt
 
 
 def make_sample_data() -> dict:
@@ -193,31 +194,30 @@ class TestStatsDuPairs(unittest.TestCase):
         rows = sdn.build_observed_pair_deltas(make_sample_data())
         self.assertEqual(len(rows), 4)
 
-        first_evt_rows = [row for row in rows if row["event_number"] == 100]
+        first_evt_rows = [row for row in rows if row.event_number == 100]
         self.assertEqual(len(first_evt_rows), 3)
-
         pair_101_102 = [
             row
             for row in first_evt_rows
-            if row["du_a"] == "101" and row["du_b"] == "102"
+            if row.du_a == "101" and row.du_b == "102"
         ][0]
-        self.assertEqual(pair_101_102["event_time"], 1771027344)
-        self.assertEqual(pair_101_102["observed_delta_ns"], 15.0)
-        self.assertEqual(pair_101_102["observed_abs_delta_ns"], 15.0)
+        self.assertEqual(pair_101_102.event_time, 1771027344)
+        self.assertEqual(pair_101_102.observed_delta_ns, 15.0)
+        self.assertEqual(pair_101_102.observed_abs_delta_ns, 15.0)
 
     def test_build_observed_pair_deltas_with_offsets(self) -> None:
         """Should apply DU offsets when computing observed pair deltas."""
         offsets = {"101": 2.0, "102": -3.0}
         rows = sdn.build_observed_pair_deltas(make_sample_data(), offsets)
 
-        first_evt_rows = [row for row in rows if row["event_number"] == 100]
+        first_evt_rows = [row for row in rows if row.event_number == 100]
         pair_101_102 = [
             row
             for row in first_evt_rows
-            if row["du_a"] == "101" and row["du_b"] == "102"
+            if row.du_a == "101" and row.du_b == "102"
         ][0]
-        self.assertEqual(pair_101_102["observed_delta_ns"], 20.0)
-        self.assertEqual(pair_101_102["observed_abs_delta_ns"], 20.0)
+        self.assertEqual(pair_101_102.observed_delta_ns, 20.0)
+        self.assertEqual(pair_101_102.observed_abs_delta_ns, 20.0)
 
     def test_load_du_time_offsets(self) -> None:
         """Should parse offsets file and ignore malformed lines/sigma column."""
@@ -355,7 +355,7 @@ class TestStatsDuPairs(unittest.TestCase):
             end_dt,
         )
         self.assertEqual(len(filtered), 1)
-        self.assertEqual(filtered[0]["event_number"], 101)
+        self.assertEqual(filtered[0].event_number, 101)
 
     def test_non_zero_floor_magnitude_fallback(self) -> None:
         """Should return fallback floor when no positive values are present."""
@@ -369,15 +369,15 @@ class TestStatsDuPairs(unittest.TestCase):
             "103": np.array([0.0, 299_792_458.0, 0.0]),
         }
 
-        rows = sdn.build_expected_pair_deltas(detector_positions, ["101", "102"])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["du_a"], "101")
-        self.assertEqual(rows[0]["du_b"], "102")
-        self.assertAlmostEqual(rows[0]["theoretical_delta_ns"], 1e9, places=3)
-
-        rows_all = sdn.build_expected_pair_deltas(detector_positions)
-        self.assertEqual(len(rows_all), 3)
-
+        rows = dpt.build_expected_pair_deltas(detector_positions)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0].du_a, "101")
+        self.assertEqual(rows[0].du_b, "102")
+        self.assertAlmostEqual(rows[0].theoretical_delta_ns, 1e9, places=3)
+        rows_all = dpt.build_expected_pair_deltas(detector_positions)
+        self.assertEqual(rows_all[0].du_a, "101")
+        self.assertEqual(rows_all[0].du_b, "102")
+        self.assertAlmostEqual(rows_all[0].theoretical_delta_ns, 1e9, places=3)
     def test_theoretical_cache_and_distribution_rows(self) -> None:
         """Should persist/reload theoretical cache and join distribution rows."""
         observed_rows = [
@@ -388,10 +388,10 @@ class TestStatsDuPairs(unittest.TestCase):
 
         rows = sdn.build_pair_distribution_rows(observed_rows, expected_rows)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0]["event_number"], 100)
-        self.assertEqual(rows[0]["event_time"], 1771027344)
-        self.assertEqual(rows[0]["theoretical_delta_ns"], 33.0)
-        self.assertEqual(rows[0]["distance_m"], 10.0)
+        self.assertEqual(rows[0].event_number, 100)
+        self.assertEqual(rows[0].event_time, 1771027344)
+        self.assertEqual(rows[0].theoretical_delta_ns, 33.0)
+        self.assertEqual(rows[0].distance_m, 10.0)
 
         rows_no_match = sdn.build_pair_distribution_rows(
             observed_rows,
@@ -404,9 +404,9 @@ class TestStatsDuPairs(unittest.TestCase):
             det_pos_path = root / "det.txt"
             det_pos_path.write_text("101 0 0 0\n", encoding="utf-8")
 
-            cache_path = sdn.theoretical_cache_path(det_pos_path)
-            sdn.write_theoretical_cache(cache_path, expected_rows)
-            loaded = sdn.read_theoretical_cache(cache_path)
+            cache_path = dpt.theoretical_cache_path(det_pos_path)
+            dpt.write_theoretical_cache(cache_path, expected_rows)
+            loaded = dpt.read_theoretical_cache(cache_path)
             self.assertEqual(loaded, expected_rows)
 
     def test_read_cache_csv_skips_invalid_rows(self) -> None:
@@ -421,10 +421,10 @@ class TestStatsDuPairs(unittest.TestCase):
                 writer.writerow(["101", "102", "3.0", "10.0"])
                 writer.writerow(["101", "103", "4.0", "bad"])
 
-            loaded_theoretical = sdn.read_theoretical_cache(theoretical_csv)
+            loaded_theoretical = dpt.read_theoretical_cache(theoretical_csv)
             self.assertEqual(len(loaded_theoretical), 1)
-            self.assertEqual(loaded_theoretical[0]["du_a"], "101")
-            self.assertEqual(loaded_theoretical[0]["du_b"], "102")
+            self.assertEqual(loaded_theoretical[0].du_a, "101")
+            self.assertEqual(loaded_theoretical[0].du_b, "102")
 
             distribution_csv = root / "Trigger_cached_du_pair_delta_distribution.csv"
             with distribution_csv.open("w", newline="", encoding="utf-8") as file_obj:
@@ -448,8 +448,8 @@ class TestStatsDuPairs(unittest.TestCase):
 
             loaded_distribution = sdn.read_pair_distribution_csv(distribution_csv)
             self.assertEqual(len(loaded_distribution), 1)
-            self.assertEqual(loaded_distribution[0]["event_time"], 1771027344)
-            self.assertEqual(loaded_distribution[0]["theoretical_delta_ns"], 8.0)
+            self.assertEqual(loaded_distribution[0].event_time, 1771027344)
+            self.assertEqual(loaded_distribution[0].theoretical_delta_ns, 8.0)
 
     def test_main_fallback_recompute_on_invalid_distribution_cache_schema(self) -> None:
         """Main should fallback to recompute when cache schema is invalid."""
@@ -499,19 +499,21 @@ class TestStatsDuPairs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
 
+            # 空输入测试
             sdn.plot_pair_delta_distribution(root / "pair_empty.png", [])
             sdn.plot_observed_expected_ratio(root / "ratio_empty.png", [])
             sdn.plot_delta_vs_event_time(root / "delta_time_empty.png", [])
             sdn.plot_ratio_vs_event_time(root / "ratio_time_empty.png", [])
 
-            sdn.plot_pair_delta_distribution(
-                root / "pair_obs_only.png",
-                [1.0, 2.0, 3.0],
-            )
+            # 非空输入测试（全部用 namedtuple row）
             rows = [
                 make_distribution_row((100, 1771027344, "101", "102", 9.0, 9.0, 10.0, 3.0, "")),
                 make_distribution_row((100, 1771027345, "101", "103", 18.0, 18.0, 20.0, 6.0, "")),
             ]
+            sdn.plot_pair_delta_distribution(
+                root / "pair_obs_only.png",
+                rows,
+            )
             sdn.plot_observed_expected_ratio(root / "ratio.png", rows)
             sdn.plot_delta_vs_event_time(root / "delta_time.png", rows)
             sdn.plot_ratio_vs_event_time(root / "ratio_time.png", rows)
@@ -533,12 +535,12 @@ class TestStatsDuPairs(unittest.TestCase):
 
         max_ratio_rows = sdn.build_event_max_ratio_rows(rows)
         self.assertEqual(len(max_ratio_rows), 2)
-        self.assertEqual(max_ratio_rows[0]["event_number"], 100)
-        self.assertEqual(max_ratio_rows[0]["event_time"], 1771027344)
-        self.assertEqual(max_ratio_rows[0]["max_observed_theoretical_ratio"], 3.0)
-        self.assertEqual(max_ratio_rows[1]["event_number"], 101)
-        self.assertEqual(max_ratio_rows[1]["event_time"], 1771027345)
-        self.assertEqual(max_ratio_rows[1]["max_observed_theoretical_ratio"], 1.0)
+        self.assertEqual(max_ratio_rows[0].event_number, 100)
+        self.assertEqual(max_ratio_rows[0].event_time, 1771027344)
+        self.assertEqual(max_ratio_rows[0].max_observed_theoretical_ratio, 3.0)
+        self.assertEqual(max_ratio_rows[1].event_number, 101)
+        self.assertEqual(max_ratio_rows[1].event_time, 1771027345)
+        self.assertEqual(max_ratio_rows[1].max_observed_theoretical_ratio, 1.0)
 
     def test_build_event_pair_count_rows(self) -> None:
         """Should aggregate per-event DU-pair counts from pair rows."""
@@ -550,14 +552,14 @@ class TestStatsDuPairs(unittest.TestCase):
 
         count_rows = sdn.build_event_pair_count_rows(rows)
         self.assertEqual(len(count_rows), 2)
-        self.assertEqual(count_rows[0]["event_number"], 100)
-        self.assertEqual(count_rows[0]["event_time"], 1771027344)
-        self.assertEqual(count_rows[0]["pair_count"], 2)
-        self.assertEqual(count_rows[0]["event_datetime"], "T1")
-        self.assertEqual(count_rows[1]["event_number"], 101)
-        self.assertEqual(count_rows[1]["event_time"], 1771027345)
-        self.assertEqual(count_rows[1]["pair_count"], 1)
-        self.assertEqual(count_rows[1]["event_datetime"], "T2")
+        self.assertEqual(count_rows[0].event_number, 100)
+        self.assertEqual(count_rows[0].event_time, 1771027344)
+        self.assertEqual(count_rows[0].pair_count, 2)
+        self.assertEqual(count_rows[0].event_datetime, "T1")
+        self.assertEqual(count_rows[1].event_number, 101)
+        self.assertEqual(count_rows[1].event_time, 1771027345)
+        self.assertEqual(count_rows[1].pair_count, 1)
+        self.assertEqual(count_rows[1].event_datetime, "T2")
 
     def test_plot_event_pair_count_functions(self) -> None:
         """Should cover per-event pair-count plot empty and non-empty paths."""
@@ -1195,15 +1197,75 @@ class TestStatsDuPairs(unittest.TestCase):
             det_pos_path.write_text("101 0 0 0\n102 3 0 0\n", encoding="utf-8")
 
             expected_rows = [make_expected_row(("101", "102", 3.0, 10.0))]
-            cache_path = sdn.theoretical_cache_path(det_pos_path)
-            sdn.write_theoretical_cache(cache_path, expected_rows)
+            cache_path = dpt.theoretical_cache_path(det_pos_path)
+            dpt.write_theoretical_cache(cache_path, expected_rows)
 
-            detector_positions = {
-                "101": np.array([0.0, 0.0, 0.0]),
-                "102": np.array([3.0, 0.0, 0.0]),
-            }
-            loaded = sdn.load_or_build_theoretical_rows(det_pos_path, detector_positions)
+            loaded = sdn.load_or_build_theoretical_rows(det_pos_path)
             self.assertEqual(loaded, expected_rows)
+
+    def test_make_named_row_unknown_fields(self) -> None:
+        """Should raise ValueError for unknown field schema."""
+        with self.assertRaises(ValueError):
+            sdn.make_named_row(("unknown", "fields"), foo=1)
+
+    def test_read_distribution_cache_meta_non_dict(self) -> None:
+        """Should raise ValueError if meta JSON is not a dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_meta.json"
+            path.write_text("[1, 2, 3]", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                sdn.read_distribution_cache_meta(path)
+
+    def test_distribution_cache_meta_is_valid_version_mismatch(self) -> None:
+        """Should return False if schema version mismatch."""
+        cached = {"schema_version": 1}
+        expected = {"schema_version": 2}
+        valid, reason = sdn.distribution_cache_meta_is_valid(cached, expected)
+        self.assertFalse(valid)
+        self.assertIn("version mismatch", reason)
+
+    def test_read_pair_distribution_csv_missing_columns(self) -> None:
+        """Should raise ValueError if CSV missing required columns."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_dist.csv"
+            path.write_text("event_number,event_time\n1,2", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                sdn.read_pair_distribution_csv(path)
+
+    def test_main_cache_read_error_fallback(self) -> None:
+        """Main should fallback to recompute if cache reading raises ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            yaml_path = root / "Trigger_err.yaml"
+            det_path = root / "det.txt"
+            distribution_csv = root / "Trigger_err_du_pair_delta_distribution.csv"
+            distribution_meta = sdn.distribution_meta_path(distribution_csv)
+
+            yaml_path.write_text(yaml.safe_dump(make_sample_data()), encoding="utf-8")
+            det_path.write_text("101 0 0 0\n", encoding="utf-8")
+            
+            # Write a "broken" CSV that will cause ValueError in read_pair_distribution_csv
+            distribution_csv.write_text("bad,header\n1,2", encoding="utf-8")
+            
+            # Valid meta to pass signature check
+            meta = sdn.build_distribution_cache_meta(yaml_path, det_path, root/"offset.txt", None, None)
+            sdn.write_distribution_cache_meta(distribution_meta, meta)
+
+            old_parse_args = sdn.parse_args
+            try:
+                sdn.parse_args = lambda: type("Args", (), {
+                    "yaml_file": str(yaml_path),
+                    "det_pos": str(det_path),
+                    "offset_file": str(root / "offset.txt"),
+                    "no_plot": True,
+                    "force_recompute": False,
+                    "start_datetime": None,
+                    "end_datetime": None,
+                })()
+                exit_code = sdn.main()
+                self.assertEqual(exit_code, 0)
+            finally:
+                sdn.parse_args = old_parse_args
 
     def test_main_module_entrypoint(self) -> None:
         """Should execute __main__ entrypoint and raise SystemExit."""

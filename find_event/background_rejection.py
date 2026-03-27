@@ -1,10 +1,10 @@
 import numpy as np
-from .utils import gps_to_utc, calculate_distance_to_axis, calculate_distance_to_source
-from .plotting import plot_detector_positions, plot_detector_positions_with_signal, plot_signal_fit_with_signal
+from .utils import calculate_distance_to_axis, calculate_distance_to_source
+from .plotting import plot_detector_positions, plot_detector_positions_with_signal, plot_signal_fit_with_signal, _ensure_datetime
 from logger_config import logger
 
 
-def background_reject(detector_positions, current_du_ids_dict, times_dict, signals_dict, chi_square_dict, azimuth_dict, zenith_dict, source_position_dict, gps_time_dict, index_dict, save_name, output_dir, with_signal):
+def background_reject(detector_positions, current_du_ids_dict, times_dict, signals_dict, chi_square_dict, azimuth_dict, zenith_dict, source_position_dict, datetime_dict, index_dict, save_name, output_dir, with_signal):
     du_ids_filtered = {}
     times_filtered = {}
     signals_filtered = {}
@@ -12,7 +12,7 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
     azimuths_filtered = {}
     zeniths_filtered = {}
     source_directions_filtered = {}
-    gps_time_filtered = {}
+    datetime_filtered = {}
     for i, key in enumerate(times_dict.keys()):
         current_du_ids = current_du_ids_dict[key]
         times = times_dict[key]
@@ -21,7 +21,7 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
         azimuth = azimuth_dict[key]
         zenith = zenith_dict[key]
         source_position = source_position_dict[key]
-        gps_time = gps_time_dict[key]
+        event_datetime = datetime_dict[key]
         index = index_dict[key]
         if (chi_square < 5e2 and 50 < zenith < 85 and ( (abs(source_position[2]/1e3 - 9) > 1.5 and 40 <= azimuth <= 225) or (azimuth < 40 or azimuth > 225)) ):
             du_ids_filtered[key] = current_du_ids
@@ -31,7 +31,7 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
             azimuths_filtered[key] = azimuth
             zeniths_filtered[key] = zenith
             source_directions_filtered[key] = source_position
-            gps_time_filtered[key] = gps_time
+            datetime_filtered[key] = event_datetime
             
             logger.info(f"Event {index} with zenith {zenith:.2f} and azimuth {azimuth:.2f} satisfies the condition.")
             # Delegate plotting to helper in plotting.py
@@ -51,7 +51,7 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
                         zenith,
                         'SWM',
                         save_name,
-                        gps_time,
+                        event_datetime,
                         output_dir=None,
                     )
                     if saved:
@@ -67,7 +67,7 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
                 x_data = []
                 y_data = []
                 det_labels = []
-                event_time = gps_to_utc(gps_time)
+                event_time = _ensure_datetime(event_datetime)
                 for det_id in current_du_ids:
                     if det_id in distances_to_source and det_id in signals:
                         x_data.append(distances_to_source[det_id])
@@ -92,7 +92,7 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
                         zenith,
                         'SWM',
                         save_name,
-                        gps_time,
+                        event_datetime,
                         output_dir=None,
                     )
                     if saved:
@@ -102,4 +102,4 @@ def background_reject(detector_positions, current_du_ids_dict, times_dict, signa
         else:
             logger.info(f"Event {index} with zenith {zenith:.2f} and azimuth {azimuth:.2f} rejected by background criteria.")
             continue
-    return du_ids_filtered, times_filtered, signals_filtered, chi_squares_filtered, azimuths_filtered, zeniths_filtered, source_directions_filtered, gps_time_filtered
+    return du_ids_filtered, times_filtered, signals_filtered, chi_squares_filtered, azimuths_filtered, zeniths_filtered, source_directions_filtered, datetime_filtered

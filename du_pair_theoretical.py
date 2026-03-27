@@ -129,22 +129,49 @@ def read_theoretical_cache(path: Path) -> List[ExpectedPairDelta]:
 
 def load_or_build_theoretical_rows(
     det_pos_path: Path,
+    force_recompute: bool = False,
 ) -> List[ExpectedPairDelta]:
     """Load shared theoretical cache if exists; otherwise build and persist."""
     cache_path = theoretical_cache_path(det_pos_path)
-    if cache_path.exists():
+    if not force_recompute and cache_path.exists():
         logger.info("Using theoretical DU-pair cache: {}", cache_path)
         return read_theoretical_cache(cache_path)
 
+    if force_recompute and cache_path.exists():
+        logger.info("Force recompute enabled, ignoring cache: {}", cache_path)
+
+    logger.info("Loaded detector positions from: {}", det_pos_path)
     detector_positions = load_data_from_file(det_pos_path)
+    logger.info(f"Loaded {len(detector_positions)} detector positions")
     rows = build_expected_pair_deltas(detector_positions)
     write_theoretical_cache(cache_path, rows)
     logger.info("Wrote theoretical DU-pair cache: {}", cache_path)
     return rows
 
 
+def parse_args():
+    """Parse command line arguments."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Build theoretical DU-pair deltas from geometry."
+    )
+    parser.add_argument(
+        "det_pos",
+        type=str,
+        nargs="?",
+        default="_gp65_rtksort.txt",
+        help="Path to detector positions file (default: _gp65_rtksort.txt)",
+    )
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="Force recompute theoretical deltas even if cache exists.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":  # pragma: no cover
-    det_pos_path = Path("_gp65_rtksort.txt")
-    rows = load_or_build_theoretical_rows(det_pos_path)
-    for row in rows[:5]:
-        logger.info("Example theoretical DU-pair delta: {}", row)
+    args = parse_args()
+    det_pos_path = Path(args.det_pos)
+    rows = load_or_build_theoretical_rows(det_pos_path, force_recompute=args.force_recompute)

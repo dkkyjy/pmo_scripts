@@ -29,7 +29,7 @@ def check_causality_strict(t1, t2, dist, c_ns=C_LIGHT_NS):
     return is_safe, ratio
 
 
-def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, min_detectors=4, speed_of_light_tolerance=1.05):
+def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, min_detectors=4, speed_of_light_tolerance=1.05, force_recompute=False):
     """
     步骤1: 因果律清洗
     返回格式: (times, signals, du_ids), 与 matching_times.py 一致
@@ -37,9 +37,14 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
     matching_times = {}
 
     logger.debug("=== 初始化阶段 ===")
-    rows = load_or_build_theoretical_rows(Path(det_pos_path))
+    rows = load_or_build_theoretical_rows(Path(det_pos_path), force_recompute=force_recompute)
     dist_map = {(row.du_a, row.du_b): row.distance_m for row in rows}
     logger.debug(f"✅ 完成距离表加载，共缓存 {len(dist_map)} 组探测器对距离")
+
+    def get_dist(id1, id2):
+        """Symmetric distance lookup."""
+        k = tuple(sorted((id1, id2)))
+        return dist_map.get(k)
 
     total_lines = 0
     valid_events = 0
@@ -79,7 +84,7 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                 du_j, time_j, _ = nodes[j]
                 if du_i == du_j:
                     continue
-                dist = dist_map.get((du_i, du_j))
+                dist = get_dist(du_i, du_j)
                 if dist is None:
                     logger.warning(f"   ⚠️  无探测器对 {du_i}-{du_j} 距离数据，跳过")
                     continue
@@ -131,8 +136,8 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                     du_o, time_o, _ = nodes[other]
                     if du_n == du_o:
                         continue
-                    dist = dist_map.get((du_n, du_o), 0.0)
-                    if dist == 0:
+                    dist = get_dist(du_n, du_o)
+                    if dist is None or dist == 0:
                         continue
                     safe, ratio = check_causality_strict(time_n, time_o, dist)
                     if not safe:
@@ -170,7 +175,9 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                     logger.warning(f"   ⚠️  最终团内出现同探测器 {d1}，标记为不安全")
                     is_final_safe = False
                     break
-                dist = dist_map.get((d1, d2), 0)
+                dist = get_dist(d1, d2)
+                if dist is None:
+                    dist = 0
                 safe, ratio = check_causality_strict(t1, t2, dist)
                 if not safe:
                     logger.debug(f"   ❌ 最终团内违规: 节点{n1}({d1}) ↔ 节点{n2}({d2}) | ratio={ratio:.4f}")
