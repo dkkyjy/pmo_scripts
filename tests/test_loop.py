@@ -166,6 +166,7 @@ def test_make_tasks_for_file_paths() -> None:
         run_matching=True,
         run_pwm=False,
         run_swm=True,
+        force_recompute=False,
     )
     tasks = loop.make_tasks_for_file_paths(["a.root", "b.root"], "2025/11/27", args)
     assert len(tasks) == 2
@@ -202,6 +203,7 @@ def test_build_tasks_uses_date_iterator_and_file_list(monkeypatch: pytest.Monkey
         run_pwm=False,
         run_swm=False,
         base_path="/base",
+        force_recompute=False,
     )
 
     tasks = loop.build_tasks(d1, d2, args)
@@ -214,8 +216,8 @@ def test_execute_tasks_sequential(monkeypatch: pytest.MonkeyPatch) -> None:
     """execute_tasks(jobs<=1) should call process_date sequentially."""
     monkeypatch.setattr(loop, "process_date", lambda task: (task.file_path, 0))
     tasks = [
-        loop.TaskSpec("a", "d", "o", False, False, False, False, 0, 512, "X", False, False, False),
-        loop.TaskSpec("b", "d", "o", False, False, False, False, 0, 512, "X", False, False, False),
+        loop.TaskSpec("a", "d", "o", False, False, False, False, 0, 512, "X", False, False, False, False),
+        loop.TaskSpec("b", "d", "o", False, False, False, False, 0, 512, "X", False, False, False, False),
     ]
     res = loop.execute_tasks(tasks, jobs=1)
     assert res == [("a", 0), ("b", 0)]
@@ -243,8 +245,8 @@ def test_execute_tasks_parallel_uses_pool(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(loop, "process_date", lambda task: (task.file_path, 0))
 
     tasks = [
-        loop.TaskSpec("a", "d", "o", False, False, False, False, 0, 512, "X", False, False, False),
-        loop.TaskSpec("b", "d", "o", False, False, False, False, 0, 512, "X", False, False, False),
+        loop.TaskSpec("a", "d", "o", False, False, False, False, 0, 512, "X", False, False, False, False),
+        loop.TaskSpec("b", "d", "o", False, False, False, False, 0, 512, "X", False, False, False, False),
     ]
 
     assert loop.execute_tasks(tasks, jobs=3) == [("a", 0), ("b", 0)]
@@ -405,7 +407,7 @@ def test_process_date_skip_and_only_read_no_subprocess(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", False, True, True, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", False, True, True, False, 0, 512, "X", False, False, False, False)
     result = loop.process_date(task)
 
     assert result == ("/tmp/a.root", 0)
@@ -426,7 +428,7 @@ def test_process_date_with_signal_readtrace_failure(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, True, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, True, 0, 512, "X", False, False, False, False)
     result = loop.process_date(task)
     assert result == ("/tmp/a.root", 9)
     assert called == ["readroot/read_trace.py"]
@@ -442,7 +444,7 @@ def test_process_date_with_signal_readtrace_missing_executable(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, True, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, True, 0, 512, "X", False, False, False, False)
     assert loop.process_date(task) == ("/tmp/a.root", 2)
 
 
@@ -460,7 +462,7 @@ def test_process_date_readheader_failure_returns_early(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False, False)
     result = loop.process_date(task)
 
     assert result == ("/tmp/a.root", 7)
@@ -477,7 +479,7 @@ def test_process_date_readheader_missing_executable_returns_2(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False, False)
     assert loop.process_date(task) == ("/tmp/a.root", 2)
 
 
@@ -495,7 +497,7 @@ def test_process_date_success_calls_pdf_merge(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(loop, "merge_images_to_pdf", fake_merge)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False, False)
     result = loop.process_date(task)
 
     assert result == ("/tmp/a.root", 0)
@@ -514,7 +516,7 @@ def test_process_date_main_failure_returns_nonzero(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False, False)
     assert loop.process_date(task) == ("/tmp/a.root", 5)
 
 
@@ -530,7 +532,7 @@ def test_process_date_main_missing_executable_returns_2(
 
     monkeypatch.setattr(loop.subprocess, "run", fake_run)
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False, False)
     assert loop.process_date(task) == ("/tmp/a.root", 2)
 
 
@@ -547,7 +549,7 @@ def test_process_date_pdf_merge_exception_is_swallowed(
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("pdf failed")),
     )
 
-    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False)
+    task = loop.TaskSpec("/tmp/a.root", "2025/11/27", "Reco", True, False, False, False, 0, 512, "X", False, False, False, False)
     assert loop.process_date(task) == ("/tmp/a.root", 0)
 
 
@@ -583,8 +585,8 @@ def test_main_returns_2_on_any_failed_task(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         loop, "build_tasks",
         lambda *_a, **_k: [
-            loop.TaskSpec("f1", "d", "o", False, False, False, False, 0, 512, "X", False, True, False),
-            loop.TaskSpec("f2", "d", "o", False, False, False, False, 0, 512, "X", False, True, False),
+            loop.TaskSpec("f1", "d", "o", False, False, False, False, 0, 512, "X", False, True, False, False),
+            loop.TaskSpec("f2", "d", "o", False, False, False, False, 0, 512, "X", False, True, False, False),
         ],
     )
     monkeypatch.setattr(loop, "execute_tasks", lambda *_a, **_k: [("f1", 1)])
@@ -632,6 +634,22 @@ def test_main_rejects_negative_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc.value.code == 2
 
 
+def test_make_main_command_force_recompute() -> None:
+    """make_main_command should include --force-recompute when requested."""
+    cmd = loop.make_main_command(
+        "/path/to/main.py",
+        "2026-01-01",
+        "/path/to/reco",
+        True,
+        True,
+        True,
+        True,
+        "X",
+        True,
+    )
+    assert "--force-recompute" in cmd
+
+
 def test_main_rejects_start_after_end(monkeypatch: pytest.MonkeyPatch) -> None:
     """main should reject a start time that is later than end time."""
     monkeypatch.setattr(
@@ -648,6 +666,21 @@ def test_main_rejects_start_after_end(monkeypatch: pytest.MonkeyPatch) -> None:
         loop.main()
 
     assert exc.value.code == 2
+
+
+def test_merge_images_to_pdf_relative_to_failure(monkeypatch, tmp_path) -> None:
+    """When base_path is not relative to search_root, relative_to should fail and fallback."""
+    monkeypatch.setattr(loop, "PIL_AVAILABLE", True)
+    
+    # Mock glob to return something to avoid early exit
+    monkeypatch.setattr(loop.glob, "glob", lambda p: ["matched.png"])
+    # Mock Image.open to avoid real file IO
+    monkeypatch.setattr(loop, "Image", SimpleNamespace(open=lambda f: SimpleNamespace(convert=lambda m: SimpleNamespace(save=lambda *a, **k: None))))
+    
+    # Use a writable path in tmp_path
+    pdf_basename = str(tmp_path / "Trigger_x")
+    result = loop.merge_images_to_pdf(pdf_basename, False, "/some/other/reco")
+    assert result is True
 
 
 def test_loop_module_main_guard_exits(monkeypatch: pytest.MonkeyPatch) -> None:

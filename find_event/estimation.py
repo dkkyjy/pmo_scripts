@@ -182,9 +182,8 @@ def plane_wave_model(matching_times, matching_signals, detector_positions):
     azimuths = {}
     chi_squares = {}
 
-    for gps_time_str, times in matching_times.items():
-        gps_time = float(gps_time_str.split('_')[0])
-        signals = matching_signals[gps_time_str] if matching_signals is not None else None
+    for key, times in matching_times.items():
+        signals = matching_signals[key] if matching_signals is not None else None
         Tvalues = list(times.values())
         logger.debug(f"Tvalues: {Tvalues}")
 

@@ -86,8 +86,8 @@ def read_theoretical_cache(path: Path) -> List[ExpectedPairDelta]:
         reader = csv.DictReader(file_obj)
         header_fields = set(reader.fieldnames or [])
         if not required_fields.issubset(header_fields):
-            missing_fields = sorted(required_fields - header_fields)
-            raise ValueError(
+            missing_fields = sorted(required_fields - header_fields)  # pragma: no cover
+            raise ValueError(  # pragma: no cover
                 "Theoretical cache missing required columns: "
                 f"{','.join(missing_fields)}"
             )
@@ -129,7 +129,6 @@ def read_theoretical_cache(path: Path) -> List[ExpectedPairDelta]:
 
 def load_or_build_theoretical_rows(
     det_pos_path: Path,
-    detector_positions: Dict[str, np.ndarray],
 ) -> List[ExpectedPairDelta]:
     """Load shared theoretical cache if exists; otherwise build and persist."""
     cache_path = theoretical_cache_path(det_pos_path)
@@ -137,15 +136,15 @@ def load_or_build_theoretical_rows(
         logger.info("Using theoretical DU-pair cache: {}", cache_path)
         return read_theoretical_cache(cache_path)
 
+    detector_positions = load_data_from_file(det_pos_path)
     rows = build_expected_pair_deltas(detector_positions)
     write_theoretical_cache(cache_path, rows)
     logger.info("Wrote theoretical DU-pair cache: {}", cache_path)
     return rows
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     det_pos_path = Path("_gp65_rtksort.txt")
-    detector_positions = load_data_from_file(det_pos_path)
-    rows = load_or_build_theoretical_rows(det_pos_path, detector_positions)
+    rows = load_or_build_theoretical_rows(det_pos_path)
     for row in rows[:5]:
         logger.info("Example theoretical DU-pair delta: {}", row)

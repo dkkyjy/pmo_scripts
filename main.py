@@ -21,6 +21,8 @@ from find_event.io import load_data_from_file
 from find_event import plotting as fe_plot
 from find_event import estimation as fe_est
 from find_event import matching_times_graph as fe_mt
+from find_event import plane_wave_model as fe_pwm
+from find_event import spherical_wave_model as fe_swm
 
 
 def _load_event_metadata_map(matching_file):
@@ -41,7 +43,6 @@ def _load_event_metadata_map(matching_file):
         metadata[key] = {
             "run_number": payload.get("run_number", None),
             "event_number": payload.get("event_number", None),
-            "gps_time": payload.get("gps_time", None),
             "datetime": payload.get("datetime", None),
             "file": payload.get("file", None),
             "index": payload.get("index", None),
@@ -131,7 +132,6 @@ def _new_stage_state():
         "files": {},
         "index": {},
         "datetimes": {},
-        "gps_times": {},
         "azimuths": {},
         "zeniths": {},
         "directions": {},
@@ -220,7 +220,6 @@ def _required_fields_for_stage(stage, with_signal):
     base_fields = {
         "run_number",
         "event_number",
-        "gps_time",
         "datetime",
         "du_id",
         "file",
@@ -269,13 +268,13 @@ def _plot_pwm_if_needed(state, fig_prefix):
         return
     try:
         fe_plot.plot_reconstructed_positions_PWM(
-            state["gps_times"],
+            state["datetimes"],
             state["directions"],
             state["chi_squares"],
             fig_prefix + "_PWM",
         )
         fe_plot.plot_fitting_parameters_PWM(
-            state["gps_times"],
+            state["datetimes"],
             state["directions"],
             state["chi_squares"],
             "PWM",
@@ -292,13 +291,13 @@ def _plot_swm_if_needed(state, fig_prefix):
         return
     try:
         fe_plot.plot_reconstructed_positions_SWM(
-            state["gps_times"],
+            state["datetimes"],
             state["directions"],
             state["chi_squares"],
             fig_prefix + "_SWM",
         )
         fe_plot.plot_fitting_parameters_SWM(
-            state["gps_times"],
+            state["datetimes"],
             state["directions"],
             state["chi_squares"],
             "SWM",
@@ -311,7 +310,6 @@ def _plot_swm_if_needed(state, fig_prefix):
 def run_matching_stage(
     matching_file,
     metadata,
-    detector_positions,
     det_pos_file,
     with_signal,
     force_recompute,
@@ -363,7 +361,6 @@ def run_matching_stage(
                 state["run_numbers"][key] = result.get("run_number", None)
                 state["datetimes"][key] = result.get("datetime", None)
                 state["files"][key] = result.get("file", None)
-                state["gps_times"][key] = result.get("gps_time", None)
         else:
             logger.warning(
                 f"Invalid matching cache payload in {matched_file}: {reason}; falling back to recompute."
@@ -373,10 +370,21 @@ def run_matching_stage(
     if not use_cache:
         if force_recompute and os.path.exists(matched_file):
             logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
+
+        # Load raw data from matching_file
+        raw_data = _read_yaml_dict(matching_file)
+        times_input = {}
+        signals_input = {}
+        for key, data in raw_data.items():
+            if not isinstance(data, dict):
+                continue
+            times_input[key] = data["time"]
+            signals_input[key] = data.get("signal", None)
+
         times, signals, du_ids = fe_mt.optimized_read_matching_times_graph(
-            matching_file,
+            times_input,
+            signals_input,
             det_pos_file,
-            detector_positions,
             min_detectors=5,
             speed_of_light_tolerance=1.05,
         )
@@ -392,7 +400,6 @@ def run_matching_stage(
             results[key] = {
                 "run_number": meta.get("run_number", None),
                 "event_number": meta.get("event_number", None),
-                "gps_time": meta.get("gps_time", None),
                 "datetime": meta.get("datetime", None),
                 "du_id": du_ids[key],
                 "file": meta.get("file", None),
@@ -415,7 +422,6 @@ def run_matching_stage(
             state["run_numbers"][key] = result.get("run_number", None)
             state["datetimes"][key] = result.get("datetime", None)
             state["files"][key] = result.get("file", None)
-            state["gps_times"][key] = result.get("gps_time", None)
 
     logger.info(f"Number of events after reading and filtering: {len(state['times'])}")
     logger.info(f"{matched_file} has been written with matched results.")
@@ -471,7 +477,6 @@ def run_pwm_stage(
                 state["times"][key] = result["time"]
                 state["signals"][key] = result.get("signal", None) if with_signal else None
                 state["du_ids"][key] = result.get("du_id", None)
-                state["gps_times"][key] = result.get("gps_time", None)
                 state["event_numbers"][key] = result.get("event_number", None)
                 state["index"][key] = result.get("index", None)
                 state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
@@ -490,19 +495,19 @@ def run_pwm_stage(
     if not use_cache:
         if force_recompute and os.path.exists(pwm_fitted_file):
             logger.info(f"Force recompute enabled, ignoring cache: {pwm_fitted_file}")
-        gps_times, directions, zeniths, azimuths, chi_squares = fe_est.plane_wave_model(
+
+        directions, zeniths, azimuths, chi_squares = fe_pwm.plane_wave_model(
             state["times"],
             state["signals"],
             detector_positions,
         )
 
         results = {}
-        for key in state["times"].keys():
+        for key in directions.keys():
             direction = directions[key]
             results[key] = {
                 "run_number": state["run_numbers"].get(key, None),
                 "event_number": state["event_numbers"].get(key, None),
-                "gps_time": gps_times[key],
                 "datetime": state["datetimes"].get(key, None),
                 "du_id": state["du_ids"][key],
                 "file": state["files"].get(key, None),
@@ -523,7 +528,6 @@ def run_pwm_stage(
         pwm_computed = True
 
         for key, result in results.items():
-            state["gps_times"][key] = result.get("gps_time", None)
             state["azimuths"][key] = result.get("azimuth", None)
             state["zeniths"][key] = result.get("zenith", None)
             state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
@@ -581,7 +585,6 @@ def run_swm_stage(
             for key, result in results.items():
                 state["times"][key] = result["time"]
                 state["signals"][key] = result.get("signal", None) if with_signal else None
-                state["gps_times"][key] = result.get("gps_time", None)
                 state["chi_squares"][key] = result.get("chi_square", None)
                 state["du_ids"][key] = result.get("du_id", None)
                 state["event_numbers"][key] = result.get("event_number", None)
@@ -605,7 +608,7 @@ def run_swm_stage(
     if not use_cache:
         if force_recompute and os.path.exists(swm_fitted_file):
             logger.info(f"Force recompute enabled, ignoring cache: {swm_fitted_file}")
-        gps_times, directions, chi_squares = fe_est.spherical_wave_model(
+        directions, chi_squares = fe_swm.spherical_wave_model(
             state["times"],
             state["signals"],
             detector_positions,
@@ -613,12 +616,11 @@ def run_swm_stage(
         )
 
         results = {}
-        for key in state["times"].keys():
+        for key in directions.keys():
             direction = directions[key]
             results[key] = {
                 "run_number": state["run_numbers"].get(key, None),
                 "event_number": state["event_numbers"].get(key, None),
-                "gps_time": gps_times[key],
                 "datetime": state["datetimes"].get(key, None),
                 "du_id": state["du_ids"][key],
                 "file": state["files"].get(key, None),
@@ -638,7 +640,6 @@ def run_swm_stage(
         _write_cache_meta(swm_meta_file, expected_meta)
 
         for key, result in results.items():
-            state["gps_times"][key] = result.get("gps_time", None)
             state["chi_squares"][key] = result.get("chi_square", None)
             state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
 
@@ -696,7 +697,6 @@ def main(
         state, matching_computed = run_matching_stage(
             matching_file,
             metadata,
-            detector_positions,
             det_pos_file,
             with_signal,
             force_recompute,

@@ -57,6 +57,7 @@ class TaskSpec:
     run_matching: bool
     run_pwm: bool
     run_swm: bool
+    force_recompute: bool
 
 
 TaskResult = Tuple[str, int]
@@ -164,6 +165,7 @@ def make_tasks_for_file_paths(
             run_matching=args.run_matching,
             run_pwm=args.run_pwm,
             run_swm=args.run_swm,
+            force_recompute=args.force_recompute,
         )
         for file_path in file_path_list
     ]
@@ -235,6 +237,7 @@ def make_main_command(
     run_matching: bool = False,
     run_pwm: bool = False,
     run_swm: bool = False,
+    force_recompute: bool = False,
 ) -> list[str]:
     """Construct the command for: python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml yyyy-mm-dd --out-dir-base"""
 
@@ -264,6 +267,8 @@ def make_main_command(
         cmd.append("--run-pwm")
     if run_swm:
         cmd.append("--run-swm")
+    if force_recompute:
+        cmd.append("--force-recompute")
     return cmd
 
 
@@ -353,6 +358,7 @@ def process_date(task: TaskSpec) -> TaskResult:
     run_matching = task.run_matching
     run_pwm = task.run_pwm
     run_swm = task.run_swm
+    force_recompute = task.force_recompute
 
     # Log/read command
     if skip_read:
@@ -401,6 +407,7 @@ def process_date(task: TaskSpec) -> TaskResult:
             run_matching,
             run_pwm,
             run_swm,
+            force_recompute,
         )
         logger.info(f"{' '.join(main_cmd)}")
         
@@ -447,6 +454,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--run-matching", action="store_true", help="pass --run-matching through to main.py")
     ap.add_argument("--run-pwm", action="store_true", help="pass --run-pwm through to main.py")
     ap.add_argument("--run-swm", action="store_true", help="pass --run-swm through to main.py")
+    ap.add_argument("--force-recompute", action="store_true", help="pass --force-recompute through to main.py")
     return ap
 
 

@@ -1204,7 +1204,7 @@ def main() -> int:
             ",".join(missing_position_ids[:10]),
         )
 
-    expected_rows = load_or_build_theoretical_rows(det_pos_path, detector_positions)
+    expected_rows = load_or_build_theoretical_rows(det_pos_path)
     distribution_rows = build_pair_distribution_rows(
         observed_rows,
         expected_rows,
