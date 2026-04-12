@@ -217,7 +217,7 @@ def estimate_initial_direction(detector_positions, times, c):
 def calculate_PWM_chi_square(matches, detector_positions, direction, t0, c):
     """
     计算卡方值。
-    :param matches: 探测器接收到信号的时间，列表形式 [(det_id, time)]
+    :param matches: 匹配的探测器和时间，字典形式 {det_id: ns}
     :param detector_positions: 探测器的坐标，字典形式 {det_id: position_array}
     :param direction: 平面波的入射方向
     :param t0: 平面波的初始时间
@@ -225,26 +225,29 @@ def calculate_PWM_chi_square(matches, detector_positions, direction, t0, c):
     :return: 卡方值
     """
     total_error = 0.0
-    times = {detector_id: ns for detector_id, ns in matches}
+    # times = {detector_id: ns for detector_id, ns in matches.items()}
     #print("Times ", times)
 
     # 提取探测器的位置和时间
-    positions = np.array([detector_positions[det_id] for det_id in times.keys()])
-    t_ns = np.array([times[det_id] for det_id in times.keys()])
+    positions = np.array([detector_positions[det_id] for det_id, ns in matches.items()])
+    det_ids = list(matches.keys())
+    t_ns = list(matches.values())
 
     def theoretical_time_difference(pos1, pos2):
         return np.dot(pos2 - pos1, direction) / c
 
     # 计算两两探测器之间的时间差
-    for i in range(len(matches)):
-        for j in range(i + 1, len(matches)):
-            det_id_i, t_i = matches[i]
-            det_id_j, t_j = matches[j]
+    for i in range(len(det_ids)):
+        for j in range(i + 1, len(det_ids)):
+            det_id_i = det_ids[i]
+            det_id_j = det_ids[j]
 
             pos_i = detector_positions[det_id_i]
             pos_j = detector_positions[det_id_j]
             #t_j = t_j + id_time_dict[int(det_id_j)]
             #t_i = t_i + id_time_dict[int(det_id_i)]
+            t_j = t_ns[j]
+            t_i = t_ns[i]
             '''
             if time_data.get(int(det_id_j)):
                 t_j = t_j + time_data.get(int(det_id_j))['mean']
@@ -284,14 +287,12 @@ def plane_wave_model(matching_times, matching_signals, detector_positions):
         # In estimation.py, times is already a dict {det_id: ns}
         # In the original plane_wave_model.py, matches was a list of (det_id, ns)
         # We now assume times is a dict {det_id: ns} to match estimation.py
-        matches = list(times.items())
+        matches = {key: value for key, value in times.items()}
+        # matches = {key: value[0] for key, value in times.items()}
+
         
-        Tvalues = list(times.values())
-        total_sum = sum(Tvalues)
-        averageT = total_sum / len(Tvalues)
-        t_ns = np.array([times[det_id] for det_id in times.keys()])
-        current_pos = np.array([detector_positions[det_id] for det_id in times.keys()])
-        current_du_ids = list(times.keys())
+        t_ns = np.array([matches[det_id] for det_id in matches.keys()])
+        current_pos = np.array([detector_positions[det_id] for det_id in matches.keys()])
 
         def objective_function(params):
             theta, phi, t0 = params
@@ -301,7 +302,7 @@ def plane_wave_model(matching_times, matching_signals, detector_positions):
                 np.cos(np.deg2rad(theta))
             ])
             total_error = 0.0
-            det_ids = list(times.keys())
+            det_ids = list(matches.keys())
             num_detectors = len(det_ids)
             for i in range(num_detectors):
                 for j in range(i + 1, num_detectors):
@@ -309,8 +310,8 @@ def plane_wave_model(matching_times, matching_signals, detector_positions):
                     det_id_j = det_ids[j]
                     pos_i = detector_positions[det_id_i]
                     pos_j = detector_positions[det_id_j]
-                    time_i = times[det_id_i]
-                    time_j = times[det_id_j]
+                    time_i = matches[det_id_i]
+                    time_j = matches[det_id_j]
                     predicted_time_i = t0 + np.dot(pos_i, direction) / c
                     predicted_time_j = t0 + np.dot(pos_j, direction) / c
                     relative_time_theoretical = predicted_time_i - predicted_time_j

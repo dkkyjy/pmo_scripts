@@ -21,8 +21,8 @@ from find_event.io import load_data_from_file
 from find_event import plotting as fe_plot
 from find_event import estimation as fe_est
 from find_event import matching_times_graph as fe_mt
-from find_event import plane_wave_model as fe_pwm
-from find_event import spherical_wave_model as fe_swm
+from find_event import plane_wave_model_gradient as fe_pwm
+from find_event import spherical_wave_model_nopenal as fe_swm
 
 
 def _load_event_metadata_map(matching_file):
@@ -41,6 +41,9 @@ def _load_event_metadata_map(matching_file):
         if not isinstance(payload, dict):
             continue
         metadata[key] = {
+            "du_id": payload.get("du_id", None),
+            "time": payload.get("time", None),
+            "signal": payload.get("signal", None),
             "run_number": payload.get("run_number", None),
             "event_number": payload.get("event_number", None),
             "datetime": payload.get("datetime", None),
@@ -87,10 +90,24 @@ def parse_args(argv):
         help="Ignore existing _matched/_PWM/_SWM cache files and recompute.",
     )
     parser.add_argument(
+        "--skip-matching",
+        dest="skip_matching",
+        default=False,
+        action="store_true",
+        help="Skip the matching stage, assuming precomputed _matched cache files exist.",
+    )
+    parser.add_argument(
         "--run-matching",
         dest="run_matching",
         action="store_true",
         help="Run the matching stage explicitly.",
+    )
+    parser.add_argument(
+        "--skip-pwm",
+        dest="skip_pwm",
+        default=False,
+        action="store_true",
+        help="Skip the PWM stage, assuming precomputed _PWM cache files exist.",
     )
     parser.add_argument(
         "--run-pwm",
@@ -105,21 +122,6 @@ def parse_args(argv):
         help="Run the SWM stage explicitly.",
     )
     return parser.parse_args(argv[1:])
-
-
-def _resolve_selected_stages(run_matching, run_pwm, run_swm):
-    """Resolve stage selection from three CLI flags."""
-    if not any([run_matching, run_pwm, run_swm]):
-        return {
-            "matching": True,
-            "pwm": True,
-            "swm": True,
-        }
-    return {
-        "matching": run_matching,
-        "pwm": run_pwm,
-        "swm": run_swm,
-    }
 
 
 def _new_stage_state():
@@ -310,6 +312,25 @@ def _plot_swm_if_needed(state, fig_prefix):
         logger.warning(f"SWM plotting failed after cache generation: {exc}")
 
 
+def skip_matching_stage(metadata, with_signal, state):
+    """Skip the matching stage, assuming precomputed _matched cache files exist."""
+    
+    for key, data in metadata.items():
+        if not isinstance(data, dict):
+            continue
+        state["times"][key] = data["time"]
+        state["signals"][key] = data.get("signal", None) if with_signal else None
+        state["du_ids"][key] = data.get("du_id", None)
+        state["event_numbers"][key] = data.get("event_number", None)
+        state["index"][key] = data.get("index", None)
+        state["run_numbers"][key] = data.get("run_number", None)
+        state["datetimes"][key] = data.get("datetime", None)
+        state["gps_times"][key] = data.get("gps_time", None)
+        state["files"][key] = data.get("file", None)
+
+    return state, False
+
+
 def run_matching_stage(
     matching_file,
     metadata,
@@ -319,9 +340,6 @@ def run_matching_stage(
     state,
 ):
     """Ensure matching-stage data is available in memory and cache."""
-    if state["times"]:
-        return state, False
-
     matched_file = matching_file.replace(".yaml", "_matched.yaml")
     matched_meta_file = _meta_file_for(matched_file)
     matching_computed = False
@@ -375,19 +393,9 @@ def run_matching_stage(
         if force_recompute and os.path.exists(matched_file):
             logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
 
-        # Load raw data from matching_file
-        raw_data = _read_yaml_dict(matching_file)
-        times_input = {}
-        signals_input = {}
-        for key, data in raw_data.items():
-            if not isinstance(data, dict):
-                continue
-            times_input[key] = data["time"]
-            signals_input[key] = data.get("signal", None)
-
         times, signals, du_ids = fe_mt.optimized_read_matching_times_graph(
-            times_input,
-            signals_input,
+            state["times"],
+            state["signals"],
             det_pos_file,
             min_detectors=5,
             speed_of_light_tolerance=1.05,
@@ -407,9 +415,9 @@ def run_matching_stage(
                 "event_number": meta.get("event_number", None),
                 "datetime": meta.get("datetime", None),
                 "gps_time": meta.get("gps_time", None),
-                "du_id": du_ids[key],
                 "file": meta.get("file", None),
                 "index": meta.get("index", None),
+                "du_id": du_ids[key],
                 "time": times[key],
             }
             if with_signal:
@@ -419,21 +427,57 @@ def run_matching_stage(
         _write_cache_meta(matched_meta_file, expected_meta)
         matching_computed = True
 
+        state["times"] = {}
+        state["du_ids"] = {}
+        state["signals"] = {}
         for key, result in results.items():
             state["times"][key] = result["time"]
-            state["signals"][key] = result.get("signal", None) if with_signal else None
             state["du_ids"][key] = result.get("du_id", None)
-            state["event_numbers"][key] = result.get("event_number", None)
-            state["index"][key] = result.get("index", None)
-            state["run_numbers"][key] = result.get("run_number", None)
-            state["datetimes"][key] = result.get("datetime", None)
-            state["gps_times"][key] = result.get("gps_time", None)
-            state["files"][key] = result.get("file", None)
+            if with_signal:
+                state["signals"][key] = result.get("signal", None)
 
-    logger.info(f"Number of events after reading and filtering: {len(state['times'])}")
+    logger.info(f"Number of events after reading and filtering: {len(results)}")
     logger.info(f"{matched_file} has been written with matched results.")
     return state, matching_computed
 
+def skip_pwm_stage(matching_file, metadata, with_signal, state):
+    pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
+    pwm_meta_file = _meta_file_for(pwm_fitted_file)
+    use_cache = os.path.exists(pwm_fitted_file)
+    
+    if use_cache:
+        logger.info(f"Found cached PWM fitted file: {pwm_fitted_file}, loading directly.")
+        try:
+            results = _read_yaml_dict(pwm_fitted_file)
+            is_payload_valid, reason = _validate_stage_cache_payload(
+                "pwm", results, with_signal
+            )
+        except Exception as exc:
+            is_payload_valid = False
+            reason = f"unreadable-cache: {exc}"
+
+        if is_payload_valid:
+            for key, result in results.items():
+                state["times"][key] = result["time"]
+                state["signals"][key] = result.get("signal", None) if with_signal else None
+                state["du_ids"][key] = result.get("du_id", None)
+                state["event_numbers"][key] = result.get("event_number", None)
+                state["index"][key] = result.get("index", None)
+                state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
+                state["datetimes"][key] = result.get("datetime", state["datetimes"].get(key, None))
+                state["gps_times"][key] = result.get("gps_time", state["gps_times"].get(key, None))
+                state["files"][key] = result.get("file", state["files"].get(key, matching_file))
+                state["azimuths"][key] = result.get("azimuth", None)
+                state["zeniths"][key] = result.get("zenith", None)
+                state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
+                state["chi_squares"][key] = result.get("chi_square", None)
+        else:
+            logger.warning(
+                f"Invalid PWM cache payload in {pwm_fitted_file}: {reason}; falling back to recompute."
+            )
+            return state, False
+
+    return state, True
 
 def run_pwm_stage(
     matching_file,
@@ -492,7 +536,11 @@ def run_pwm_stage(
                 state["files"][key] = result.get("file", state["files"].get(key, matching_file))
                 state["azimuths"][key] = result.get("azimuth", None)
                 state["zeniths"][key] = result.get("zenith", None)
-                state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
+                state["directions"][key] = np.array([
+                    result.get("x", None),
+                    result.get("y", None),
+                    result.get("z", None),
+                ])
                 state["chi_squares"][key] = result.get("chi_square", None)
         else:
             logger.warning(
@@ -542,7 +590,7 @@ def run_pwm_stage(
             state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
             state["chi_squares"][key] = result.get("chi_square", None)
 
-    logger.info(f"Number of events after plane wave fitting: {len(state['times'])}")
+    logger.info(f"Number of events after plane wave fitting: {len(results)}")
     _plot_pwm_if_needed(state, fig_prefix)
     return state, pwm_computed
 
@@ -654,7 +702,7 @@ def run_swm_stage(
             state["chi_squares"][key] = result.get("chi_square", None)
             state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
 
-    logger.info(f"Number of events after spherical wave fitting: {len(state['times'])}")
+    logger.info(f"Number of events after spherical wave fitting: {len(results)}")
     _plot_swm_if_needed(state, fig_prefix)
     return state
 
@@ -668,8 +716,10 @@ def main(
     with_signal,
     det_pos_file,
     force_recompute=False,
+    skip_matching=False,
     run_matching=False,
-    run_pwm=False,
+    skip_pwm=False,
+    run_pwm=False,  
     run_swm=False,
 ):
     """
@@ -699,12 +749,15 @@ def main(
     if fig_name is None:
         fig_name = os.path.basename(matching_file).replace(".yaml", "")
     fig_prefix = os.path.join(output_dir, fig_name)
-    selected_stages = _resolve_selected_stages(run_matching, run_pwm, run_swm)
     state = _new_stage_state()
     matching_computed = False
     pwm_computed = False
-
-    if selected_stages["matching"] or selected_stages["pwm"] or selected_stages["swm"]:
+    
+    print(skip_matching)
+    state, matching_computed = skip_matching_stage(metadata, with_signal, state)
+    if skip_matching:
+        matching_computed = True
+    else:
         state, matching_computed = run_matching_stage(
             matching_file,
             metadata,
@@ -714,10 +767,10 @@ def main(
             state,
         )
 
-    if not state["times"]:
-        return 0
-
-    if selected_stages["pwm"] or selected_stages["swm"]:
+    print(skip_pwm)
+    if skip_pwm:
+        state, pwm_computed = skip_pwm_stage(matching_file, metadata, with_signal, state)
+    else:
         state, pwm_computed = run_pwm_stage(
             matching_file,
             detector_positions,
@@ -729,7 +782,7 @@ def main(
             matching_computed,
         )
 
-    if selected_stages["swm"]:
+    if run_swm:
         run_swm_stage(
             matching_file,
             detector_positions,
@@ -756,7 +809,9 @@ if __name__ == "__main__":
             args.with_signal,
             det_pos_file=args.det_pos,
             force_recompute=args.force_recompute,
+            skip_matching=args.skip_matching,
             run_matching=args.run_matching,
+            skip_pwm=args.skip_pwm,
             run_pwm=args.run_pwm,
             run_swm=args.run_swm,
         )

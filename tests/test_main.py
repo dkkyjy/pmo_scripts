@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 import yaml
 
+from find_event import plane_wave_model_gradient as gradient_module
 import main as main_module
 
 
@@ -293,8 +294,8 @@ class TestMainCacheSchema(unittest.TestCase):
         pwm_mock.assert_not_called()
         swm_mock.assert_not_called()
 
-    def test_default_runs_all_stages_and_writes_all_caches(self) -> None:
-        """Default execution should run matching, PWM, and SWM in order."""
+    def test_default_runs_matching_and_pwm_and_writes_caches(self) -> None:
+        """Default execution should run matching and PWM, SWM is opt-in only."""
         root, matching, det_pos = self._prepare_inputs()
 
         with mock.patch("main.load_data_from_file", return_value={}), \
@@ -324,10 +325,10 @@ class TestMainCacheSchema(unittest.TestCase):
         self.assertEqual(result, 0)
         mt_mock.assert_called_once()
         pwm_mock.assert_called_once()
-        swm_mock.assert_called_once()
+        swm_mock.assert_not_called()
         self.assertTrue((root / "sample_matched.yaml").exists())
         self.assertTrue((root / "sample_PWM.yaml").exists())
-        self.assertTrue((root / "sample_SWM.yaml").exists())
+        self.assertFalse((root / "sample_SWM.yaml").exists())
 
     def test_run_pwm_backfills_matching_without_swm(self) -> None:
         """Selecting only PWM should auto-run matching and skip SWM."""
@@ -634,6 +635,9 @@ def test_load_event_metadata_map_skips_non_dict_rows(tmp_path: Path) -> None:
 
     assert metadata == {
         "1000_0": {
+            "du_id": [101],
+            "time": {101: [1.0]},
+            "signal": None,
             "run_number": 1,
             "event_number": 2,
             "datetime": "2026-01-01T00:00:00",
@@ -776,22 +780,191 @@ def test_plot_swm_if_needed_success_and_exception() -> None:
         main_module._plot_swm_if_needed(state, "fig")
 
 
-def test_run_matching_stage_returns_existing_state_without_work(tmp_path: Path) -> None:
-    """Prepopulated matching state should short-circuit without cache access."""
+def test_run_matching_stage_recomputes_when_cache_missing(tmp_path: Path) -> None:
+    """Matching stage should recompute when there is no readable cache."""
     matching, det_pos = _prepare_stage_inputs(tmp_path)
-    state = _seed_matching_state()
+    metadata = main_module._load_event_metadata_map(str(matching))
+    state = main_module._new_stage_state()
 
-    returned_state, matching_computed = main_module.run_matching_stage(
-        str(matching),
-        {},
-        str(det_pos),
-        False,
-        False,
+    with mock.patch(
+        "main.fe_mt.optimized_read_matching_times_graph",
+        return_value=TestMainCacheSchema._optimized_result(),
+    ) as mt_mock:
+        returned_state, matching_computed = main_module.run_matching_stage(
+            str(matching),
+            metadata,
+            str(det_pos),
+            False,
+            False,
+            state,
+        )
+
+    mt_mock.assert_called_once()
+    assert returned_state is state
+    assert matching_computed is True
+    assert returned_state["times"]["1000_0"] == [1.0]
+
+
+def test_skip_matching_stage_ignores_non_dict_rows() -> None:
+    """skip_matching_stage should ignore non-dict metadata rows."""
+    state = main_module._new_stage_state()
+    metadata = {
+        "1000_0": {
+            "time": [1.0],
+            "du_id": [101],
+            "event_number": 2,
+            "index": 0,
+            "run_number": 1,
+            "datetime": "2026-01-01T00:00:00",
+            "gps_time": 1704067200,
+            "file": "source.root",
+            "signal": [9.9],
+        },
+        "bad": "not-a-dict",
+    }
+
+    returned_state, matching_computed = main_module.skip_matching_stage(
+        metadata,
+        True,
         state,
     )
 
-    assert returned_state is state
     assert matching_computed is False
+    assert returned_state["times"]["1000_0"] == [1.0]
+    assert "bad" not in returned_state["times"]
+
+
+def test_skip_pwm_stage_uses_cache_and_fallbacks(tmp_path: Path) -> None:
+    """skip_pwm_stage should load valid cache and return False on invalid cache."""
+    matching = tmp_path / "sample.yaml"
+    matching.write_text(yaml.safe_dump({}), encoding="utf-8")
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    valid_row = {
+        "run_number": 1,
+        "event_number": 2,
+        "datetime": "2026-01-01T00:00:00",
+        "gps_time": 1704067200,
+        "du_id": [101],
+        "file": "source.root",
+        "index": 0,
+        "time": [1.0],
+        "chi_square": 0.12,
+        "zenith": 1.23,
+        "azimuth": 2.34,
+        "x": 1.0,
+        "y": 0.0,
+        "z": 0.0,
+    }
+    pwm_file.write_text(yaml.safe_dump({"1000_0": valid_row}), encoding="utf-8")
+
+    state = main_module._new_stage_state()
+    loaded_state, pwm_loaded = main_module.skip_pwm_stage(
+        str(matching),
+        {},
+        False,
+        state,
+    )
+    assert pwm_loaded is True
+    assert loaded_state["azimuths"]["1000_0"] == 2.34
+
+    invalid_row = dict(valid_row)
+    invalid_row.pop("x")
+    pwm_file.write_text(yaml.safe_dump({"1000_0": invalid_row}), encoding="utf-8")
+
+    state = main_module._new_stage_state()
+    loaded_state, pwm_loaded = main_module.skip_pwm_stage(
+        str(matching),
+        {},
+        False,
+        state,
+    )
+    assert pwm_loaded is False
+    assert loaded_state is state
+
+
+def test_skip_pwm_stage_unreadable_cache_returns_false(tmp_path: Path) -> None:
+    """skip_pwm_stage should return False when cached PWM file cannot be read."""
+    matching = tmp_path / "sample.yaml"
+    matching.write_text(yaml.safe_dump({}), encoding="utf-8")
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    pwm_file.write_text("cached", encoding="utf-8")
+
+    with mock.patch("main._read_yaml_dict", side_effect=ValueError("broken cache")):
+        state = main_module._new_stage_state()
+        loaded_state, pwm_loaded = main_module.skip_pwm_stage(
+            str(matching),
+            {},
+            False,
+            state,
+        )
+
+    assert pwm_loaded is False
+    assert loaded_state is state
+
+
+def test_run_swm_stage_uses_valid_cache_without_recompute(tmp_path: Path) -> None:
+    """run_swm_stage should consume valid SWM cache when metadata matches."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    pwm_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._pwm_row(False)}),
+        encoding="utf-8",
+    )
+    swm_file = tmp_path / "sample_SWM.yaml"
+    swm_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._swm_row(False)}),
+        encoding="utf-8",
+    )
+
+    meta = main_module._build_stage_cache_meta(
+        "swm",
+        {
+            "pwm_file": main_module._build_file_signature(str(pwm_file)),
+            "det_pos_file": main_module._build_file_signature(str(det_pos)),
+            "with_signal": False,
+        },
+    )
+    main_module._write_cache_meta(main_module._meta_file_for(str(swm_file)), meta)
+
+    with mock.patch("main.fe_swm.spherical_wave_model") as swm_mock:
+        state = _seed_pwm_state()
+        returned_state = main_module.run_swm_stage(
+            str(matching),
+            {},
+            str(det_pos),
+            False,
+            False,
+            state,
+            str(tmp_path / "fig"),
+            False,
+        )
+
+    swm_mock.assert_not_called()
+    assert np.allclose(returned_state["directions"]["1000_0"], np.array([0.1, 0.2, 0.3]))
+    assert returned_state["chi_squares"]["1000_0"] == 0.03
+
+
+def test_main_skip_flags_cover_skip_paths(tmp_path: Path) -> None:
+    """main skip flags should execute skip stage paths without recompute calls."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    pwm_file.write_text(yaml.safe_dump({}), encoding="utf-8")
+
+    with mock.patch("main.load_data_from_file", return_value={}), \
+        mock.patch("main.run_matching_stage") as run_matching_mock, \
+        mock.patch("main.run_pwm_stage") as run_pwm_mock:
+        result = main_module.main(
+            str(matching),
+            fig_name=None,
+            with_signal=False,
+            det_pos_file=str(det_pos),
+            skip_matching=True,
+            skip_pwm=True,
+        )
+
+    assert result == 0
+    run_matching_mock.assert_not_called()
+    run_pwm_mock.assert_not_called()
 
 
 def test_run_matching_stage_handles_unreadable_and_invalid_cache_payloads(
@@ -960,6 +1133,48 @@ def test_run_pwm_stage_recomputes_for_signature_mismatch_and_unreadable_cache(
 
     assert pwm_computed is True
     pwm_mock.assert_called_once()
+
+
+def test_main_run_pwm_can_consume_gradient_module_smoke(tmp_path: Path) -> None:
+    """main PWM stage should be able to consume the gradient implementation directly."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    detector_positions = {
+        101: np.array([0.0, 0.0, 0.0]),
+        102: np.array([10.0, 0.0, 0.0]),
+        103: np.array([0.0, 10.0, 0.0]),
+        104: np.array([0.0, 0.0, 10.0]),
+    }
+    matching_times = {
+        "1000_0": {
+            101: [0.0],
+            102: [10.0 / gradient_module.C_LIGHT_NS],
+            103: [0.0],
+            104: [0.0],
+        }
+    }
+    matching_signals = {"1000_0": None}
+    du_ids = {"1000_0": [101, 102, 103, 104]}
+
+    with mock.patch("main.load_data_from_file", return_value=detector_positions), \
+        mock.patch(
+            "main.fe_mt.optimized_read_matching_times_graph",
+            return_value=(matching_times, matching_signals, du_ids),
+        ), \
+        mock.patch("main.fe_pwm.plane_wave_model", side_effect=gradient_module.plane_wave_model), \
+        mock.patch("main.fe_plot.plot_reconstructed_positions_PWM"), \
+        mock.patch("main.fe_plot.plot_fitting_parameters_PWM"):
+        result = main_module.main(
+            str(matching),
+            fig_name=None,
+            with_signal=False,
+            det_pos_file=str(det_pos),
+            run_pwm=True,
+        )
+
+    assert result == 0
+
+    pwm_cache = yaml.safe_load((tmp_path / "sample_PWM.yaml").read_text(encoding="utf-8"))
+    assert set(pwm_cache["1000_0"].keys()) >= {"x", "y", "z", "chi_square", "zenith", "azimuth"}
 
 
 def test_run_swm_stage_recomputes_for_all_cache_fallback_paths(tmp_path: Path) -> None:

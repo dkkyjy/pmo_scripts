@@ -87,6 +87,8 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                 dist = get_dist(du_i, du_j)
                 if dist is None:
                     logger.warning(f"   ⚠️  无探测器对 {du_i}-{du_j} 距离数据，跳过")
+                    print(dist_map)
+                    exit()
                     continue
                 is_safe, ratio = check_causality_strict(time_i, time_j, dist)
                 if is_safe:
