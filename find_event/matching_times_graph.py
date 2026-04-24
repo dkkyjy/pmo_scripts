@@ -38,13 +38,19 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
 
     logger.debug("=== 初始化阶段 ===")
     rows = load_or_build_theoretical_rows(Path(det_pos_path), force_recompute=force_recompute)
-    dist_map = {(row.du_a, row.du_b): row.distance_m for row in rows}
+    dist_map = {f'{row.du_a} - {row.du_b}': row.distance_m for row in rows}
     logger.debug(f"✅ 完成距离表加载，共缓存 {len(dist_map)} 组探测器对距离")
 
     def get_dist(id1, id2):
         """Symmetric distance lookup."""
-        k = tuple(sorted((id1, id2)))
-        return dist_map.get(k)
+        k = f'{id1} - {id2}'
+        if k in dist_map:
+            print(k, dist_map[k])  # Debug print
+            return dist_map[k]
+        else:
+            k = f'{id2} - {id1}'
+            print(k, dist_map[k])  # Debug print
+            return dist_map[k]
 
     total_lines = 0
     valid_events = 0
@@ -55,7 +61,7 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
         signals = signals_dict.get(key) if signals_dict else None
 
         nodes = []
-        node_debug = {}
+        node_info = {}
         du_triggers = defaultdict(list)
         node_id = 0
         logger.debug(f"———— 处理事件 {key} ————")
@@ -63,9 +69,9 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
             logger.debug(f"det_id: {det_id}, value: {value}")
             for time_ns in value:
                 logger.debug(f"time_ns: {time_ns}")
-                nodes.append((det_id, time_ns, node_id))
-                node_debug[node_id] = (det_id, time_ns)
-                du_triggers[det_id].append((time_ns, node_id))
+                nodes.append((str(det_id), time_ns, node_id))
+                node_info[node_id] = (str(det_id), time_ns)
+                du_triggers[str(det_id)].append((time_ns, node_id))
                 node_id += 1
 
         logger.debug(f"📊 节点解析统计: 总构建节点数: {len(nodes)}, 触发的探测器数: {len(du_triggers)}, 各探测器触发数: { {k:len(v) for k,v in du_triggers.items()} }")
@@ -84,12 +90,11 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                 du_j, time_j, _ = nodes[j]
                 if du_i == du_j:
                     continue
-                dist = get_dist(du_i, du_j)
-                if dist is None:
-                    logger.warning(f"   ⚠️  无探测器对 {du_i}-{du_j} 距离数据，跳过")
-                    print(dist_map)
-                    exit()
-                    continue
+                dist = get_dist(str(du_i), str(du_j))
+                print(f"Checking nodes {i}({du_i}) and {j}({du_j}): distance={dist}")  # Debug print
+                # if dist is None:
+                #     logger.warning(f"   ⚠️  无探测器对 {du_i}-{du_j} 距离数据，跳过")
+                #     continue
                 is_safe, ratio = check_causality_strict(time_i, time_j, dist)
                 if is_safe:
                     neighbors[i].add(j)
@@ -138,7 +143,7 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                     du_o, time_o, _ = nodes[other]
                     if du_n == du_o:
                         continue
-                    dist = get_dist(du_n, du_o)
+                    dist = get_dist(str(du_n), str(du_o))
                     if dist is None or dist == 0:
                         continue
                     safe, ratio = check_causality_strict(time_n, time_o, dist)
@@ -177,7 +182,7 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                     logger.warning(f"   ⚠️  最终团内出现同探测器 {d1}，标记为不安全")
                     is_final_safe = False
                     break
-                dist = get_dist(d1, d2)
+                dist = get_dist(str(d1), str(d2))
                 if dist is None:
                     dist = 0
                 safe, ratio = check_causality_strict(t1, t2, dist)
@@ -187,7 +192,7 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                     break
 
         if is_final_safe and len(final_clique) >= min_detectors:
-            valid_matches = [(node_debug[nid][0], node_debug[nid][1]) for nid in final_clique]
+            valid_matches = [(node_info[nid][0], node_info[nid][1]) for nid in final_clique]
             matching_times[key] = valid_matches
             valid_events += 1
             logger.debug(f"🎉 该事件有效！保留探测器数: {len(final_clique)}, 最终保留触发: {valid_matches}")

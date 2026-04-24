@@ -245,6 +245,7 @@ def plot_reconstructed_positions_PWM(datetimes, directions, chi_squares, save_na
         else:
             numeric_times.append(0)
     numeric_times = np.array(numeric_times)
+    print(f"Debug: numeric_times = {len(numeric_times)}")
     
     directions = np.array(list(directions.values()))
     chi_squares = np.array(list(chi_squares.values()))

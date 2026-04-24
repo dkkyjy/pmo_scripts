@@ -753,7 +753,6 @@ def main(
     matching_computed = False
     pwm_computed = False
     
-    print(skip_matching)
     state, matching_computed = skip_matching_stage(metadata, with_signal, state)
     if skip_matching:
         matching_computed = True
@@ -767,7 +766,6 @@ def main(
             state,
         )
 
-    print(skip_pwm)
     if skip_pwm:
         state, pwm_computed = skip_pwm_stage(matching_file, metadata, with_signal, state)
     else:
