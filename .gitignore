@@ -25,7 +25,6 @@ __pycache__/
 docs/
 todos/
 tests/
-toymc/
 scripts/
 cov_annotate/
 
