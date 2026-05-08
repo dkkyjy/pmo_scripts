@@ -17,6 +17,7 @@ If `-o` is provided it will be treated as an output directory (because multiple 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -36,15 +37,39 @@ TYPE_PATTERNS = {
 }
 
 
+def build_result_pattern(merge_type: str, run_number: Optional[int]) -> str:
+    """Build coarse glob pattern for one result type and optional RUN number."""
+    if run_number is None:
+        return TYPE_PATTERNS[merge_type]
+    return f"Trigger*_RUN{run_number}_*_{merge_type}.yaml"
+
+
+def _filter_files_by_run_number(files: list[Path], run_number: Optional[int]) -> list[Path]:
+    """Filter files by exact RUN segment to avoid RUN10/RUN100 collisions."""
+    if run_number is None:
+        return files
+
+    run_pattern = re.compile(rf"RUN{run_number}(?!\d)")
+    return [path for path in files if run_pattern.search(path.name)]
+
+
 def merge_files_for_pattern(
     dirpath: Path,
     pattern: str,
     outpath: Path,
+    run_number: Optional[int] = None,
 ) -> Tuple[int, str]:
     """Concatenate files matching one pattern into one output file."""
     code, message, files = find_files(dirpath, pattern)
     if code != 0:
         return code, message
+
+    files = _filter_files_by_run_number(files, run_number)
+    if run_number is not None and not files:
+        return (
+            1,
+            f"No files matching RUN{run_number} in {dirpath} after boundary filtering",
+        )
 
     header_text = build_traceability_header(
         outpath.name,
@@ -54,16 +79,38 @@ def merge_files_for_pattern(
     chunks = [file_path.read_text(encoding="utf-8") for file_path in files]
     write_text_with_header(outpath, header_text, chunks, ensure_newline_between_chunks=True)
 
-    return 0, f"Wrote {len(files)} files -> {outpath}"
+    return 0, f"Wrote {len(files)} files -> {outpath} (run_number={run_number})"
 
 
-def merge_all_types(dirpath: Path, ymd: str, outdir: Path) -> int:
+def merge_all_types(
+    dirpath: Path,
+    ymd: str,
+    outdir: Path,
+    run_number: Optional[int] = None,
+) -> int:
     """Concatenate all configured result types."""
     any_error = 0
 
-    for merge_type, pattern in TYPE_PATTERNS.items():
-        outpath = outdir / f"Trigger_{ymd}_{merge_type}.yaml"
-        code, msg = merge_files_for_pattern(dirpath, pattern, outpath)
+    if run_number is None:
+        print(
+            "Deprecated usage: --run-number is not provided; "
+            "falling back to full-day per-type merge",
+            file=sys.stderr,
+        )
+
+    for merge_type in TYPE_PATTERNS:
+        pattern = build_result_pattern(merge_type, run_number)
+        if run_number is None:
+            outpath = outdir / f"Trigger_{ymd}_{merge_type}.yaml"
+        else:
+            outpath = outdir / f"Trigger_{ymd}_RUN{run_number}_{merge_type}.yaml"
+
+        code, msg = merge_files_for_pattern(
+            dirpath,
+            pattern,
+            outpath,
+            run_number=run_number,
+        )
         if code != 0:
             print(msg, file=sys.stderr)
             any_error = max(any_error, code)
@@ -89,12 +136,21 @@ def main(argv: Optional[list[str]] = None) -> int:
             "this should be a directory. If omitted, outputs are created in the input directory."
         ),
     )
+    parser.add_argument(
+        "--run-number",
+        type=int,
+        default=None,
+        help=(
+            "Optional RUN number for file filtering and output naming. "
+            "When omitted, script keeps legacy per-type full-day merge behavior."
+        ),
+    )
 
     args = parser.parse_args(argv)
     outdir = Path(args.output)
     input_dir, ymd = resolve_input_dir(args.dir, outdir)
 
-    return merge_all_types(input_dir, ymd, outdir)
+    return merge_all_types(input_dir, ymd, outdir, run_number=args.run_number)
 
 
 if __name__ == "__main__":

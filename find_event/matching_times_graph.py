@@ -45,11 +45,9 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
         """Symmetric distance lookup."""
         k = f'{id1} - {id2}'
         if k in dist_map:
-            print(k, dist_map[k])  # Debug print
             return dist_map[k]
         else:
             k = f'{id2} - {id1}'
-            print(k, dist_map[k])  # Debug print
             return dist_map[k]
 
     total_lines = 0
@@ -91,10 +89,9 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
                 if du_i == du_j:
                     continue
                 dist = get_dist(str(du_i), str(du_j))
-                print(f"Checking nodes {i}({du_i}) and {j}({du_j}): distance={dist}")  # Debug print
-                # if dist is None:
-                #     logger.warning(f"   ⚠️  无探测器对 {du_i}-{du_j} 距离数据，跳过")
-                #     continue
+                if dist is None:
+                    logger.warning(f"   ⚠️  无探测器对 {du_i}-{du_j} 距离数据，跳过")
+                    continue
                 is_safe, ratio = check_causality_strict(time_i, time_j, dist)
                 if is_safe:
                     neighbors[i].add(j)

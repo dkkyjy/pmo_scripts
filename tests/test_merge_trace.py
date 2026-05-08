@@ -138,6 +138,72 @@ class TestMergeTrace(unittest.TestCase):
             self.assertEqual(body["1"]["time"]["1"], [10, 11])
             self.assertEqual(body["1"]["signal"]["1"], [20, 21])
 
+    def test_merge_files_for_pattern_run_number_boundary_filter(self) -> None:
+        """RUN10 filter should not include RUN100 files for same trace type."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            out_file = root / "Trigger_20260306_RUN10_XY_merged.yaml"
+
+            write_yaml(
+                root / "Trigger_20260306_RUN10_demo_XY.yaml",
+                {
+                    "a": {
+                        "event_number": 10,
+                        "du_id": ["10"],
+                        "time": {"10": [10]},
+                    }
+                },
+            )
+            write_yaml(
+                root / "Trigger_20260306_RUN100_demo_XY.yaml",
+                {
+                    "b": {
+                        "event_number": 100,
+                        "du_id": ["100"],
+                        "time": {"100": [100]},
+                    }
+                },
+            )
+
+            code, msg = merge_trace.merge_files_for_pattern(
+                root,
+                "Trigger*_XY.yaml",
+                out_file,
+                run_number=10,
+            )
+
+            self.assertEqual(code, 0)
+            self.assertIn("run_number=10", msg)
+            body = read_merged_yaml_without_header(out_file)
+            self.assertEqual(sorted(body.keys()), ["10"])
+
+    def test_merge_files_for_pattern_run_number_no_match(self) -> None:
+        """Should return code 1 when requested RUN has no matching files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            out_file = root / "Trigger_20260306_RUN10_XY_merged.yaml"
+
+            write_yaml(
+                root / "Trigger_20260306_RUN11_demo_XY.yaml",
+                {
+                    "a": {
+                        "event_number": 11,
+                        "du_id": ["11"],
+                        "time": {"11": [11]},
+                    }
+                },
+            )
+
+            code, msg = merge_trace.merge_files_for_pattern(
+                root,
+                "Trigger*_XY.yaml",
+                out_file,
+                run_number=10,
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("RUN10", msg)
+
     def test_merge_event_payload_initializes_missing_maps_and_lists(self) -> None:
         """Should initialize missing dict/list fields before merging."""
         base = {
@@ -285,6 +351,67 @@ class TestMergeTrace(unittest.TestCase):
             body = read_merged_yaml_without_header(merged_xy)
             self.assertEqual(body["1"]["du_id"], ["1", "2"])
 
+    def test_merge_trigger_files_with_run_number_all_types(self) -> None:
+        """Run-number mode should generate per-type outputs with RUN segment."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outdir = Path(tmpdir)
+            date_dir = outdir / "2026" / "03" / "03"
+            date_dir.mkdir(parents=True)
+
+            for suffix in ["F", "X", "Y", "Z", "XY"]:
+                write_yaml(
+                    date_dir / f"Trigger_20260303_RUN65_demo_{suffix}.yaml",
+                    {
+                        "a": {
+                            "event_number": 1,
+                            "du_id": ["1"],
+                            "time": {"1": [10]},
+                        }
+                    },
+                )
+                write_yaml(
+                    date_dir / f"Trigger_20260303_RUN66_demo_{suffix}.yaml",
+                    {
+                        "b": {
+                            "event_number": 2,
+                            "du_id": ["2"],
+                            "time": {"2": [11]},
+                        }
+                    },
+                )
+
+            code = merge_trace.merge_trigger_files(date_dir, "20260303", outdir, run_number=65)
+            self.assertEqual(code, 0)
+
+            merged_xy = outdir / "Trigger_20260303_RUN65_XY_merged.yaml"
+            self.assertTrue(merged_xy.exists())
+            body = read_merged_yaml_without_header(merged_xy)
+            self.assertEqual(sorted(body.keys()), ["1"])
+
+    def test_merge_trigger_files_without_run_number_logs_deprecation_warning(self) -> None:
+        """Legacy mode should log deprecation warning and keep old naming."""
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch(
+            "merge.merge_trace.logger.warning"
+        ) as warning_mock:
+            outdir = Path(tmpdir)
+            date_dir = outdir / "2026" / "03" / "03"
+            date_dir.mkdir(parents=True)
+
+            write_yaml(
+                date_dir / "Trigger_a_F.yaml",
+                {
+                    "a": {
+                        "event_number": 1,
+                        "du_id": ["1"],
+                        "time": {"1": [10]},
+                    }
+                },
+            )
+
+            code = merge_trace.merge_trigger_files(date_dir, "20260303", outdir)
+            self.assertEqual(code, 1)
+            warning_mock.assert_called_once()
+
     def test_merge_trigger_files_stops_on_error(self) -> None:
         """Should stop and return non-zero when one type merge fails."""
         with mock.patch(
@@ -312,6 +439,24 @@ class TestMergeTrace(unittest.TestCase):
         self.assertEqual(called_args[0], Path("/tmp/out") / Path("2026/03/03"))
         self.assertEqual(called_args[1], "20260303")
         self.assertEqual(called_args[2], Path("/tmp/out"))
+        self.assertIsNone(mocked.call_args.kwargs["run_number"])
+
+    def test_main_passes_run_number(self) -> None:
+        """CLI run-number argument should be propagated to merge_trigger_files."""
+        with mock.patch(
+            "merge.merge_trace.merge_trigger_files",
+            return_value=0,
+        ) as mocked:
+            exit_code = merge_trace.main([
+                "2026/03/03",
+                "-o",
+                "/tmp/out",
+                "--run-number",
+                "65",
+            ])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mocked.call_args.kwargs["run_number"], 65)
 
     def test_main_module_entrypoint(self) -> None:
         """Should execute __main__ entrypoint and raise SystemExit."""

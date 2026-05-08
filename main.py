@@ -23,6 +23,7 @@ from find_event import estimation as fe_est
 from find_event import matching_times_graph as fe_mt
 from find_event import plane_wave_model_gradient as fe_pwm
 from find_event import spherical_wave_model_nopenal as fe_swm
+from find_event import time_difference_fingerprint as fe_tdf
 
 
 def _load_event_metadata_map(matching_file):
@@ -116,6 +117,19 @@ def parse_args(argv):
         help="Run the PWM stage explicitly.",
     )
     parser.add_argument(
+        "--skip-fingerprint",
+        dest="skip_fingerprint",
+        default=False,
+        action="store_true",
+        help="Skip the fingerprint stage and load source YAML payload directly.",
+    )
+    parser.add_argument(
+        "--run-fingerprint",
+        dest="run_fingerprint",
+        action="store_true",
+        help="Run the fingerprint stage explicitly.",
+    )
+    parser.add_argument(
         "--run-swm",
         dest="run_swm",
         action="store_true",
@@ -141,6 +155,59 @@ def _new_stage_state():
         "directions": {},
         "chi_squares": {},
     }
+
+
+MATCHING_STATE_FIELDS = (
+    "times",
+    "signals",
+    "du_ids",
+    "run_numbers",
+    "event_numbers",
+    "files",
+    "index",
+    "datetimes",
+    "gps_times",
+)
+
+PWM_STATE_FIELDS = MATCHING_STATE_FIELDS + (
+    "azimuths",
+    "zeniths",
+    "directions",
+    "chi_squares",
+)
+
+SWM_STATE_FIELDS = PWM_STATE_FIELDS
+
+
+def _reset_state_fields(state, fields):
+    """Reset selected state fields to empty dictionaries."""
+    for field in fields:
+        state[field] = {}
+
+
+def _canonicalize_state_keys(state, canonical_keys, fields, stage_name):
+    """Align selected state fields to one canonical key set."""
+    ordered_keys = list(canonical_keys)
+    key_set = set(ordered_keys)
+
+    for field in fields:
+        current = state.get(field, {})
+        if not isinstance(current, dict):
+            current = {}
+
+        orphan_keys = sorted(set(current.keys()) - key_set)
+        if orphan_keys:
+            logger.debug(
+                "Canonicalization dropped {} orphan keys in stage '{}' field '{}': {}",
+                len(orphan_keys),
+                stage_name,
+                field,
+                orphan_keys,
+            )
+
+        state[field] = {key: current.get(key, None) for key in ordered_keys}
+
+    return state
 
 
 def _read_yaml_dict(file_path):
@@ -233,6 +300,8 @@ def _required_fields_for_stage(stage, with_signal):
     }
     if stage == "matching":
         required = set(base_fields)
+    elif stage in ("fingerprint",):
+        required = set(base_fields)
     elif stage in ("pwm", "swm"):
         required = base_fields | {
             "chi_square",
@@ -314,7 +383,8 @@ def _plot_swm_if_needed(state, fig_prefix):
 
 def skip_matching_stage(metadata, with_signal, state):
     """Skip the matching stage, assuming precomputed _matched cache files exist."""
-    
+    _reset_state_fields(state, MATCHING_STATE_FIELDS)
+
     for key, data in metadata.items():
         if not isinstance(data, dict):
             continue
@@ -328,6 +398,44 @@ def skip_matching_stage(metadata, with_signal, state):
         state["gps_times"][key] = data.get("gps_time", None)
         state["files"][key] = data.get("file", None)
 
+    _canonicalize_state_keys(
+        state,
+        state["times"].keys(),
+        MATCHING_STATE_FIELDS,
+        "skip-matching",
+    )
+
+    return state, False
+
+
+def skip_fingerprint_stage(matching_file, with_signal, state):
+    """Skip fingerprint stage by loading _matched.yaml or original matching YAML."""
+    matched_file = matching_file.replace(".yaml", "_matched.yaml")
+    source_file = matched_file if os.path.exists(matched_file) else matching_file
+    metadata = _load_event_metadata_map(source_file)
+
+    _reset_state_fields(state, MATCHING_STATE_FIELDS)
+    for key, data in metadata.items():
+        if not isinstance(data, dict):
+            continue
+        state["times"][key] = data.get("time", None)
+        state["signals"][key] = data.get("signal", None) if with_signal else None
+        state["du_ids"][key] = data.get("du_id", None)
+        state["event_numbers"][key] = data.get("event_number", None)
+        state["index"][key] = data.get("index", None)
+        state["run_numbers"][key] = data.get("run_number", None)
+        state["datetimes"][key] = data.get("datetime", None)
+        state["gps_times"][key] = data.get("gps_time", None)
+        state["files"][key] = data.get("file", None)
+
+    _canonicalize_state_keys(
+        state,
+        state["times"].keys(),
+        MATCHING_STATE_FIELDS,
+        "skip-fingerprint",
+    )
+
+    logger.info("Skipping fingerprint stage, loaded source payload from: {}", source_file)
     return state, False
 
 
@@ -373,6 +481,7 @@ def run_matching_stage(
             reason = f"unreadable-cache: {exc}"
 
         if is_payload_valid:
+            _reset_state_fields(state, MATCHING_STATE_FIELDS)
             for key, result in results.items():
                 state["times"][key] = result["time"]
                 state["signals"][key] = result.get("signal", None) if with_signal else None
@@ -383,6 +492,13 @@ def run_matching_stage(
                 state["datetimes"][key] = result.get("datetime", None)
                 state["gps_times"][key] = result.get("gps_time", None)
                 state["files"][key] = result.get("file", None)
+
+            _canonicalize_state_keys(
+                state,
+                results.keys(),
+                MATCHING_STATE_FIELDS,
+                "run-matching-cache",
+            )
         else:
             logger.warning(
                 f"Invalid matching cache payload in {matched_file}: {reason}; falling back to recompute."
@@ -392,6 +508,8 @@ def run_matching_stage(
     if not use_cache:
         if force_recompute and os.path.exists(matched_file):
             logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
+
+        _reset_state_fields(state, MATCHING_STATE_FIELDS)
 
         times, signals, du_ids = fe_mt.optimized_read_matching_times_graph(
             state["times"],
@@ -428,17 +546,125 @@ def run_matching_stage(
         matching_computed = True
 
         state["times"] = {}
-        state["du_ids"] = {}
-        state["signals"] = {}
         for key, result in results.items():
             state["times"][key] = result["time"]
             state["du_ids"][key] = result.get("du_id", None)
-            if with_signal:
-                state["signals"][key] = result.get("signal", None)
+            state["signals"][key] = result.get("signal", None) if with_signal else None
+            state["event_numbers"][key] = result.get("event_number", None)
+            state["index"][key] = result.get("index", None)
+            state["run_numbers"][key] = result.get("run_number", None)
+            state["datetimes"][key] = result.get("datetime", None)
+            state["gps_times"][key] = result.get("gps_time", None)
+            state["files"][key] = result.get("file", None)
+
+        _canonicalize_state_keys(
+            state,
+            results.keys(),
+            MATCHING_STATE_FIELDS,
+            "run-matching-recompute",
+        )
 
     logger.info(f"Number of events after reading and filtering: {len(results)}")
     logger.info(f"{matched_file} has been written with matched results.")
     return state, matching_computed
+
+
+def run_fingerprint_stage(
+    matching_file,
+    metadata,
+    det_pos_file,
+    with_signal,
+    force_recompute,
+    state,
+    matching_computed,
+):
+    """Ensure fingerprint-stage data is available in memory and cache."""
+    matched_file = matching_file.replace(".yaml", "_matched.yaml")
+    source_file = matched_file if os.path.exists(matched_file) else matching_file
+    fingerprint_file = matching_file.replace(".yaml", "_fingerprint.yaml")
+    fingerprint_meta_file = _meta_file_for(fingerprint_file)
+    fingerprint_computed = False
+    expected_meta = _build_stage_cache_meta(
+        "fingerprint",
+        {
+            "matched_file": _build_file_signature(matched_file),
+            "det_pos_file": _build_file_signature(det_pos_file),
+            "with_signal": bool(with_signal),
+        },
+    )
+
+    use_cache = (
+        os.path.exists(fingerprint_file)
+        and not force_recompute
+        and not matching_computed
+    )
+    if use_cache:
+        is_valid, reason = _cache_meta_is_valid(fingerprint_meta_file, expected_meta)
+        if not is_valid:
+            logger.info("Ignoring fingerprint cache due to {}: {}", reason, fingerprint_file)
+            use_cache = False
+
+    if use_cache:
+        logger.info("Found cached fingerprint file: {}, loading directly.", fingerprint_file)
+        try:
+            results = _read_yaml_dict(fingerprint_file)
+            is_payload_valid, reason = _validate_stage_cache_payload(
+                "fingerprint", results, with_signal
+            )
+        except Exception as exc:
+            is_payload_valid = False
+            reason = f"unreadable-cache: {exc}"
+
+        if not is_payload_valid:
+            logger.warning(
+                "Invalid fingerprint cache payload in {}: {}; falling back to recompute.",
+                fingerprint_file,
+                reason,
+            )
+            use_cache = False
+
+    if not use_cache:
+        if force_recompute and os.path.exists(fingerprint_file):
+            logger.info("Force recompute enabled, ignoring cache: {}", fingerprint_file)
+
+        _reset_state_fields(state, MATCHING_STATE_FIELDS)
+
+        source_payload = _read_yaml_dict(source_file)
+        if not isinstance(source_payload, dict):
+            raise ValueError("Top-level matching payload must be a mapping")
+
+        results = fe_tdf.filter_fixed_sources_from_payload(
+            source_payload,
+        )
+
+        _write_yaml_dict(fingerprint_file, results)
+        _write_cache_meta(fingerprint_meta_file, expected_meta)
+        fingerprint_computed = True
+
+    _reset_state_fields(state, MATCHING_STATE_FIELDS)
+    for key, result in results.items():
+        if not isinstance(result, dict):
+            continue
+        state["times"][key] = result.get("time", None)
+        state["signals"][key] = result.get("signal", None) if with_signal else None
+        state["du_ids"][key] = result.get("du_id", None)
+        state["event_numbers"][key] = result.get("event_number", None)
+        state["index"][key] = result.get("index", None)
+        state["run_numbers"][key] = result.get("run_number", None)
+        state["datetimes"][key] = result.get("datetime", None)
+        state["gps_times"][key] = result.get("gps_time", None)
+        state["files"][key] = result.get("file", None)
+
+    _canonicalize_state_keys(
+        state,
+        state["times"].keys(),
+        MATCHING_STATE_FIELDS,
+        "run-fingerprint",
+    )
+
+    logger.info("Number of events after fingerprint filtering: {}", len(state["times"]))
+    logger.info("{} has been written with fingerprint results.", fingerprint_file)
+    return state, fingerprint_computed
 
 def skip_pwm_stage(matching_file, metadata, with_signal, state):
     pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
@@ -457,6 +683,7 @@ def skip_pwm_stage(matching_file, metadata, with_signal, state):
             reason = f"unreadable-cache: {exc}"
 
         if is_payload_valid:
+            _reset_state_fields(state, PWM_STATE_FIELDS)
             for key, result in results.items():
                 state["times"][key] = result["time"]
                 state["signals"][key] = result.get("signal", None) if with_signal else None
@@ -471,6 +698,13 @@ def skip_pwm_stage(matching_file, metadata, with_signal, state):
                 state["zeniths"][key] = result.get("zenith", None)
                 state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
                 state["chi_squares"][key] = result.get("chi_square", None)
+
+            _canonicalize_state_keys(
+                state,
+                state["directions"].keys(),
+                PWM_STATE_FIELDS,
+                "skip-pwm",
+            )
         else:
             logger.warning(
                 f"Invalid PWM cache payload in {pwm_fitted_file}: {reason}; falling back to recompute."
@@ -487,23 +721,23 @@ def run_pwm_stage(
     force_recompute,
     state,
     fig_prefix,
-    matching_computed,
+    fingerprint_computed,
 ):
     """Ensure PWM-stage data is available in memory and cache."""
     pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
     pwm_meta_file = _meta_file_for(pwm_fitted_file)
-    matched_file = matching_file.replace(".yaml", "_matched.yaml")
+    fingerprint_file = matching_file.replace(".yaml", "_fingerprint.yaml")
     pwm_computed = False
     expected_meta = _build_stage_cache_meta(
         "pwm",
         {
-            "matched_file": _build_file_signature(matched_file),
+            "fingerprint_file": _build_file_signature(fingerprint_file),
             "det_pos_file": _build_file_signature(det_pos_file),
             "with_signal": bool(with_signal),
         },
     )
 
-    use_cache = os.path.exists(pwm_fitted_file) and not force_recompute and not matching_computed
+    use_cache = os.path.exists(pwm_fitted_file) and not force_recompute and not fingerprint_computed
     if use_cache:
         is_valid, reason = _cache_meta_is_valid(pwm_meta_file, expected_meta)
         if not is_valid:
@@ -524,6 +758,7 @@ def run_pwm_stage(
             reason = f"unreadable-cache: {exc}"
 
         if is_payload_valid:
+            _reset_state_fields(state, PWM_STATE_FIELDS)
             for key, result in results.items():
                 state["times"][key] = result["time"]
                 state["signals"][key] = result.get("signal", None) if with_signal else None
@@ -542,6 +777,13 @@ def run_pwm_stage(
                     result.get("z", None),
                 ])
                 state["chi_squares"][key] = result.get("chi_square", None)
+
+            _canonicalize_state_keys(
+                state,
+                state["directions"].keys(),
+                PWM_STATE_FIELDS,
+                "run-pwm-cache",
+            )
         else:
             logger.warning(
                 f"Invalid PWM cache payload in {pwm_fitted_file}: {reason}; falling back to recompute."
@@ -551,6 +793,16 @@ def run_pwm_stage(
     if not use_cache:
         if force_recompute and os.path.exists(pwm_fitted_file):
             logger.info(f"Force recompute enabled, ignoring cache: {pwm_fitted_file}")
+
+        _reset_state_fields(
+            state,
+            (
+                "azimuths",
+                "zeniths",
+                "directions",
+                "chi_squares",
+            ),
+        )
 
         directions, zeniths, azimuths, chi_squares = fe_pwm.plane_wave_model(
             state["times"],
@@ -585,10 +837,26 @@ def run_pwm_stage(
         pwm_computed = True
 
         for key, result in results.items():
+            state["times"][key] = result["time"]
+            state["signals"][key] = result.get("signal", None) if with_signal else None
+            state["du_ids"][key] = result.get("du_id", None)
+            state["event_numbers"][key] = result.get("event_number", None)
+            state["index"][key] = result.get("index", None)
+            state["run_numbers"][key] = result.get("run_number", None)
+            state["datetimes"][key] = result.get("datetime", None)
+            state["gps_times"][key] = result.get("gps_time", None)
+            state["files"][key] = result.get("file", None)
             state["azimuths"][key] = result.get("azimuth", None)
             state["zeniths"][key] = result.get("zenith", None)
             state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
             state["chi_squares"][key] = result.get("chi_square", None)
+
+        _canonicalize_state_keys(
+            state,
+            state["directions"].keys(),
+            PWM_STATE_FIELDS,
+            "run-pwm-recompute",
+        )
 
     logger.info(f"Number of events after plane wave fitting: {len(results)}")
     _plot_pwm_if_needed(state, fig_prefix)
@@ -639,6 +907,7 @@ def run_swm_stage(
             reason = f"unreadable-cache: {exc}"
 
         if is_payload_valid:
+            _reset_state_fields(state, SWM_STATE_FIELDS)
             for key, result in results.items():
                 state["times"][key] = result["time"]
                 state["signals"][key] = result.get("signal", None) if with_signal else None
@@ -657,6 +926,13 @@ def run_swm_stage(
                     result.get("y", None),
                     result.get("z", None),
                 ])
+
+            _canonicalize_state_keys(
+                state,
+                state["directions"].keys(),
+                SWM_STATE_FIELDS,
+                "run-swm-cache",
+            )
         else:
             logger.warning(
                 f"Invalid SWM cache payload in {swm_fitted_file}: {reason}; falling back to recompute."
@@ -666,16 +942,18 @@ def run_swm_stage(
     if not use_cache:
         if force_recompute and os.path.exists(swm_fitted_file):
             logger.info(f"Force recompute enabled, ignoring cache: {swm_fitted_file}")
-        directions, chi_squares = fe_swm.spherical_wave_model(
+
+        seed_directions = dict(state["directions"])
+        _reset_state_fields(state, ("directions", "chi_squares"))
+        directions, chi_squares, new_matches = fe_swm.spherical_wave_model(
             state["times"],
             state["signals"],
             detector_positions,
-            state["directions"],
+            seed_directions,
         )
 
         results = {}
-        for key in directions.keys():
-            direction = directions[key]
+        for key, new_match in new_matches.items():
             results[key] = {
                 "run_number": state["run_numbers"].get(key, None),
                 "event_number": state["event_numbers"].get(key, None),
@@ -684,12 +962,12 @@ def run_swm_stage(
                 "du_id": state["du_ids"][key],
                 "file": state["files"].get(key, None),
                 "index": state["index"].get(key, None),
-                "time": state["times"][key],
+                "time": new_match,
                 "azimuth": float(state["azimuths"][key]),
                 "zenith": float(state["zeniths"][key]),
-                "x": float(direction[0]),
-                "y": float(direction[1]),
-                "z": float(direction[2]),
+                "x": float(directions[key][0]),
+                "y": float(directions[key][1]),
+                "z": float(directions[key][2]),
                 "chi_square": float(chi_squares[key]),
             }
             if with_signal:
@@ -701,6 +979,13 @@ def run_swm_stage(
         for key, result in results.items():
             state["chi_squares"][key] = result.get("chi_square", None)
             state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
+
+        _canonicalize_state_keys(
+            state,
+            state["directions"].keys(),
+            SWM_STATE_FIELDS,
+            "run-swm-recompute",
+        )
 
     logger.info(f"Number of events after spherical wave fitting: {len(results)}")
     _plot_swm_if_needed(state, fig_prefix)
@@ -718,6 +1003,8 @@ def main(
     force_recompute=False,
     skip_matching=False,
     run_matching=False,
+    skip_fingerprint=False,
+    run_fingerprint=False,
     skip_pwm=False,
     run_pwm=False,  
     run_swm=False,
@@ -751,6 +1038,7 @@ def main(
     fig_prefix = os.path.join(output_dir, fig_name)
     state = _new_stage_state()
     matching_computed = False
+    fingerprint_computed = False
     pwm_computed = False
     
     state, matching_computed = skip_matching_stage(metadata, with_signal, state)
@@ -766,6 +1054,23 @@ def main(
             state,
         )
 
+    if skip_fingerprint:
+        state, fingerprint_computed = skip_fingerprint_stage(
+            matching_file,
+            with_signal,
+            state,
+        )
+    else:
+        state, fingerprint_computed = run_fingerprint_stage(
+            matching_file,
+            metadata,
+            det_pos_file,
+            with_signal,
+            force_recompute,
+            state,
+            matching_computed,
+        )
+
     if skip_pwm:
         state, pwm_computed = skip_pwm_stage(matching_file, metadata, with_signal, state)
     else:
@@ -777,7 +1082,7 @@ def main(
             force_recompute,
             state,
             fig_prefix,
-            matching_computed,
+            fingerprint_computed,
         )
 
     if run_swm:
@@ -809,6 +1114,8 @@ if __name__ == "__main__":
             force_recompute=args.force_recompute,
             skip_matching=args.skip_matching,
             run_matching=args.run_matching,
+            skip_fingerprint=args.skip_fingerprint,
+            run_fingerprint=args.run_fingerprint,
             skip_pwm=args.skip_pwm,
             run_pwm=args.run_pwm,
             run_swm=args.run_swm,

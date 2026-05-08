@@ -12,7 +12,7 @@ def setup_logger(
     rotation: Optional[str] = None,
     retention: Optional[str] = "30 days",
     compression: Optional[str] = None,
-    fmt: str = "{time:YYYY-MM-DD HH:mm:ss.SSS} | <level>{level}</level> | {file}:{line} | {function}: <level>{message}</level>",
+    fmt: str = "{time:YYYY-MM-DD HH:mm:ss.SSS} | <level>{level}</level> | <cyan>{file}:{line}</cyan> | {function}: <level>{message}</level>",
     enqueue: bool = True,
     **kwargs: Any,
  ) -> Any:

@@ -2,6 +2,7 @@
 纯背景事例生成逻辑
 """
 import argparse
+from collections import deque
 from datetime import datetime
 import random
 import time
@@ -9,63 +10,111 @@ import time
 from typing import Dict, Optional, Sequence, Tuple
 
 from logger_config import logger
+import yaml
 
-BG_RATE_HZ_DEFAULT = 1000.0
+try:
+    from yaml import CSafeDumper as _SafeDumper
+except ImportError:
+    from yaml import SafeDumper as _SafeDumper
+
+BG_RATE_HZ_DEFAULT = 100.0
 BG_SIM_WINDOW_NS = int(1e9)
 BG_SELECTION_WINDOW_NS = 20_000
 BG_MIN_UNIQUE_DU = 5
 MAX_BG_RESAMPLE_ATTEMPTS = 2000
 SEED_DEFAULT = 42
+DURATION_SECONDS_DEFAULT = 60
 
 def sample_background_trigger_stream(du_ids, bg_rate_hz, simulation_window_ns):
     """Sample Poisson trigger times for each DU within the simulation window."""
 
-    logger.debug("Sampling background trigger stream with parameters: du_ids=%s, bg_rate_hz=%f, simulation_window_ns=%d", du_ids, bg_rate_hz, simulation_window_ns)
+    logger.debug(
+        f"Sampling background trigger stream with parameters: {len(du_ids)} DUs, "
+        f"bg_rate_hz={bg_rate_hz}, simulation_window_ns={simulation_window_ns}"
+    )
     triggers = []
     scale_ns = 1e9 / float(bg_rate_hz)
-    t = 0.0
-    while t < simulation_window_ns:
-        for du_id in random.sample(du_ids, k=len(du_ids)):
+    for du_id in du_ids:
+        t = 0.0
+        while t < simulation_window_ns:
             t += random.expovariate(1.0 / scale_ns)
             if t < simulation_window_ns:
-                triggers.append((t, du_id))
-    triggers.sort(key=lambda item: item[0])
-    logger.debug("Generated triggers: %s", triggers)
+                triggers.append((du_id, t))
+    logger.debug(f"Generated triggers: {len(triggers)} before sorting")
+    triggers.sort(key=lambda item: item[1])
+    logger.debug(f"Generated triggers: {len(triggers)} after sorting")
     return triggers
 
 
-def select_first_background_window(sorted_triggers, window_ns, min_unique_du):
-    """Return the first time window containing at least min_unique_du DUs."""
+def select_background_window(sorted_triggers, window_ns, min_unique_du):
+    """
+    返回所有满足 min_unique_du 的滑动窗口。
+    每个窗口为 dict: {"start_ns", "end_ns", "event_times"}
+    兼容混合模块 _select_all_background_windows 语义。
 
-    logger.debug("Selecting first background window with parameters: window_ns=%d, min_unique_du=%d", window_ns, min_unique_du)
+    阈值判定规则：窗口内唯一 DU 数 >= min_unique_du 时，窗口有效。
+    窗口唯一性：同一起点（start_ns）只记录一次，避免重复。
+    输入格式：支持 (du_id, t) 或 (t, du_id)，自动转置。
+    """
+    logger.debug(
+        f"Selecting all background windows with parameters: "
+        f"window_ns={window_ns}, min_unique_du={min_unique_du}"
+    )
+    windows = []
     if not sorted_triggers:
-        logger.debug("No triggers available for selection.")
-        return None
+        logger.warning("No triggers provided to select_background_window.")
+        return windows
+
     left = 0
-    du_counts = {}
+    du_time_queues = {}
     threshold = int(min_unique_du)
-    for right, (right_time, right_du) in enumerate(sorted_triggers):
-        left_time, left_du = sorted_triggers[left]
-        du_counts[left_du] = du_counts.get(left_du, 0) + 1
-        du_counts[right_du] = du_counts.get(right_du, 0) + 1
-        logger.debug("DU counts: %s", du_counts)
-        logger.debug("Current window duration: %d ns", right_time - left_time)
-        while right_time - left_time >= window_ns:
-            du_counts[left_du] -= 1
-            if du_counts[left_du] == 0:
-                del du_counts[left_du]
+    last_recorded_start = None
+
+    # 统一触发格式 (du_id, t) → (t, du_id)
+    # 若输入为 (du_id, t)，需转置
+    if len(sorted_triggers) > 0 and isinstance(sorted_triggers[0][0], int):
+        triggers = [(t, du) for du, t in sorted_triggers]
+    else:
+        triggers = sorted_triggers
+
+    logger.debug(f"Initial triggers: {triggers[:10]} (showing up to 10)")
+
+    for right, (right_time, right_du) in enumerate(triggers):
+        if right_du not in du_time_queues:
+            du_time_queues[right_du] = deque()
+        du_time_queues[right_du].append(right_time)
+
+        while right_time - triggers[left][0] > window_ns:
+            left_time, left_du = triggers[left]
+            left_queue = du_time_queues[left_du]
+            # 仅移除当前左边界触发，确保队首始终是窗口内该 DU 最早触发。
+            if left_queue and left_queue[0] == left_time:
+                left_queue.popleft()
+            if not left_queue:
+                del du_time_queues[left_du]
             left += 1
-        logger.debug("Updated window duration: %d ns, DU counts: %s", right_time - left_time, du_counts)
-        window = {}
-        if len(du_counts) >= threshold:
-            for idx in range(left, right + 1):
-                du, t = sorted_triggers[idx][1], sorted_triggers[idx][0]
-                if du not in window or t < window[du]:
-                    window[du] = t
-            logger.debug("Selected window: %s", window)
-            return window
-    logger.debug("No valid window found.")
-    return None
+
+        if len(du_time_queues) >= threshold:
+            start_ns = int(triggers[left][0])
+            if start_ns == last_recorded_start:
+                continue
+
+            event_times = {
+                du_id: du_queue[0]
+                for du_id, du_queue in du_time_queues.items()
+                if du_queue
+            }
+            windows.append(
+                {
+                    "start_ns": start_ns,
+                    "end_ns": start_ns + int(window_ns),
+                    "event_times": event_times,
+                }
+            )
+            last_recorded_start = start_ns
+
+    logger.debug(f"Total windows selected: {len(windows)}")
+    return windows
 
 
 def generate_background_event(
@@ -79,20 +128,56 @@ def generate_background_event(
 ):
     """Generate one background-only event as a {du_id: time_ns} mapping."""
 
-    logger.debug("Generating background event with parameters: bg_rate_hz=%f, simulation_window_ns=%d, window_ns=%d, min_unique_du=%d, max_resample_attempts=%d", bg_rate_hz, simulation_window_ns, window_ns, min_unique_du, max_resample_attempts)
+    logger.debug(
+        f"Generating background event with parameters: bg_rate_hz={bg_rate_hz}, "
+        f"simulation_window_ns={simulation_window_ns}, window_ns={window_ns}, "
+        f"min_unique_du={min_unique_du}, "
+        f"max_resample_attempts={max_resample_attempts}"
+    )
     del n_det
     if bg_rate_hz <= 0:
         raise ValueError("bg_rate_hz must be > 0")
     du_ids = list(du_coords.keys())
     for attempt in range(int(max_resample_attempts)):
-        logger.debug("Attempt %d to generate background event", attempt + 1)
+        logger.debug(f"Attempt {attempt + 1} to generate background event")
         triggers = sample_background_trigger_stream(du_ids, bg_rate_hz, simulation_window_ns)
-        window = select_first_background_window(triggers, window_ns, min_unique_du)
-        if window:
-            logger.debug("Successfully generated background event: %s", window)
-            return window
+        windows = select_background_window(triggers, window_ns, min_unique_du)
+        if windows:
+            # 兼容旧接口，返回第一个窗口的 event_times
+            logger.debug(f"Successfully generated background event: {windows[0]['event_times']}")
+            return windows[0]["event_times"]
     logger.error("No valid background event found within max_resample_attempts")
     raise RuntimeError("No valid background event found within max_resample_attempts")
+
+
+def generate_background_windows(
+    du_coords,
+    bg_rate_hz=BG_RATE_HZ_DEFAULT,
+    simulation_window_ns=BG_SIM_WINDOW_NS,
+    window_ns=BG_SELECTION_WINDOW_NS,
+    min_unique_du=BG_MIN_UNIQUE_DU,
+    max_resample_attempts=MAX_BG_RESAMPLE_ATTEMPTS,
+):
+    """Generate all valid background windows from one sampled stream."""
+
+    if bg_rate_hz <= 0:
+        raise ValueError("bg_rate_hz must be > 0")
+
+    du_ids = list(du_coords.keys())
+    for attempt in range(int(max_resample_attempts)):
+        logger.debug(f"Attempt {attempt + 1} to generate background windows")
+        triggers = sample_background_trigger_stream(
+            du_ids,
+            bg_rate_hz,
+            simulation_window_ns,
+        )
+        windows = select_background_window(triggers, window_ns, min_unique_du)
+        if windows:
+            logger.debug(f"Generated {len(windows)} valid background windows")
+            return windows
+
+    logger.error("No valid background windows found within max_resample_attempts")
+    raise RuntimeError("No valid background windows found within max_resample_attempts")
 
 
 def _resolve_common_deps():
@@ -110,11 +195,12 @@ def _build_event_payload(
     event_window: Dict[int, float],
     run_number: int,
     gps_start: int,
+    second_offset: int,
     root_file: str,
 ) -> Dict[str, object]:
     """Build one event payload in the same schema as existing toy MC YAML."""
 
-    gps_time = int(gps_start + event_index - 1)
+    gps_time = int(gps_start + second_offset)
     event_time = datetime.utcfromtimestamp(gps_time).strftime("%Y-%m-%dT%H:%M:%S")
     sorted_hits = sorted(event_window.items(), key=lambda item: item[1])
     du_ids = [int(du_id) for du_id, _ in sorted_hits]
@@ -134,7 +220,7 @@ def _build_event_payload(
 def generate_background_yaml(
     output_file: str,
     coord_file: str,
-    n_events: int,
+    duration_seconds: int,
     run_number: int,
     gps_start: Optional[int],
     root_file: str,
@@ -144,46 +230,82 @@ def generate_background_yaml(
     min_unique_du: int,
     max_resample_attempts: int,
     seed: Optional[int],
-) -> Tuple[str, int]:
-    """Generate pure background events and write them as one YAML mapping."""
+    write_yaml: bool = True,
+) -> int:
+    """Generate pure background windows and optionally write one YAML mapping."""
 
-    logger.debug("Starting YAML generation with parameters: output_file=%s, coord_file=%s, n_events=%d, run_number=%d, gps_start=%s, root_file=%s, bg_rate_hz=%f, simulation_window_ns=%d, window_ns=%d, min_unique_du=%d, max_resample_attempts=%d, seed=%s", output_file, coord_file, n_events, run_number, gps_start, root_file, bg_rate_hz, simulation_window_ns, window_ns, min_unique_du, max_resample_attempts, seed)
-    if n_events <= 0:
-        raise ValueError("n_events must be > 0")
+    logger.debug(
+        f"Starting YAML generation with parameters: output_file={output_file}, "
+        f"coord_file={coord_file}, duration_seconds={duration_seconds}, "
+        f"run_number={run_number}, "
+        f"gps_start={gps_start}, root_file={root_file}, bg_rate_hz={bg_rate_hz}, "
+        f"simulation_window_ns={simulation_window_ns}, window_ns={window_ns}, "
+        f"min_unique_du={min_unique_du}, "
+        f"max_resample_attempts={max_resample_attempts}, seed={seed}, "
+        f"write_yaml={write_yaml}"
+    )
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be > 0")
     if min_unique_du <= 0:
         raise ValueError("min_unique_du must be > 0")
     if seed is not None:
         random.seed(seed)
 
-    _, writer_cls, load_du_coords = _resolve_common_deps()
+    _, _, load_du_coords = _resolve_common_deps()
     du_coords = load_du_coords(coord_file)
     if not du_coords:
         raise ValueError("No DU coordinates were loaded from coord_file")
 
     start_gps = int(time.time()) if gps_start is None else int(gps_start)
-    with writer_cls(output_file) as writer:
-        for event_index in range(1, int(n_events) + 1):
-            logger.debug("Generating event %d/%d", event_index, n_events)
-            window = generate_background_event(
-                du_coords=du_coords,
-                n_det=min_unique_du,
-                bg_rate_hz=bg_rate_hz,
-                simulation_window_ns=simulation_window_ns,
-                window_ns=window_ns,
-                min_unique_du=min_unique_du,
-                max_resample_attempts=max_resample_attempts,
-            )
+    event_count = 0
+    all_payloads = {}
+    for second_offset in range(int(duration_seconds)):
+        logger.debug(
+            f"Generating windows for second "
+            f"{second_offset + 1}/{duration_seconds}"
+        )
+        windows = generate_background_windows(
+            du_coords=du_coords,
+            bg_rate_hz=bg_rate_hz,
+            simulation_window_ns=simulation_window_ns,
+            window_ns=window_ns,
+            min_unique_du=min_unique_du,
+            max_resample_attempts=max_resample_attempts,
+        )
+        logger.debug(
+            f"Second {second_offset + 1} selected {len(windows)} windows"
+        )
+        for window in windows:
+            event_count += 1
             payload = _build_event_payload(
-                event_index=event_index,
-                event_window=window,
+                event_index=event_count,
+                event_window=window["event_times"],
                 run_number=run_number,
                 gps_start=start_gps,
+                second_offset=second_offset,
                 root_file=root_file,
             )
-            writer.write_entry(event_index, payload)
+            all_payloads[str(event_count)] = payload
 
-    logger.debug("Finished generating YAML: %s with %d events", output_file, n_events)
-    return output_file, n_events
+    if write_yaml:
+        # 批量写出可显著减少重复 yaml.dump 调用开销。
+        with open(output_file, "w", encoding="utf-8") as output_handle:
+            yaml.dump(
+                all_payloads,
+                output_handle,
+                Dumper=_SafeDumper,
+                sort_keys=False,
+                default_flow_style=False,
+                allow_unicode=True,
+            )
+    else:
+        logger.debug("Skip writing YAML file because write_yaml is False")
+
+    logger.debug(
+        f"Finished generating YAML: {output_file} with {event_count} events "
+        f"across {duration_seconds} seconds"
+    )
+    return event_count
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -195,7 +317,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", default="toy_mc_background.yaml")
     parser.add_argument("--coord-file", default=coord_file_default)
-    parser.add_argument("--n-events", type=int, default=100)
+    parser.add_argument(
+        "--duration-seconds",
+        type=int,
+        default=DURATION_SECONDS_DEFAULT,
+        help="Total duration in seconds for generated YAML data.",
+    )
     parser.add_argument("--run-number", type=int, default=1)
     parser.add_argument("--gps-start", type=int, default=None)
     parser.add_argument("--root-file", default="toy_mc_background.root")
@@ -212,7 +339,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=int,
         default=MAX_BG_RESAMPLE_ATTEMPTS,
     )
-    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=SEED_DEFAULT)
+    parser.add_argument(
+        "--no-write-yaml",
+        action="store_true",
+        help="Generate events but do not write YAML file.",
+    )
     return parser.parse_args(argv)
 
 
@@ -220,10 +352,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """CLI entrypoint for generating pure background event YAML."""
 
     args = parse_args(argv)
-    output_file, event_count = generate_background_yaml(
+    event_count = generate_background_yaml(
         output_file=args.output,
         coord_file=args.coord_file,
-        n_events=args.n_events,
+        duration_seconds=args.duration_seconds,
         run_number=args.run_number,
         gps_start=args.gps_start,
         root_file=args.root_file,
@@ -233,8 +365,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         min_unique_du=args.min_unique_du,
         max_resample_attempts=args.max_resample_attempts,
         seed=args.seed,
+        write_yaml=not args.no_write_yaml,
     )
-    print(f"Generated {event_count} pure background events -> {output_file}")
+    if args.no_write_yaml:
+        print(
+            f"Generated {event_count} pure background events across "
+            f"{args.duration_seconds}s (YAML not written)"
+        )
+    else:
+        print(
+            f"Generated {event_count} pure background events across "
+            f"{args.duration_seconds}s -> {args.output}"
+        )
     return 0
 
 

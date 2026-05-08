@@ -9,6 +9,7 @@ Behavior:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,6 +30,22 @@ TYPE_PATTERNS = {
     "Z": "Trigger*_Z.yaml",
     "XY": "Trigger*_XY.yaml",
 }
+
+
+def build_trigger_pattern(trace_type: str, run_number: Optional[int]) -> str:
+    """Build coarse glob pattern per trace type and optional RUN number."""
+    if run_number is None:
+        return TYPE_PATTERNS[trace_type]
+    return f"Trigger_*_RUN{run_number}_*_{trace_type}.yaml"
+
+
+def _filter_files_by_run_number(files: List[Path], run_number: Optional[int]) -> List[Path]:
+    """Filter file list by exact RUN segment (avoid RUN10/RUN100 collision)."""
+    if run_number is None:
+        return files
+
+    run_pattern = re.compile(rf"RUN{run_number}(?!\d)")
+    return [path for path in files if run_pattern.search(path.name)]
 
 
 def payload_to_log_text(payload: Dict[str, Any]) -> str:
@@ -246,6 +263,7 @@ def merge_files_for_pattern(
     dirpath: Path,
     pattern: str,
     outpath: Path,
+    run_number: Optional[int] = None,
 ) -> Tuple[int, str]:
     """Merge files matching pattern and write to outpath."""
     logger.info(f"Searching files in {dirpath} with pattern '{pattern}'")
@@ -253,25 +271,57 @@ def merge_files_for_pattern(
     if code != 0:
         return code, message
 
+    files = _filter_files_by_run_number(files, run_number)
+    if run_number is not None and not files:
+        return (
+            1,
+            f"No files matching RUN{run_number} in {dirpath} after boundary filtering",
+        )
+
     logger.info(f"Found {len(files)} input files for merge")
     logger.debug("Input files:\n{}", "\n".join(str(file_path) for file_path in files))
 
     merged_data = merge_yaml_by_event_number(files)
     write_merged_yaml(outpath, files, merged_data)
-    return 0, f"Wrote {len(files)} files -> {outpath} (records={len(merged_data)}, mode=event-number)"
+    return (
+        0,
+        f"Wrote {len(files)} files -> {outpath} "
+        f"(records={len(merged_data)}, mode=event-number, run_number={run_number})",
+    )
 
 
-def merge_trigger_files(dirpath: Path, ymd: str, outdir: Path) -> int:
+def merge_trigger_files(
+    dirpath: Path,
+    ymd: str,
+    outdir: Path,
+    run_number: Optional[int] = None,
+) -> int:
     """Merge Trigger*.yaml in one date directory into one output file."""
+    if run_number is None:
+        logger.warning(
+            "Deprecated usage: --run-number is not provided; "
+            "falling back to full-day per-type Trigger merge"
+        )
+
     for trace_type, pattern in TYPE_PATTERNS.items():
-        outpath = outdir / f"Trigger_{ymd}_{trace_type}_merged.yaml"
+        effective_pattern = build_trigger_pattern(trace_type, run_number)
+        if run_number is None:
+            outpath = outdir / f"Trigger_{ymd}_{trace_type}_merged.yaml"
+        else:
+            outpath = outdir / f"Trigger_{ymd}_RUN{run_number}_{trace_type}_merged.yaml"
         logger.info(
-            "Start merge workflow: input_dir={}, output_dir={}, output_file={}",
+            "Start merge workflow: input_dir={}, output_dir={}, output_file={}, run_number={}",
             dirpath,
             outdir,
             outpath,
+            run_number,
         )
-        code, msg = merge_files_for_pattern(dirpath, pattern, outpath)
+        code, msg = merge_files_for_pattern(
+            dirpath,
+            effective_pattern,
+            outpath,
+            run_number=run_number,
+        )
         if code != 0:
             logger.error(msg)
             return code
@@ -296,15 +346,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="../Reco_Dir",
         help="Output directory for merged files (default: ../Reco_Dir)",
     )
+    parser.add_argument(
+        "--run-number",
+        type=int,
+        default=None,
+        help=(
+            "Optional RUN number for file filtering and output naming. "
+            "When omitted, script keeps legacy per-type full-day merge behavior."
+        ),
+    )
     args = parser.parse_args(argv)
     outdir = Path(args.output)
 
-    logger.info(f"CLI arguments: dir={args.dir}, output={outdir}")
+    logger.info(
+        "CLI arguments: dir={}, output={}, run_number={}",
+        args.dir,
+        outdir,
+        args.run_number,
+    )
 
     input_dir, ymd = resolve_input_dir(args.dir, outdir)
     logger.info(f"Resolved date={ymd}, input_dir={input_dir}")
 
-    return merge_trigger_files(input_dir, ymd, outdir)
+    return merge_trigger_files(input_dir, ymd, outdir, run_number=args.run_number)
 
 
 if __name__ == "__main__":

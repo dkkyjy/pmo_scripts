@@ -238,6 +238,58 @@ class TestMerge(unittest.TestCase):
             self.assertIn("1", data)
             self.assertEqual(data["1"]["du_id"], ["1", "2"])
 
+    def test_merge_files_for_pattern_run_number_boundary_filter(self) -> None:
+        """RUN10 filtering should not match RUN100 files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            input_dir = root / "2026" / "03" / "03"
+            input_dir.mkdir(parents=True)
+            out_file = root / "merged.yaml"
+
+            write_yaml(
+                input_dir / "Trigger_x_RUN10_A.yaml",
+                {"a": {"event_number": 10, "du_id": ["10"], "time": {"10": 1}}},
+            )
+            write_yaml(
+                input_dir / "Trigger_x_RUN100_A.yaml",
+                {"b": {"event_number": 100, "du_id": ["100"], "time": {"100": 2}}},
+            )
+
+            code, msg = merge.merge_files_for_pattern(
+                input_dir,
+                "Trigger*.yaml",
+                out_file,
+                run_number=10,
+            )
+
+            self.assertEqual(code, 0)
+            self.assertIn("run_number=10", msg)
+            data = read_merged_yaml_without_header(out_file)
+            self.assertEqual(sorted(data.keys()), ["10"])
+
+    def test_merge_files_for_pattern_run_number_no_match(self) -> None:
+        """Should return code 1 when no files match the requested RUN number."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            input_dir = root / "2026" / "03" / "03"
+            input_dir.mkdir(parents=True)
+            out_file = root / "merged.yaml"
+
+            write_yaml(
+                input_dir / "Trigger_x_RUN11_A.yaml",
+                {"a": {"event_number": 11, "du_id": ["11"], "time": {"11": 1}}},
+            )
+
+            code, msg = merge.merge_files_for_pattern(
+                input_dir,
+                "Trigger*.yaml",
+                out_file,
+                run_number=10,
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("RUN10", msg)
+
     def test_merge_files_for_pattern_error_cases(self) -> None:
         """Should return correct error code when directory/files are missing."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -291,6 +343,49 @@ class TestMerge(unittest.TestCase):
             self.assertIn("1", body)
             self.assertEqual(body["1"]["du_id"], ["1", "2"])
 
+    def test_merge_trigger_files_with_run_number_uses_run_output_name(self) -> None:
+        """Run-number mode should write output file including RUN segment."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outdir = Path(tmpdir)
+            date_dir = outdir / "2026" / "03" / "03"
+            date_dir.mkdir(parents=True)
+
+            write_yaml(
+                date_dir / "Trigger_a_RUN65.yaml",
+                {"a": {"event_number": 1, "du_id": ["1"], "time": {"1": 1}}},
+            )
+            write_yaml(
+                date_dir / "Trigger_b_RUN66.yaml",
+                {"b": {"event_number": 2, "du_id": ["2"], "time": {"2": 2}}},
+            )
+
+            code = merge.merge_trigger_files(date_dir, "20260303", outdir, run_number=65)
+            self.assertEqual(code, 0)
+
+            merged_out = outdir / "Trigger_20260303_RUN65_merged.yaml"
+            self.assertTrue(merged_out.exists())
+            body = read_merged_yaml_without_header(merged_out)
+            self.assertEqual(sorted(body.keys()), ["1"])
+
+    def test_merge_trigger_files_without_run_number_logs_deprecation_warning(self) -> None:
+        """Legacy mode should keep old naming and emit deprecation warning."""
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch(
+            "merge.merge_header.logger.warning"
+        ) as warning_mock:
+            outdir = Path(tmpdir)
+            date_dir = outdir / "2026" / "03" / "03"
+            date_dir.mkdir(parents=True)
+
+            write_yaml(
+                date_dir / "Trigger_a.yaml",
+                {"a": {"event_number": 1, "du_id": ["1"], "time": {"1": 1}}},
+            )
+
+            code = merge.merge_trigger_files(date_dir, "20260303", outdir)
+            self.assertEqual(code, 0)
+            self.assertTrue((outdir / "Trigger_20260303_merged.yaml").exists())
+            warning_mock.assert_called_once()
+
     def test_main_calls_merge_all_types(self) -> None:
         """Should parse args and dispatch to merge_trigger_files with expected values."""
         with mock.patch(
@@ -305,6 +400,24 @@ class TestMerge(unittest.TestCase):
         self.assertEqual(called_args[0], Path("/tmp/out") / Path("2026/03/03"))
         self.assertEqual(called_args[1], "20260303")
         self.assertEqual(called_args[2], Path("/tmp/out"))
+        self.assertIsNone(mocked_merge.call_args.kwargs["run_number"])
+
+    def test_main_passes_run_number(self) -> None:
+        """CLI run-number argument should be propagated to merge_trigger_files."""
+        with mock.patch(
+            "merge.merge_header.merge_trigger_files",
+            return_value=0,
+        ) as mocked_merge:
+            exit_code = merge.main([
+                "2026/03/03",
+                "-o",
+                "/tmp/out",
+                "--run-number",
+                "65",
+            ])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mocked_merge.call_args.kwargs["run_number"], 65)
 
     def test_main_module_entrypoint(self) -> None:
         """Should execute __main__ entrypoint (raise SystemExit from main)."""

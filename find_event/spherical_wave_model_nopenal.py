@@ -618,14 +618,13 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
 
 def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial_directions, save_name):  # pragma: no cover
     """球面波重建模型"""
-    results = []
-    chi_squares = []
-    gps_times = []
-    all_matches = []  # 存储每个事件最终的DU列表
+    results = {}
+    chi_squares = {}
+    all_matches = {}  # 存储每个事件最终的DU列表
     cmap = plt.cm.viridis
     
-    for i, (gps_time, matches) in enumerate(matching_times):
-        if i >= len(initial_directions): break
+    for i, (event_key, matches) in enumerate(matching_times.items()):
+        # if i >= len(initial_directions): break
         if len(matches) < 5: continue
         
         times = {det_id: ns for det_id, ns in matches}
@@ -635,7 +634,7 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
         t_mean_ns = np.mean(t_ns)
         min_index = np.argmin(t_ns)
         max_index = np.argmax(t_ns)
-        initial_direction = initial_directions[i]
+        initial_direction = initial_directions[event_key]
         initial_t0 = t_ns[min_index] - t_mean_ns - 7.3e3/c
         current_du_ids = list(times.keys())
         index=i+1
@@ -842,9 +841,8 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
                 err_fallback += ((tp - (ns - t_mean_ns)) / 6.0) ** 2
             chi2_fallback = err_fallback / max(1, len(matches)-4)
             
-            results.append(src_fallback)
-            chi_squares.append(chi2_fallback)
-            gps_times.append(gps_time)
+            results[event_key] = src_fallback
+            chi_squares[event_key] = chi2_fallback
             continue  # 跳到下一个事件
         
         if best_result:
@@ -1206,10 +1204,9 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
             
             #chi2 = max(chi2, 1e-3)
             
-            results.append(src)
-            chi_squares.append(chi2)
-            gps_times.append(gps_time)
-            all_matches.append(matches)  # 记录最终参与拟合的DU列表
+            results[event_key] = src
+            chi_squares[event_key] = chi2
+            all_matches[event_key] = matches
 
             epsilon = 1e-12
             zenith = np.arccos(src[2] / (np.linalg.norm(src) + epsilon ) ) * 180 / np.pi
@@ -1289,8 +1286,7 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
                plt.close()
                print(f"Saved detector plot for SWM Event {i}")
             
-    #return gps_times, results, chi_squares, all_matches
-    return gps_times, results, chi_squares
+    return results, chi_squares, all_matches
 
 
 def _coerce_time_ns(value):
@@ -1313,11 +1309,10 @@ def spherical_wave_model(matching_times, matching_signals, detector_positions, i
     - input: dict[event_key] -> dict[du_id] = time_ns (or one-item list/array)
     - output: (dict[event_key] -> np.ndarray([x, y, z]), dict[event_key] -> chi_square)
     """
-    del matching_signals
+    # del matching_signals
 
-    event_keys = []
-    legacy_events = []
-    init_directions = []
+    legacy_events = {}
+    # init_directions = {}
 
     for event_key, times in matching_times.items():
         if event_key not in initial_directions:
@@ -1351,19 +1346,18 @@ def spherical_wave_model(matching_times, matching_signals, detector_positions, i
             )
             continue
 
-        event_keys.append(event_key)
-        legacy_events.append((event_key, matches))
-        init_directions.append(np.array(initial_directions[event_key], dtype=float))
+        legacy_events[event_key] = matches
+        # init_directions[event_key] = np.array(initial_directions[event_key], dtype=float)
 
     if not legacy_events:
-        return {}, {}
+        return {}, {}, {}
 
     try:
-        _fit_keys, source_vectors, chi_list = spherical_wave_model_deepseek(
+        source_vectors, chi_list, all_matches = spherical_wave_model_deepseek(
             legacy_events,
             detector_positions,
             c,
-            init_directions,
+            initial_directions,
             "SWM_nopenal",
         )
     except SWMRecoverableFitError as exc:
@@ -1371,21 +1365,26 @@ def spherical_wave_model(matching_times, matching_signals, detector_positions, i
             "SWM no-penalty fit hit recoverable failure, returning empty result: "
             f"{exc}"
         )
-        return {}, {}
+        return {}, {}, {}
 
     directions = {}
     chi_squares = {}
+    new_matches = {}
 
-    max_len = min(len(event_keys), len(source_vectors), len(chi_list))
-    if max_len != len(event_keys):
+    logger.info(
+        f"SWM no-penalty fit completed: {len(source_vectors)} events processed, "
+        f"{len(chi_list)} chi values, {len(all_matches)} match lists"
+    )
+    max_len = min(len(source_vectors), len(chi_list), len(all_matches))
+    if max_len != len(all_matches):
         logger.warning(
             "SWM no-penalty result length mismatch: "
-            f"events={len(event_keys)} vectors={len(source_vectors)} chi={len(chi_list)}"
+            f"vectors={len(source_vectors)} chi={len(chi_list)} all_matches={len(all_matches)}"
         )
 
-    for idx in range(max_len):
-        event_key = event_keys[idx]
-        directions[event_key] = np.array(source_vectors[idx], dtype=float)
-        chi_squares[event_key] = float(chi_list[idx])
+    for event_key, new_match in all_matches.items():
+        directions[event_key] = np.array(source_vectors[event_key], dtype=float)
+        chi_squares[event_key] = float(chi_list[event_key])
+        new_matches[event_key] = new_match
 
-    return directions, chi_squares
+    return directions, chi_squares, new_matches

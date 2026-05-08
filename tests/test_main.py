@@ -239,6 +239,7 @@ class TestMainCacheSchema(unittest.TestCase):
         root, matching, det_pos = self._prepare_inputs()
 
         self._write_cache(root / "sample_matched.yaml", self._matched_row(False))
+        self._write_cache(root / "sample_fingerprint.yaml", self._matched_row(False))
         self._write_cache(root / "sample_PWM.yaml", self._pwm_row(False))
         self._write_cache(root / "sample_SWM.yaml", self._swm_row(False))
         self._write_stage_meta(
@@ -251,11 +252,22 @@ class TestMainCacheSchema(unittest.TestCase):
             },
         )
         self._write_stage_meta(
-            "pwm",
-            root / "sample_PWM.yaml",
+            "fingerprint",
+            root / "sample_fingerprint.yaml",
             {
                 "matched_file": main_module._build_file_signature(
                     str(root / "sample_matched.yaml")
+                ),
+                "det_pos_file": main_module._build_file_signature(str(det_pos)),
+                "with_signal": False,
+            },
+        )
+        self._write_stage_meta(
+            "pwm",
+            root / "sample_PWM.yaml",
+            {
+                "fingerprint_file": main_module._build_file_signature(
+                    str(root / "sample_fingerprint.yaml")
                 ),
                 "det_pos_file": main_module._build_file_signature(str(det_pos)),
                 "with_signal": False,
@@ -279,6 +291,7 @@ class TestMainCacheSchema(unittest.TestCase):
             mock.patch("main.fe_plot.plot_reconstructed_positions_SWM"), \
             mock.patch("main.fe_plot.plot_fitting_parameters_SWM"), \
             mock.patch("main.fe_mt.optimized_read_matching_times_graph") as mt_mock, \
+            mock.patch("main.fe_tdf.filter_fixed_sources_from_payload") as fp_mock, \
             mock.patch("main.fe_pwm.plane_wave_model") as pwm_mock, \
             mock.patch("main.fe_swm.spherical_wave_model") as swm_mock:
             result = main_module.main(
@@ -291,6 +304,7 @@ class TestMainCacheSchema(unittest.TestCase):
         self.assertEqual(result, 0)
 
         mt_mock.assert_not_called()
+        fp_mock.assert_not_called()
         pwm_mock.assert_not_called()
         swm_mock.assert_not_called()
 
@@ -366,6 +380,7 @@ class TestMainCacheSchema(unittest.TestCase):
         """Selecting only SWM should reuse matched/PWM caches when available."""
         root, matching, det_pos = self._prepare_inputs()
         self._write_cache(root / "sample_matched.yaml", self._matched_row(True))
+        self._write_cache(root / "sample_fingerprint.yaml", self._matched_row(True))
         self._write_cache(root / "sample_PWM.yaml", self._pwm_row(True))
         self._write_stage_meta(
             "matching",
@@ -377,11 +392,22 @@ class TestMainCacheSchema(unittest.TestCase):
             },
         )
         self._write_stage_meta(
-            "pwm",
-            root / "sample_PWM.yaml",
+            "fingerprint",
+            root / "sample_fingerprint.yaml",
             {
                 "matched_file": main_module._build_file_signature(
                     str(root / "sample_matched.yaml")
+                ),
+                "det_pos_file": main_module._build_file_signature(str(det_pos)),
+                "with_signal": True,
+            },
+        )
+        self._write_stage_meta(
+            "pwm",
+            root / "sample_PWM.yaml",
+            {
+                "fingerprint_file": main_module._build_file_signature(
+                    str(root / "sample_fingerprint.yaml")
                 ),
                 "det_pos_file": main_module._build_file_signature(str(det_pos)),
                 "with_signal": True,
@@ -479,6 +505,7 @@ class TestMainCacheSchema(unittest.TestCase):
         """Missing required PWM cache fields should trigger recompute fallback."""
         root, matching, det_pos = self._prepare_inputs()
         self._write_cache(root / "sample_matched.yaml", self._matched_row(False))
+        self._write_cache(root / "sample_fingerprint.yaml", self._matched_row(False))
 
         invalid_pwm_row = self._pwm_row(False)
         invalid_pwm_row.pop("x")
@@ -494,11 +521,22 @@ class TestMainCacheSchema(unittest.TestCase):
             },
         )
         self._write_stage_meta(
-            "pwm",
-            root / "sample_PWM.yaml",
+            "fingerprint",
+            root / "sample_fingerprint.yaml",
             {
                 "matched_file": main_module._build_file_signature(
                     str(root / "sample_matched.yaml")
+                ),
+                "det_pos_file": main_module._build_file_signature(str(det_pos)),
+                "with_signal": False,
+            },
+        )
+        self._write_stage_meta(
+            "pwm",
+            root / "sample_PWM.yaml",
+            {
+                "fingerprint_file": main_module._build_file_signature(
+                    str(root / "sample_fingerprint.yaml")
                 ),
                 "det_pos_file": main_module._build_file_signature(str(det_pos)),
                 "with_signal": False,
@@ -661,6 +699,7 @@ def test_parse_args_supports_all_flags() -> None:
             "--with-signal",
             "--force-recompute",
             "--run-matching",
+            "--run-fingerprint",
             "--run-pwm",
             "--run-swm",
         ]
@@ -672,6 +711,7 @@ def test_parse_args_supports_all_flags() -> None:
     assert args.with_signal is True
     assert args.force_recompute is True
     assert args.run_matching is True
+    assert args.run_fingerprint is True
     assert args.run_pwm is True
     assert args.run_swm is True
 
@@ -734,6 +774,227 @@ def test_validate_stage_cache_payload_rejects_bad_top_level_and_row() -> None:
         {"1000_0": []},
         False,
     ) == (False, "row is not a dict for event 1000_0")
+
+
+def test_canonicalization_drops_orphan_keys() -> None:
+    """Canonicalization should keep only the requested keys for selected fields."""
+    state = main_module._new_stage_state()
+    state["times"] = {"keep": [1.0], "drop": [9.0]}
+    state["datetimes"] = {"keep": "2026-01-01T00:00:00", "drop": "bad"}
+
+    main_module._canonicalize_state_keys(
+        state,
+        ["keep"],
+        ("times", "datetimes"),
+        "test",
+    )
+
+    assert set(state["times"].keys()) == {"keep"}
+    assert set(state["datetimes"].keys()) == {"keep"}
+
+
+def test_canonicalization_handles_non_dict_field_values() -> None:
+    """Canonicalization should tolerate non-dict field values defensively."""
+    state = main_module._new_stage_state()
+    state["times"] = []
+
+    main_module._canonicalize_state_keys(
+        state,
+        ["1000_0"],
+        ("times",),
+        "test",
+    )
+
+    assert state["times"] == {"1000_0": None}
+
+
+def test_state_keys_consistency_after_matching(tmp_path: Path) -> None:
+    """Matching stage should canonicalize all matching fields to one key set."""
+    matching, _det_pos = _prepare_stage_inputs(tmp_path)
+    metadata = {
+        "1000_0": {
+            "time": [1.0],
+            "signal": [9.9],
+            "du_id": [101],
+            "run_number": 1,
+            "event_number": 2,
+            "file": "source.root",
+            "index": 0,
+            "datetime": "2026-01-01T00:00:00",
+            "gps_time": 1704067200,
+        }
+    }
+    state = _seed_matching_state(with_signal=True)
+    state["times"]["stale"] = [2.0]
+    state["datetimes"]["stale"] = "2026-01-01T00:00:01"
+
+    returned_state, _matching_computed = main_module.skip_matching_stage(
+        metadata,
+        True,
+        state,
+    )
+
+    expected_keys = {"1000_0"}
+    for field in main_module.MATCHING_STATE_FIELDS:
+        assert set(returned_state[field].keys()) == expected_keys
+    assert matching.name == "sample.yaml"
+
+
+def test_state_keys_consistency_after_pwm(tmp_path: Path) -> None:
+    """PWM cache path should canonicalize matching and model-output fields."""
+    matching = tmp_path / "sample.yaml"
+    matching.write_text(yaml.safe_dump({}), encoding="utf-8")
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    pwm_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._pwm_row(False)}),
+        encoding="utf-8",
+    )
+
+    state = _seed_pwm_state()
+    state["times"]["stale"] = [2.0]
+    state["directions"]["stale"] = np.array([0.0, 1.0, 0.0])
+    state["chi_squares"]["stale"] = 0.99
+
+    returned_state, pwm_loaded = main_module.skip_pwm_stage(
+        str(matching),
+        {},
+        False,
+        state,
+    )
+
+    assert pwm_loaded is True
+    expected_keys = {"1000_0"}
+    for field in main_module.PWM_STATE_FIELDS:
+        assert set(returned_state[field].keys()) == expected_keys
+
+
+def test_state_contract_with_mixed_cache_hits(tmp_path: Path) -> None:
+    """Mixed cache-hit/recompute chain should keep one canonical key set."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    matched_file = tmp_path / "sample_matched.yaml"
+    matched_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
+    matching_meta = main_module._build_stage_cache_meta(
+        "matching",
+        {
+            "matching_file": main_module._build_file_signature(str(matching)),
+            "det_pos_file": main_module._build_file_signature(str(det_pos)),
+            "with_signal": False,
+        },
+    )
+    main_module._write_cache_meta(
+        main_module._meta_file_for(str(matched_file)),
+        matching_meta,
+    )
+
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    pwm_file.write_text("cached", encoding="utf-8")
+    pwm_meta = main_module._build_stage_cache_meta(
+        "pwm",
+        {
+            "fingerprint_file": main_module._build_file_signature(
+                str(tmp_path / "sample_fingerprint.yaml")
+            ),
+            "det_pos_file": main_module._build_file_signature(str(det_pos)),
+            "with_signal": False,
+        },
+    )
+    main_module._write_cache_meta(main_module._meta_file_for(str(pwm_file)), pwm_meta)
+
+    state = main_module._new_stage_state()
+    state["times"]["stale"] = [3.0]
+    state["directions"]["stale"] = np.array([1.0, 0.0, 0.0])
+
+    metadata = main_module._load_event_metadata_map(str(matching))
+    state, matching_computed = main_module.run_matching_stage(
+        str(matching),
+        metadata,
+        str(det_pos),
+        False,
+        False,
+        state,
+    )
+    assert matching_computed is False
+
+    with mock.patch(
+        "main.fe_tdf.filter_fixed_sources_from_payload",
+        return_value={"1000_0": TestMainCacheSchema._matched_row(False)},
+    ):
+        state, fingerprint_computed = main_module.run_fingerprint_stage(
+            str(matching),
+            metadata,
+            str(det_pos),
+            False,
+            False,
+            state,
+            matching_computed,
+        )
+
+    assert fingerprint_computed is True
+
+    with mock.patch(
+        "main._read_yaml_dict",
+        side_effect=ValueError("broken cache"),
+    ), mock.patch(
+        "main.fe_pwm.plane_wave_model",
+        return_value=TestMainCacheSchema._pwm_result(),
+    ), mock.patch("main.fe_plot.plot_reconstructed_positions_PWM"), mock.patch(
+        "main.fe_plot.plot_fitting_parameters_PWM"
+    ):
+        state, pwm_computed = main_module.run_pwm_stage(
+            str(matching),
+            {},
+            str(det_pos),
+            False,
+            False,
+            state,
+            str(tmp_path / "fig"),
+            fingerprint_computed,
+        )
+
+    assert pwm_computed is True
+    for field in main_module.PWM_STATE_FIELDS:
+        assert set(state[field].keys()) == {"1000_0"}
+
+
+def test_swm_uses_canonicalized_pwm_keyset(tmp_path: Path) -> None:
+    """SWM should receive the canonicalized PWM key set as seed directions."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    pwm_file = tmp_path / "sample_PWM.yaml"
+    pwm_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._pwm_row(False)}),
+        encoding="utf-8",
+    )
+
+    state = _seed_pwm_state()
+    state["times"]["stale"] = [2.0]
+    state["directions"]["stale"] = np.array([0.0, 1.0, 0.0])
+    state["chi_squares"]["stale"] = 0.99
+
+    state, pwm_loaded = main_module.skip_pwm_stage(str(matching), {}, False, state)
+    assert pwm_loaded is True
+    assert set(state["directions"].keys()) == {"1000_0"}
+
+    with mock.patch(
+        "main.fe_swm.spherical_wave_model",
+        return_value=TestMainCacheSchema._swm_result(),
+    ) as swm_mock, mock.patch("main.fe_plot.plot_reconstructed_positions_SWM"), \
+        mock.patch("main.fe_plot.plot_fitting_parameters_SWM"):
+        main_module.run_swm_stage(
+            str(matching),
+            {},
+            str(det_pos),
+            False,
+            True,
+            state,
+            str(tmp_path / "fig"),
+            False,
+        )
+
+    seed_directions = swm_mock.call_args[0][3]
+    assert set(seed_directions.keys()) == {"1000_0"}
 
 
 def test_plot_pwm_if_needed_success_and_exception() -> None:
@@ -832,6 +1093,260 @@ def test_skip_matching_stage_ignores_non_dict_rows() -> None:
     assert matching_computed is False
     assert returned_state["times"]["1000_0"] == [1.0]
     assert "bad" not in returned_state["times"]
+
+
+def test_skip_fingerprint_stage_prefers_matched_cache(tmp_path: Path) -> None:
+    """skip_fingerprint_stage should load _matched cache when present."""
+    matching, _det_pos = _prepare_stage_inputs(tmp_path)
+    matched_file = tmp_path / "sample_matched.yaml"
+    matched_file.write_text(
+        yaml.safe_dump(
+            {
+                "evt": {
+                    "run_number": 1,
+                    "event_number": 2,
+                    "datetime": "2026-01-01T00:00:00",
+                    "gps_time": 1704067200,
+                    "du_id": [101],
+                    "file": "source.root",
+                    "index": 0,
+                    "time": [1.0],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state, fingerprint_computed = main_module.skip_fingerprint_stage(
+        str(matching),
+        False,
+        main_module._new_stage_state(),
+    )
+
+    assert fingerprint_computed is False
+    assert state["times"]["evt"] == [1.0]
+
+
+def test_run_fingerprint_stage_cache_hit_and_meta_mismatch(tmp_path: Path) -> None:
+    """Fingerprint stage should hit cache, and recompute when metadata mismatches."""
+    matching, _det_pos = _prepare_stage_inputs(tmp_path)
+    matched_file = tmp_path / "sample_matched.yaml"
+    matched_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
+    metadata = main_module._load_event_metadata_map(str(matching))
+    fingerprint_file = tmp_path / "sample_fingerprint.yaml"
+    fingerprint_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
+
+    expected_meta = main_module._build_stage_cache_meta(
+        "fingerprint",
+        {
+            "matched_file": main_module._build_file_signature(str(matched_file)),
+            "det_pos_file": main_module._build_file_signature(str(_det_pos)),
+            "with_signal": False,
+        },
+    )
+    main_module._write_cache_meta(
+        main_module._meta_file_for(str(fingerprint_file)),
+        expected_meta,
+    )
+
+    with mock.patch("main.fe_tdf.filter_fixed_sources_from_payload") as filter_mock:
+        state, fingerprint_computed = main_module.run_fingerprint_stage(
+            str(matching),
+            metadata,
+            str(_det_pos),
+            False,
+            False,
+            main_module._new_stage_state(),
+            False,
+        )
+
+    assert fingerprint_computed is False
+    filter_mock.assert_not_called()
+    assert "1000_0" in state["times"]
+
+    # Change matched cache content to invalidate fingerprint meta source_file signature.
+    matched_file.write_text(
+        yaml.safe_dump(
+            {
+                "1000_0": {
+                    **TestMainCacheSchema._matched_row(False),
+                    "index": 1,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch(
+        "main.fe_tdf.filter_fixed_sources_from_payload",
+        return_value={"1000_0": TestMainCacheSchema._matched_row(False)},
+    ) as filter_mock:
+        state, fingerprint_computed = main_module.run_fingerprint_stage(
+            str(matching),
+            metadata,
+            str(_det_pos),
+            False,
+            False,
+            main_module._new_stage_state(),
+            False,
+        )
+
+    assert fingerprint_computed is True
+    filter_mock.assert_called_once()
+    assert "1000_0" in state["times"]
+
+
+def test_skip_fingerprint_stage_ignores_non_dict_rows() -> None:
+    """skip_fingerprint_stage should ignore non-dict metadata entries."""
+    state = main_module._new_stage_state()
+    metadata = {
+        "good": {
+            "time": [1.0],
+            "du_id": [101],
+            "event_number": 2,
+            "index": 0,
+            "run_number": 1,
+            "datetime": "2026-01-01T00:00:00",
+            "gps_time": 1704067200,
+            "file": "source.root",
+        },
+        "bad": "not-a-dict",
+    }
+
+    with mock.patch("main._load_event_metadata_map", return_value=metadata):
+        returned_state, fingerprint_computed = main_module.skip_fingerprint_stage(
+            "sample.yaml",
+            False,
+            state,
+        )
+
+    assert fingerprint_computed is False
+    assert "good" in returned_state["times"]
+    assert "bad" not in returned_state["times"]
+
+
+def test_run_fingerprint_stage_recomputes_for_unreadable_and_invalid_cache(
+    tmp_path: Path,
+) -> None:
+    """Fingerprint stage should recompute when cache is unreadable or invalid."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    metadata = main_module._load_event_metadata_map(str(matching))
+    matched_file = tmp_path / "sample_matched.yaml"
+    matched_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
+    fingerprint_file = tmp_path / "sample_fingerprint.yaml"
+    fingerprint_file.write_text("cached", encoding="utf-8")
+
+    expected_meta = main_module._build_stage_cache_meta(
+        "fingerprint",
+        {
+            "matched_file": main_module._build_file_signature(str(matched_file)),
+            "det_pos_file": main_module._build_file_signature(str(det_pos)),
+            "with_signal": False,
+        },
+    )
+    main_module._write_cache_meta(
+        main_module._meta_file_for(str(fingerprint_file)),
+        expected_meta,
+    )
+
+    def read_yaml_side_effect(file_path: str) -> dict:
+        if file_path.endswith("_fingerprint.yaml"):
+            raise ValueError("broken cache")
+        return {"1000_0": TestMainCacheSchema._matched_row(False)}
+
+    with mock.patch("main._read_yaml_dict", side_effect=read_yaml_side_effect), mock.patch(
+        "main.fe_tdf.filter_fixed_sources_from_payload",
+        return_value={"1000_0": TestMainCacheSchema._matched_row(False)},
+    ) as filter_mock:
+        _state, fingerprint_computed = main_module.run_fingerprint_stage(
+            str(matching),
+            metadata,
+            str(det_pos),
+            False,
+            False,
+            main_module._new_stage_state(),
+            False,
+        )
+
+    assert fingerprint_computed is True
+    filter_mock.assert_called_once()
+
+    invalid_row = {"1000_0": {"run_number": 1}}
+    fingerprint_file.write_text(yaml.safe_dump(invalid_row), encoding="utf-8")
+
+    with mock.patch(
+        "main.fe_tdf.filter_fixed_sources_from_payload",
+        return_value={"1000_0": TestMainCacheSchema._matched_row(False)},
+    ) as filter_mock:
+        _state, fingerprint_computed = main_module.run_fingerprint_stage(
+            str(matching),
+            metadata,
+            str(det_pos),
+            False,
+            False,
+            main_module._new_stage_state(),
+            False,
+        )
+
+    assert fingerprint_computed is True
+    filter_mock.assert_called_once()
+
+
+def test_run_fingerprint_stage_force_recompute_and_invalid_source_payload(
+    tmp_path: Path,
+) -> None:
+    """Fingerprint stage should honor force_recompute and reject non-mapping payloads."""
+    matching, det_pos = _prepare_stage_inputs(tmp_path)
+    metadata = main_module._load_event_metadata_map(str(matching))
+    matched_file = tmp_path / "sample_matched.yaml"
+    matched_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
+    fingerprint_file = tmp_path / "sample_fingerprint.yaml"
+    fingerprint_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
+
+    with mock.patch(
+        "main.fe_tdf.filter_fixed_sources_from_payload",
+        return_value={"1000_0": TestMainCacheSchema._matched_row(False)},
+    ) as filter_mock:
+        _state, fingerprint_computed = main_module.run_fingerprint_stage(
+            str(matching),
+            metadata,
+            str(det_pos),
+            False,
+            True,
+            main_module._new_stage_state(),
+            False,
+        )
+
+    assert fingerprint_computed is True
+    filter_mock.assert_called_once()
+
+    with mock.patch("main._read_yaml_dict", return_value=[]):
+        with pytest.raises(ValueError):
+            main_module.run_fingerprint_stage(
+                str(matching),
+                metadata,
+                str(det_pos),
+                False,
+                True,
+                main_module._new_stage_state(),
+                False,
+            )
 
 
 def test_skip_pwm_stage_uses_cache_and_fallbacks(tmp_path: Path) -> None:
@@ -952,6 +1467,7 @@ def test_main_skip_flags_cover_skip_paths(tmp_path: Path) -> None:
 
     with mock.patch("main.load_data_from_file", return_value={}), \
         mock.patch("main.run_matching_stage") as run_matching_mock, \
+        mock.patch("main.run_fingerprint_stage") as run_fingerprint_mock, \
         mock.patch("main.run_pwm_stage") as run_pwm_mock:
         result = main_module.main(
             str(matching),
@@ -959,11 +1475,13 @@ def test_main_skip_flags_cover_skip_paths(tmp_path: Path) -> None:
             with_signal=False,
             det_pos_file=str(det_pos),
             skip_matching=True,
+            skip_fingerprint=True,
             skip_pwm=True,
         )
 
     assert result == 0
     run_matching_mock.assert_not_called()
+    run_fingerprint_mock.assert_not_called()
     run_pwm_mock.assert_not_called()
 
 
@@ -1070,15 +1588,20 @@ def test_run_pwm_stage_recomputes_for_signature_mismatch_and_unreadable_cache(
 ) -> None:
     """PWM stage should recompute when cache meta mismatches or cache load fails."""
     matching, det_pos = _prepare_stage_inputs(tmp_path)
-    matched_file = tmp_path / "sample_matched.yaml"
-    matched_file.write_text(yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}), encoding="utf-8")
+    fingerprint_file = tmp_path / "sample_fingerprint.yaml"
+    fingerprint_file.write_text(
+        yaml.safe_dump({"1000_0": TestMainCacheSchema._matched_row(False)}),
+        encoding="utf-8",
+    )
     pwm_file = tmp_path / "sample_PWM.yaml"
     pwm_file.write_text("cached", encoding="utf-8")
 
     mismatched_meta = main_module._build_stage_cache_meta(
         "pwm",
         {
-            "matched_file": main_module._build_file_signature(str(matched_file)),
+            "fingerprint_file": main_module._build_file_signature(
+                str(fingerprint_file)
+            ),
             "det_pos_file": main_module._build_file_signature(str(det_pos)),
             "with_signal": True,
         },
@@ -1107,7 +1630,9 @@ def test_run_pwm_stage_recomputes_for_signature_mismatch_and_unreadable_cache(
     expected_meta = main_module._build_stage_cache_meta(
         "pwm",
         {
-            "matched_file": main_module._build_file_signature(str(matched_file)),
+            "fingerprint_file": main_module._build_file_signature(
+                str(fingerprint_file)
+            ),
             "det_pos_file": main_module._build_file_signature(str(det_pos)),
             "with_signal": False,
         },
