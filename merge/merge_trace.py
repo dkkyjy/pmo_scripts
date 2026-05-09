@@ -151,9 +151,16 @@ def load_yaml_dict(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
-    """Merge entries by event_number across all files."""
+    """Merge entries by event_number with adjacent-file comparison only.
+
+    For file N, duplicates are merged only against file N-1. This avoids
+    full-history comparisons while preserving per-event payload merge rules.
+    """
     logger.info(f"Merging by event_number from {len(files)} files")
+    logger.info("Using adjacent-window merge mode (current file vs previous file)")
+
     grouped: Dict[str, Dict[str, Any]] = {}
+    previous_file_events: Dict[str, Dict[str, Any]] = {}
     merged_event_keys = set()
 
     merged_count = 0
@@ -163,14 +170,14 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
         content = load_yaml_dict(path)
         logger.debug("Processing file {} with {} top-level entries", path, len(content))
 
-        file_inserted = 0
-        file_merged = 0
+        current_file_events: Dict[str, Dict[str, Any]] = {}
         file_skipped = 0
         for _, payload in content.items():
             if not isinstance(payload, dict):
                 skipped_count += 1
                 file_skipped += 1
                 continue
+
             event_number = payload.get("event_number")
             if event_number is None:
                 logger.warning(f"File {path} has entry without event_number; skipped")
@@ -179,19 +186,27 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 continue
 
             event_key = str(event_number)
-            if event_key not in grouped:
-                grouped[event_key] = payload
-                file_inserted += 1
-                logger.debug("Inserted new event key={} from file={}", event_key, path)
+            if event_key not in current_file_events:
+                current_file_events[event_key] = payload
             else:
-                original_payload = grouped[event_key]
+                current_file_events[event_key] = merge_event_payload(
+                    current_file_events[event_key],
+                    payload,
+                )
+
+        file_inserted = 0
+        file_merged = 0
+        current_processed: Dict[str, Dict[str, Any]] = {}
+        for event_key, payload in current_file_events.items():
+            if event_key in previous_file_events:
+                original_payload = previous_file_events[event_key]
                 logger.info(
-                    "Merging duplicate event_number={} from file={}",
+                    "Merging adjacent duplicate event_number={} from file={}",
                     event_key,
                     path,
                 )
                 logger.info(
-                    "Original record before merge for event_number={}:\n{}",
+                    "Previous-file record before merge for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(original_payload),
                 )
@@ -203,6 +218,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
 
                 merged_payload = merge_event_payload(original_payload, payload)
                 grouped[event_key] = merged_payload
+                current_processed[event_key] = merged_payload
                 merged_count += 1
                 file_merged += 1
                 merged_event_keys.add(event_key)
@@ -211,6 +227,14 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                     event_key,
                     payload_to_log_text(merged_payload),
                 )
+                continue
+
+            grouped[event_key] = payload
+            current_processed[event_key] = payload
+            file_inserted += 1
+            logger.debug("Inserted new event key={} from file={}", event_key, path)
+
+        previous_file_events = current_processed
 
         logger.debug(
             "File summary {}: inserted={}, merged={}, skipped={}",

@@ -19,8 +19,8 @@ try:
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    print("Warning: numba not installed. Falling back to standard Python.")
-    print("Install with: pip install numba")
+    logger.debug("Warning: numba not installed. Falling back to standard Python.")
+    logger.debug("Install with: pip install numba")
 
 GPS_UTC_OFFSET = 18
 c = 299792458.0/1e9/1.000
@@ -611,7 +611,11 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
            observed_time = ns - average_t_value  #/ 1e9  # 将纳秒转为秒
         '''
         residual = ( (observed_time - theoretical_time )/6e0)**2
-        print(f"chi2_calculation_sperical: detectors {detector_id}, measured_diff: {observed_time:.2f}, theoretical_diff: {theoretical_time:.2f}, contribution: {residual:.2f}")
+        logger.debug(
+            f"chi2_calculation_sperical: detectors {detector_id}, "
+            f"measured_diff: {observed_time:.2f}, "
+            f"theoretical_diff: {theoretical_time:.2f}, contribution: {residual:.2f}"
+        )
         total_error += residual 
     reduced_total_err = total_error/(len(matches) - 4)
     return reduced_total_err
@@ -639,7 +643,10 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
         current_du_ids = list(times.keys())
         index=i+1
         if(index%500 == 1 ) :
-            print(f"SWM EventNo.{index}/{len(initial_directions)}", initial_direction, initial_t0)
+            logger.debug(
+                f"SWM EventNo.{index}/{len(initial_directions)} "
+                f"{initial_direction} {initial_t0}"
+            )
         initial_rho = 7.3e3  # Initial estimated source distance
         vector = np.array([initial_direction[0], initial_direction[1], initial_direction[2]])
         norm = np.linalg.norm(vector)
@@ -656,7 +663,7 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
             zenith_init = 45.0
             azimuth_init = 0.0
             t0_init = np.median(times)
-            print("Warning: Robust initial estimation failed, using defaults.")
+            logger.debug("Warning: Robust initial estimation failed, using defaults.")
         
         # 为 Numba 准备数据（转换为 numpy 数组）
         if NUMBA_AVAILABLE:
@@ -823,7 +830,10 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
         # 新增：如果所有候选都失败或卡方过大，使用平面波近似作为备用
         if best_result is None or min_chi2 > 1e6:
             if index % 100 == 0:
-                print(f"  Event {index}: Spherical fit failed or chi2 too large, using plane wave approximation")
+                logger.debug(
+                    f"  Event {index}: Spherical fit failed or chi2 too large, "
+                    "using plane wave approximation"
+                )
             # 使用平面波方向作为球面波近似（假设源在无穷远）
             rho_fallback = 1e5  # 远距离近似
             theta_fallback = zenith_init
@@ -952,16 +962,22 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
                             src = src_new
                             needs_3param_fit = True  # 标记已用3参数拟合过
                             if index % 1 == 0:
-                                print(f"  Event {index}: 5-DU optimal removal (removed DU {removed_du_id}, "
-                                      f"residual={residual_removed:.1f}ns/{n_sigma:.1f}σ), "
-                                      f"chi2: {original_chi2:.1f} -> {chi2:.1f}")
+                                logger.debug(
+                                    f"  Event {index}: 5-DU optimal removal "
+                                    f"(removed DU {removed_du_id}, "
+                                    f"residual={residual_removed:.1f}ns/{n_sigma:.1f}σ), "
+                                    f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
+                                )
                             break  # 跳出while循环
                         else:
                             # 被剔除的DU其实没问题，拒绝此次剔除
                             if index % 1 == 0:
-                                print(f"  Event {index}: Rejected removal of DU {removed_du_id} "
-                                      f"(residual={residual_removed:.1f}ns/{n_sigma:.1f}σ < 3σ), "
-                                      f"keeping all 5 DUs")
+                                logger.debug(
+                                    f"  Event {index}: Rejected removal of DU "
+                                    f"{removed_du_id} "
+                                    f"(residual={residual_removed:.1f}ns/"
+                                    f"{n_sigma:.1f}σ < 3σ), keeping all 5 DUs"
+                                )
                             # 继续尝试其他剔除方案（如果有）
                 # ===== 方案1特殊处理结束 =====
                 
@@ -1021,8 +1037,11 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
                                 ])
                                 needs_3param_fit = True  # 标记已完成3参数拟合
                                 if index % 200 == 0:
-                                    print(f"  Event {index}: Removed DU {removed_du} -> 4-DU 3-param fit, "
-                                          f"chi2: {original_chi2:.1f} -> {chi2:.1f}")
+                                    logger.debug(
+                                        f"  Event {index}: Removed DU {removed_du} "
+                                        f"-> 4-DU 3-param fit, "
+                                        f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
+                                    )
                             break
                         else:
                             # ===== 多于4个DU：使用4参数拟合（带解析梯度）=====
@@ -1173,22 +1192,33 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
                                         removed_du = did_to_remove
                                         times = new_times
                                         t_mean_ns = new_t_mean_ns
-                                        print(f"  Event {index}: Removal of DU {did_to_remove} "
-                                              f"(residual={residual_removed:.1f}ns/{n_sigma:.1f}σ > 3σ). ")
+                                        logger.debug(
+                                            f"  Event {index}: Removal of DU "
+                                            f"{did_to_remove} "
+                                            f"(residual={residual_removed:.1f}ns/"
+                                            f"{n_sigma:.1f}σ > 3σ). "
+                                        )
                                         break  # 成功剔除并优化，跳出for循环
                                     else:
                                         # 被剔除的DU其实没问题，尝试下一个候选DU
                                         if index % 1 == 0:
-                                            print(f"  Event {index}: Rejected removal of DU {did_to_remove} "
-                                                  f"(residual={residual_removed:.1f}ns/{n_sigma:.1f}σ < 3σ), "
-                                                  f"trying next DU")
+                                            logger.debug(
+                                                f"  Event {index}: Rejected removal "
+                                                f"of DU {did_to_remove} "
+                                                f"(residual={residual_removed:.1f}ns/"
+                                                f"{n_sigma:.1f}σ < 3σ), trying next DU"
+                                            )
                 
                 if removed_du :
                     # 成功剔除DU并优化（可能是4参数或3参数拟合）
                     fit_type = "3-param" if needs_3param_fit else "4-param"
                     if(index%1==0) : 
-                        print(f"  Event {index} {fit_type}: Removed DU {removed_du} (contrib={du_contributions[0][0]:.1f}), "
-                          f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, remaining DUs: {len(matches)}")
+                                                logger.debug(
+                                                        f"  Event {index} {fit_type}: Removed DU {removed_du} "
+                                                        f"(contrib={du_contributions[0][0]:.1f}), "
+                                                        f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, "
+                                                        f"remaining DUs: {len(matches)}"
+                                                )
                     # 如果已经用3参数拟合过（即当前DU=4），退出while循环
                     if needs_3param_fit:
                         break
@@ -1216,10 +1246,13 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
             dof = max(1, len(matches) - 3) if len(matches) == 4 else max(1, len(matches) - 4)
             chi_square = min_chi2 / dof
             if chi_square > 1e3 and index%2000 ==1 :
-                print(f"Event No.{index}, LargeChi {chi_square:.1e}, Number of DUs:{len(matches)}")
+                logger.debug(
+                    f"Event No.{index}, LargeChi {chi_square:.1e}, "
+                    f"Number of DUs:{len(matches)}"
+                )
             #if (chi2 < 1e2 and 53 < zenith < 86 and ( (abs(src[2]/1e3 - 9) > 1.5 and 40 <= azimuth <= 225) or (azimuth < 40 or azimuth > 225)) and not (296.7 <= azimuth <= 298.7 and zenith > 80)):
             if False:
-               print(f"Event with azimuth {azimuth:.2f} satisfies the condition.")
+               logger.debug(f"Event with azimuth {azimuth:.2f} satisfies the condition.")
                # Prepare data for plotting
                pos_list = []
                colors = []
@@ -1284,7 +1317,7 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
                #plt.savefig(f"_SWM_Event_{i}_detector_positions.png", dpi=150, bbox_inches='tight')
                plt.savefig(f"_SWM_{save_name}_No.{index}_detector_positions.png", dpi=150, bbox_inches='tight')
                plt.close()
-               print(f"Saved detector plot for SWM Event {i}")
+               logger.debug(f"Saved detector plot for SWM Event {i}")
             
     return results, chi_squares, all_matches
 

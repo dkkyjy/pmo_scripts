@@ -99,6 +99,121 @@ class TestMergeTrace(unittest.TestCase):
             self.assertEqual(merged["100"]["signal"]["101"], [7, 8])
             self.assertEqual(merged["100"]["signal"]["102"], [9])
 
+    def test_merge_yaml_by_event_number_merges_adjacent_three_files(self) -> None:
+        """Three adjacent files with same event_number should merge in sequence."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            file_a = root / "Trigger_a_XY.yaml"
+            file_b = root / "Trigger_b_XY.yaml"
+            file_c = root / "Trigger_c_XY.yaml"
+
+            write_yaml(
+                file_a,
+                {
+                    "a": {
+                        "event_number": 200,
+                        "du_id": ["1"],
+                        "time": {"1": [1]},
+                    }
+                },
+            )
+            write_yaml(
+                file_b,
+                {
+                    "b": {
+                        "event_number": 200,
+                        "du_id": ["2"],
+                        "time": {"2": [2]},
+                    }
+                },
+            )
+            write_yaml(
+                file_c,
+                {
+                    "c": {
+                        "event_number": 200,
+                        "du_id": ["3"],
+                        "time": {"3": [3]},
+                    }
+                },
+            )
+
+            merged = merge_trace.merge_yaml_by_event_number([file_a, file_b, file_c])
+
+            self.assertEqual(sorted(merged.keys()), ["200"])
+            self.assertEqual(merged["200"]["du_id"], ["1", "2", "3"])
+            self.assertEqual(merged["200"]["time"], {"1": [1], "2": [2], "3": [3]})
+
+    def test_merge_yaml_by_event_number_does_not_merge_non_adjacent_duplicate(self) -> None:
+        """Non-adjacent duplicate event_number should not merge across a gap file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            file_a = root / "Trigger_a_XY.yaml"
+            file_b = root / "Trigger_b_XY.yaml"
+            file_c = root / "Trigger_c_XY.yaml"
+
+            write_yaml(
+                file_a,
+                {
+                    "a": {
+                        "event_number": 300,
+                        "du_id": ["10"],
+                        "time": {"10": [10]},
+                    }
+                },
+            )
+            write_yaml(
+                file_b,
+                {
+                    "b": {
+                        "event_number": 999,
+                        "du_id": ["99"],
+                        "time": {"99": [99]},
+                    }
+                },
+            )
+            write_yaml(
+                file_c,
+                {
+                    "c": {
+                        "event_number": 300,
+                        "du_id": ["30"],
+                        "time": {"30": [30]},
+                    }
+                },
+            )
+
+            merged = merge_trace.merge_yaml_by_event_number([file_a, file_b, file_c])
+
+            self.assertEqual(sorted(merged.keys()), ["300", "999"])
+            self.assertEqual(merged["300"]["du_id"], ["30"])
+            self.assertEqual(merged["300"]["time"], {"30": [30]})
+
+    def test_merge_yaml_by_event_number_single_file_passthrough(self) -> None:
+        """Single file input should keep payload content unchanged."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            file_a = root / "Trigger_single_XY.yaml"
+
+            write_yaml(
+                file_a,
+                {
+                    "x": {
+                        "event_number": 77,
+                        "du_id": ["701", "702"],
+                        "time": {"701": [7], "702": [8]},
+                        "signal": {"701": [70], "702": [80]},
+                    }
+                },
+            )
+
+            merged = merge_trace.merge_yaml_by_event_number([file_a])
+
+            self.assertEqual(sorted(merged.keys()), ["77"])
+            self.assertEqual(merged["77"]["du_id"], ["701", "702"])
+            self.assertEqual(merged["77"]["time"], {"701": [7], "702": [8]})
+            self.assertEqual(merged["77"]["signal"], {"701": [70], "702": [80]})
+
     def test_merge_files_for_pattern_xy(self) -> None:
         """Should write merged XY output while preserving merged DU samples."""
         with tempfile.TemporaryDirectory() as tmpdir:
