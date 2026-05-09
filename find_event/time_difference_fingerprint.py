@@ -20,9 +20,9 @@ Match = Tuple[str, int]
 EventPayload = Dict[str, Any]
 EventMap = Dict[str, EventPayload]
 
-FINGERPRINT_THRESHOLD_NS = 200
+FINGERPRINT_THRESHOLD_NS = 20
 FINGERPRINT_BUFFER_SIZE = 50
-FINGERPRINT_MIN_PAIR = 10
+FINGERPRINT_MIN_PAIR = 5
 FINGERPRINT_HISTORY_SIZE = 200
 
 
@@ -105,10 +105,10 @@ def is_fingerprint_similar(
 
 def remove_fixed_sources_streaming(
     matching_times: List[Tuple[float, List[Match]]],
-    threshold: int = 200,
-    buffer_size: int = 50,
-    min_pair: int = 10,
-    history_size: int = 200,
+    threshold: int = FINGERPRINT_THRESHOLD_NS,
+    buffer_size: int = FINGERPRINT_BUFFER_SIZE,
+    min_pair: int = FINGERPRINT_MIN_PAIR,
+    history_size: int = FINGERPRINT_HISTORY_SIZE,
 ) -> List[Tuple[float, List[Match]]]:
     """Filter duplicate fixed-source events using streaming fingerprints."""
     logger.info("[Step 2] Removing fixed sources (Streaming Fingerprint Method)...")
@@ -228,10 +228,10 @@ def _extract_event_fingerprint(
 
 def filter_fixed_sources_from_payload(
     matching_payload: EventMap,
-    threshold: int = 200,
-    buffer_size: int = 50,
-    min_pair: int = 10,
-    history_size: int = 200,
+    threshold: int = FINGERPRINT_THRESHOLD_NS,
+    buffer_size: int = FINGERPRINT_BUFFER_SIZE,
+    min_pair: int = FINGERPRINT_MIN_PAIR,
+    history_size: int = FINGERPRINT_HISTORY_SIZE,
 ) -> EventMap:
     """Filter duplicate fixed-source events from structured matching payload."""
     events: List[EventFingerprint] = []
