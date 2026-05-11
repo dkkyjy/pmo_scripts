@@ -9,10 +9,10 @@ def setup_logger(
     log_file: Optional[str] = "loop.log",
     level: str = "DEBUG",
     console: bool = True,
-    rotation: Optional[str] = None,
+    rotation: Optional[str] = "100 MB",
     retention: Optional[str] = "30 days",
-    compression: Optional[str] = None,
-    fmt: str = "{time:YYYY-MM-DD HH:mm:ss.SSS} | <level>{level}</level> | <cyan>{file}:{line}</cyan> | {function}: <level>{message}</level>",
+    compression: Optional[str] = "zip",
+    fmt: str = "<cyan>{time:YYYY-MM-DD HH:mm:ss.SSS}</cyan> | <level>{level}</level> | <cyan>{file}:{line}</cyan> | <level>{message}</level>",
     enqueue: bool = True,
     **kwargs: Any,
  ) -> Any:

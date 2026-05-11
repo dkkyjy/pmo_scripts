@@ -520,6 +520,10 @@ def run_matching_stage(
             force_recompute=force_recompute,
         )
 
+        logger.info(f'times: {times}')
+        logger.info(f'signals: {signals}')
+        logger.info(f'du_ids: {du_ids}')
+        exit()
         if len(times) < 1:
             logger.warning("No events after filtering, skipping subsequent stages.")
             return state, True

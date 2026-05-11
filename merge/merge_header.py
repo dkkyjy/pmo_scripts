@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,16 +25,12 @@ from merge.common import (
 )
 
 PATTERN = "Trigger*.yaml"
+YAML_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
 
 def event_key_sort_value(event_key: str) -> Any:
     """Sort event keys numerically when possible, else lexicographically."""
     return int(event_key) if event_key.isdigit() else event_key
-
-
-def payload_to_log_text(payload: Dict[str, Any]) -> str:
-    """Convert one event payload into readable YAML text for logs."""
-    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
 
 
 def build_trigger_pattern(run_number: Optional[int]) -> str:
@@ -213,9 +210,16 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
     merged_count = 0
     skipped_count = 0
 
-    for path in files:
+    total_files = len(files)
+    for index, path in enumerate(files, start=1):
         content = load_yaml_dict(path)
-        logger.info("Processing file {} with {} top-level entries", path, len(content))
+        logger.info(
+            "Processing file [{}/{}] {} with {} top-level entries",
+            index,
+            total_files,
+            path,
+            len(content),
+        )
 
         current_file_events: Dict[str, Dict[str, Any]] = {}
         file_skipped = 0
@@ -252,15 +256,15 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                     grouped_key,
                     path,
                 )
-                logger.debug(
+                logger.opt(lazy=True).debug(
                     "Previous-file record before merge for event_number={}:\n{}",
-                    grouped_key,
-                    payload_to_log_text(original_payload),
+                    lambda: grouped_key,
+                    lambda: original_payload,
                 )
-                logger.debug(
+                logger.opt(lazy=True).debug(
                     "Incoming record for event_number={}:\n{}",
-                    grouped_key,
-                    payload_to_log_text(payload),
+                    lambda: grouped_key,
+                    lambda: payload,
                 )
 
                 merged_payload = merge_event_payload(original_payload, payload)
@@ -269,10 +273,10 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 merged_count += 1
                 file_merged += 1
                 merged_event_keys.add(grouped_key)
-                logger.debug(
+                logger.opt(lazy=True).debug(
                     "Merged result for event_number={}:\n{}",
-                    grouped_key,
-                    payload_to_log_text(merged_payload),
+                    lambda: grouped_key,
+                    lambda: merged_payload,
                 )
                 continue
 
@@ -283,7 +287,9 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
         previous_file_events = current_processed
 
         logger.info(
-            "File summary {}: inserted={}, merged={}, skipped={}",
+            "File summary [{}/{}] {}: inserted={}, merged={}, skipped={}",
+            index,
+            total_files,
             path,
             file_inserted,
             file_merged,
@@ -316,17 +322,33 @@ def write_merged_yaml(outpath: Path, files: List[Path], merged_data: Dict[str, D
     """Write merged YAML with traceability header."""
     outpath.parent.mkdir(parents=True, exist_ok=True)
     logger.debug(f"Writing merged YAML: {outpath}")
+    serialize_start = time.perf_counter()
 
     header_text = build_traceability_header(
         outpath.name,
         files,
         include_time=True,
     )
-    yaml_text = yaml.safe_dump(merged_data, allow_unicode=True, sort_keys=False)
+    yaml_text = yaml.dump(
+        merged_data,
+        Dumper=YAML_DUMPER,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+
+    serialize_ms = (time.perf_counter() - serialize_start) * 1000
+    write_start = time.perf_counter()
     with outpath.open("w", encoding="utf-8") as file_obj:
         file_obj.write(header_text)
         file_obj.write(yaml_text)
-    logger.info(f"Merged YAML written: {outpath} (records={len(merged_data)})")
+    write_ms = (time.perf_counter() - write_start) * 1000
+    logger.info(
+        "Merged YAML written: {} (records={}, serialize_ms={:.1f}, write_ms={:.1f})",
+        outpath,
+        len(merged_data),
+        serialize_ms,
+        write_ms,
+    )
 
 
 def merge_files_for_pattern(

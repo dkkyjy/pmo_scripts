@@ -166,9 +166,16 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
     merged_count = 0
     skipped_count = 0
 
-    for path in files:
+    total_files = len(files)
+    for index, path in enumerate(files, start=1):
         content = load_yaml_dict(path)
-        logger.debug("Processing file {} with {} top-level entries", path, len(content))
+        logger.debug(
+            "Processing file [{}/{}] {} with {} top-level entries",
+            index,
+            total_files,
+            path,
+            len(content),
+        )
 
         current_file_events: Dict[str, Dict[str, Any]] = {}
         file_skipped = 0
@@ -237,7 +244,9 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
         previous_file_events = current_processed
 
         logger.debug(
-            "File summary {}: inserted={}, merged={}, skipped={}",
+            "File summary [{}/{}] {}: inserted={}, merged={}, skipped={}",
+            index,
+            total_files,
             path,
             file_inserted,
             file_merged,
