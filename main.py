@@ -98,42 +98,11 @@ def parse_args(argv):
         help="Skip the matching stage, assuming precomputed _matched cache files exist.",
     )
     parser.add_argument(
-        "--run-matching",
-        dest="run_matching",
-        action="store_true",
-        help="Run the matching stage explicitly.",
-    )
-    parser.add_argument(
-        "--skip-pwm",
-        dest="skip_pwm",
-        default=False,
-        action="store_true",
-        help="Skip the PWM stage, assuming precomputed _PWM cache files exist.",
-    )
-    parser.add_argument(
-        "--run-pwm",
-        dest="run_pwm",
-        action="store_true",
-        help="Run the PWM stage explicitly.",
-    )
-    parser.add_argument(
         "--skip-fingerprint",
         dest="skip_fingerprint",
         default=False,
         action="store_true",
         help="Skip the fingerprint stage and load source YAML payload directly.",
-    )
-    parser.add_argument(
-        "--run-fingerprint",
-        dest="run_fingerprint",
-        action="store_true",
-        help="Run the fingerprint stage explicitly.",
-    )
-    parser.add_argument(
-        "--run-swm",
-        dest="run_swm",
-        action="store_true",
-        help="Run the SWM stage explicitly.",
     )
     return parser.parse_args(argv[1:])
 
@@ -952,12 +921,7 @@ def main(
     det_pos_file,
     force_recompute=False,
     skip_matching=False,
-    run_matching=False,
     skip_fingerprint=False,
-    run_fingerprint=False,
-    skip_pwm=False,
-    run_pwm=False,  
-    run_swm=False,
 ):
     """
     Main workflow:
@@ -1022,29 +986,27 @@ def main(
             matching_computed,
         )
 
-    if run_pwm:
-        state, pwm_computed = run_pwm_stage(
-            matching_file,
-            detector_positions,
-            det_pos_file,
-            with_signal,
-            force_recompute,
-            state,
-            fig_prefix,
-            fingerprint_computed,
-        )
+    state, pwm_computed = run_pwm_stage(
+        matching_file,
+        detector_positions,
+        det_pos_file,
+        with_signal,
+        force_recompute,
+        state,
+        fig_prefix,
+        fingerprint_computed,
+    )
 
-    if run_swm:
-        run_swm_stage(
-            matching_file,
-            detector_positions,
-            det_pos_file,
-            with_signal,
-            force_recompute,
-            state,
-            fig_prefix,
-            pwm_computed,
-        )
+    run_swm_stage(
+        matching_file,
+        detector_positions,
+        det_pos_file,
+        with_signal,
+        force_recompute,
+        state,
+        fig_prefix,
+        pwm_computed,
+    )
 
     return 0
 
@@ -1062,11 +1024,6 @@ if __name__ == "__main__":
             det_pos_file=args.det_pos,
             force_recompute=args.force_recompute,
             skip_matching=args.skip_matching,
-            run_matching=args.run_matching,
             skip_fingerprint=args.skip_fingerprint,
-            run_fingerprint=args.run_fingerprint,
-            skip_pwm=args.skip_pwm,
-            run_pwm=args.run_pwm,
-            run_swm=args.run_swm,
         )
     )

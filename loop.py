@@ -54,9 +54,8 @@ class TaskSpec:
     left: int
     right: int
     channel: str
-    run_matching: bool
-    run_pwm: bool
-    run_swm: bool
+    skip_matching: bool
+    skip_fingerprint: bool
     force_recompute: bool
 
 
@@ -162,9 +161,8 @@ def make_tasks_for_file_paths(
             left=args.left,
             right=args.right,
             channel=args.channel,
-            run_matching=args.run_matching,
-            run_pwm=args.run_pwm,
-            run_swm=args.run_swm,
+            skip_matching=args.skip_matching,
+            skip_fingerprint=args.skip_fingerprint,
             force_recompute=args.force_recompute,
         )
         for file_path in file_path_list
@@ -234,9 +232,8 @@ def make_main_command(
     out_dir_base: str,
     with_signal: bool = False,
     channel: str = 'X',
-    run_matching: bool = False,
-    run_pwm: bool = False,
-    run_swm: bool = False,
+    skip_matching: bool = False,
+    skip_fingerprint: bool = False,
     force_recompute: bool = False,
 ) -> list[str]:
     """Construct the command for: python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml yyyy-mm-dd --out-dir-base"""
@@ -261,12 +258,10 @@ def make_main_command(
     ]
     if with_signal:
         cmd.append("--with-signal")
-    if run_matching:
-        cmd.append("--run-matching")
-    if run_pwm:
-        cmd.append("--run-pwm")
-    if run_swm:
-        cmd.append("--run-swm")
+    if skip_matching:
+        cmd.append("--skip-matching")
+    if skip_fingerprint:
+        cmd.append("--skip-fingerprint")
     if force_recompute:
         cmd.append("--force-recompute")
     return cmd
@@ -355,9 +350,8 @@ def process_date(task: TaskSpec) -> TaskResult:
     left = task.left
     right = task.right
     channel = task.channel
-    run_matching = task.run_matching
-    run_pwm = task.run_pwm
-    run_swm = task.run_swm
+    skip_matching = task.skip_matching
+    skip_fingerprint = task.skip_fingerprint
     force_recompute = task.force_recompute
 
     # Log/read command
@@ -404,9 +398,8 @@ def process_date(task: TaskSpec) -> TaskResult:
             out_dir_base,
             with_signal,
             channel,
-            run_matching,
-            run_pwm,
-            run_swm,
+            skip_matching,
+            skip_fingerprint,
             force_recompute,
         )
         logger.info(f"{' '.join(main_cmd)}")
@@ -451,9 +444,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--left", type=int, default=0, help="left parameter for read_trace.py (default 0)")
     ap.add_argument("--right", type=int, default=512, help="right parameter for read_trace.py (default 512)")
     ap.add_argument("--channel", choices=['F', 'X', 'Y', 'Z', 'XY'], default='X', help="Channel suffix for matching files when --with-signal is set (default X)")
-    ap.add_argument("--run-matching", action="store_true", help="pass --run-matching through to main.py")
-    ap.add_argument("--run-pwm", action="store_true", help="pass --run-pwm through to main.py")
-    ap.add_argument("--run-swm", action="store_true", help="pass --run-swm through to main.py")
+    ap.add_argument("--skip-matching", action="store_true", help="pass --skip-matching through to main.py")
+    ap.add_argument("--skip-fingerprint", action="store_true", help="pass --skip-fingerprint through to main.py")
     ap.add_argument("--force-recompute", action="store_true", help="pass --force-recompute through to main.py")
     return ap
 
