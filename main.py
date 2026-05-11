@@ -509,8 +509,8 @@ def run_matching_stage(
         if force_recompute and os.path.exists(matched_file):
             logger.info(f"Force recompute enabled, ignoring cache: {matched_file}")
 
-        _reset_state_fields(state, MATCHING_STATE_FIELDS)
-
+        logger.info('Running matching stage with matching_file={}, det_pos_file={}, with_signal={}', matching_file, det_pos_file, with_signal)
+        
         times, signals, du_ids = fe_mt.optimized_read_matching_times_graph(
             state["times"],
             state["signals"],
@@ -520,10 +520,6 @@ def run_matching_stage(
             force_recompute=force_recompute,
         )
 
-        logger.info(f'times: {times}')
-        logger.info(f'signals: {signals}')
-        logger.info(f'du_ids: {du_ids}')
-        exit()
         if len(times) < 1:
             logger.warning("No events after filtering, skipping subsequent stages.")
             return state, True
@@ -587,7 +583,6 @@ def run_fingerprint_stage(
     source_file = matched_file if os.path.exists(matched_file) else matching_file
     fingerprint_file = matching_file.replace(".yaml", "_fingerprint.yaml")
     fingerprint_meta_file = _meta_file_for(fingerprint_file)
-    fingerprint_computed = False
     expected_meta = _build_stage_cache_meta(
         "fingerprint",
         {
@@ -631,8 +626,6 @@ def run_fingerprint_stage(
         if force_recompute and os.path.exists(fingerprint_file):
             logger.info("Force recompute enabled, ignoring cache: {}", fingerprint_file)
 
-        _reset_state_fields(state, MATCHING_STATE_FIELDS)
-
         source_payload = _read_yaml_dict(source_file)
         if not isinstance(source_payload, dict):
             raise ValueError("Top-level matching payload must be a mapping")
@@ -666,56 +659,11 @@ def run_fingerprint_stage(
         "run-fingerprint",
     )
 
+    fingerprint_computed = True
     logger.info("Number of events after fingerprint filtering: {}", len(state["times"]))
     logger.info("{} has been written with fingerprint results.", fingerprint_file)
     return state, fingerprint_computed
 
-def skip_pwm_stage(matching_file, metadata, with_signal, state):
-    pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
-    pwm_meta_file = _meta_file_for(pwm_fitted_file)
-    use_cache = os.path.exists(pwm_fitted_file)
-    
-    if use_cache:
-        logger.info(f"Found cached PWM fitted file: {pwm_fitted_file}, loading directly.")
-        try:
-            results = _read_yaml_dict(pwm_fitted_file)
-            is_payload_valid, reason = _validate_stage_cache_payload(
-                "pwm", results, with_signal
-            )
-        except Exception as exc:
-            is_payload_valid = False
-            reason = f"unreadable-cache: {exc}"
-
-        if is_payload_valid:
-            _reset_state_fields(state, PWM_STATE_FIELDS)
-            for key, result in results.items():
-                state["times"][key] = result["time"]
-                state["signals"][key] = result.get("signal", None) if with_signal else None
-                state["du_ids"][key] = result.get("du_id", None)
-                state["event_numbers"][key] = result.get("event_number", None)
-                state["index"][key] = result.get("index", None)
-                state["run_numbers"][key] = result.get("run_number", state["run_numbers"].get(key, None))
-                state["datetimes"][key] = result.get("datetime", state["datetimes"].get(key, None))
-                state["gps_times"][key] = result.get("gps_time", state["gps_times"].get(key, None))
-                state["files"][key] = result.get("file", state["files"].get(key, matching_file))
-                state["azimuths"][key] = result.get("azimuth", None)
-                state["zeniths"][key] = result.get("zenith", None)
-                state["directions"][key] = np.array([result["x"], result["y"], result["z"]])
-                state["chi_squares"][key] = result.get("chi_square", None)
-
-            _canonicalize_state_keys(
-                state,
-                state["directions"].keys(),
-                PWM_STATE_FIELDS,
-                "skip-pwm",
-            )
-        else:
-            logger.warning(
-                f"Invalid PWM cache payload in {pwm_fitted_file}: {reason}; falling back to recompute."
-            )
-            return state, False
-
-    return state, True
 
 def run_pwm_stage(
     matching_file,
@@ -810,7 +758,6 @@ def run_pwm_stage(
 
         directions, zeniths, azimuths, chi_squares = fe_pwm.plane_wave_model(
             state["times"],
-            state["signals"],
             detector_positions,
         )
 
@@ -951,7 +898,6 @@ def run_swm_stage(
         _reset_state_fields(state, ("directions", "chi_squares"))
         directions, chi_squares, new_matches = fe_swm.spherical_wave_model(
             state["times"],
-            state["signals"],
             detector_positions,
             seed_directions,
         )
@@ -1047,7 +993,7 @@ def main(
     
     state, matching_computed = skip_matching_stage(metadata, with_signal, state)
     if skip_matching:
-        matching_computed = True
+        matching_computed=True
     else:
         state, matching_computed = run_matching_stage(
             matching_file,
@@ -1057,13 +1003,14 @@ def main(
             force_recompute,
             state,
         )
-
+        
+    state, fingerprint_computed = skip_fingerprint_stage(
+        matching_file,
+        with_signal,
+        state,
+    )
     if skip_fingerprint:
-        state, fingerprint_computed = skip_fingerprint_stage(
-            matching_file,
-            with_signal,
-            state,
-        )
+        fingerprint_computed = True
     else:
         state, fingerprint_computed = run_fingerprint_stage(
             matching_file,
@@ -1075,9 +1022,7 @@ def main(
             matching_computed,
         )
 
-    if skip_pwm:
-        state, pwm_computed = skip_pwm_stage(matching_file, metadata, with_signal, state)
-    else:
+    if run_pwm:
         state, pwm_computed = run_pwm_stage(
             matching_file,
             detector_positions,

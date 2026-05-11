@@ -340,9 +340,8 @@ def _fit_event_direction(positions, time_values, c_value):
     return best_result
 
 
-def plane_wave_model(matching_times, matching_signals, detector_positions):
+def plane_wave_model(matching_times, detector_positions):
     """Fit each event with the gradient-based plane-wave model using the main pipeline contract."""
-    del matching_signals
 
     directions = {}
     zeniths = {}

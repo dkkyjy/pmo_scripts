@@ -620,14 +620,14 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
     reduced_total_err = total_error/(len(matches) - 4)
     return reduced_total_err
 
-def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial_directions, save_name):  # pragma: no cover
+def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM'):  # pragma: no cover
     """球面波重建模型"""
     results = {}
     chi_squares = {}
     all_matches = {}  # 存储每个事件最终的DU列表
     cmap = plt.cm.viridis
     
-    for i, (event_key, matches) in enumerate(matching_times.items()):
+    for i, (event_key, matches) in enumerate(matching_times.items()): 
         # if i >= len(initial_directions): break
         if len(matches) < 5: continue
         
@@ -1322,102 +1322,102 @@ def spherical_wave_model_deepseek(matching_times, detector_positions, c, initial
     return results, chi_squares, all_matches
 
 
-def _coerce_time_ns(value):
-    """Normalize one cached/event time payload into a scalar float ns value."""
-    if isinstance(value, np.ndarray):
-        if value.size == 0:
-            raise ValueError("empty time array")
-        return float(value.reshape(-1)[0])
-    if isinstance(value, (list, tuple)):
-        if len(value) == 0:
-            raise ValueError("empty time sequence")
-        return float(value[0])
-    return float(value)
+# def _coerce_time_ns(value):
+#     """Normalize one cached/event time payload into a scalar float ns value."""
+#     if isinstance(value, np.ndarray):
+#         if value.size == 0:
+#             raise ValueError("empty time array")
+#         return float(value.reshape(-1)[0])
+#     if isinstance(value, (list, tuple)):
+#         if len(value) == 0:
+#             raise ValueError("empty time sequence")
+#         return float(value[0])
+#     return float(value)
 
 
-def spherical_wave_model(matching_times, matching_signals, detector_positions, initial_directions):
-    """Main-pipeline compatible SWM entrypoint.
+# def spherical_wave_model(matching_times, matching_signals, detector_positions, initial_directions):
+#     """Main-pipeline compatible SWM entrypoint.
 
-    Contract compatible with main.run_swm_stage:
-    - input: dict[event_key] -> dict[du_id] = time_ns (or one-item list/array)
-    - output: (dict[event_key] -> np.ndarray([x, y, z]), dict[event_key] -> chi_square)
-    """
-    # del matching_signals
+#     Contract compatible with main.run_swm_stage:
+#     - input: dict[event_key] -> dict[du_id] = time_ns (or one-item list/array)
+#     - output: (dict[event_key] -> np.ndarray([x, y, z]), dict[event_key] -> chi_square)
+#     """
+#     # del matching_signals
 
-    legacy_events = {}
-    # init_directions = {}
+#     legacy_events = {}
+#     # init_directions = {}
 
-    for event_key, times in matching_times.items():
-        if event_key not in initial_directions:
-            logger.warning(f"Skipping SWM event {event_key}: missing initial direction")
-            continue
+#     for event_key, times in matching_times.items():
+#         if event_key not in initial_directions:
+#             logger.warning(f"Skipping SWM event {event_key}: missing initial direction")
+#             continue
 
-        if not isinstance(times, dict):
-            logger.warning(f"Skipping SWM event {event_key}: times payload is not a dict")
-            continue
+#         if not isinstance(times, dict):
+#             logger.warning(f"Skipping SWM event {event_key}: times payload is not a dict")
+#             continue
 
-        matches = []
-        bad_event = False
-        for raw_det_id, raw_time in times.items():
-            try:
-                det_id = int(raw_det_id)
-                time_ns = _coerce_time_ns(raw_time)
-            except (TypeError, ValueError) as exc:
-                logger.warning(
-                    f"Skipping SWM event {event_key}: bad detector/time entry {raw_det_id} ({exc})"
-                )
-                bad_event = True
-                break
-            matches.append((det_id, time_ns))
+#         matches = []
+#         bad_event = False
+#         for raw_det_id, raw_time in times.items():
+#             try:
+#                 det_id = int(raw_det_id)
+#                 time_ns = _coerce_time_ns(raw_time)
+#             except (TypeError, ValueError) as exc:
+#                 logger.warning(
+#                     f"Skipping SWM event {event_key}: bad detector/time entry {raw_det_id} ({exc})"
+#                 )
+#                 bad_event = True
+#                 break
+#             matches.append((det_id, time_ns))
 
-        if bad_event:
-            continue
+#         if bad_event:
+#             continue
 
-        if len(matches) < 5:
-            logger.warning(
-                f"Skipping SWM event {event_key}: requires at least 5 detectors, got {len(matches)}"
-            )
-            continue
+#         if len(matches) < 5:
+#             logger.warning(
+#                 f"Skipping SWM event {event_key}: requires at least 5 detectors, got {len(matches)}"
+#             )
+#             continue
 
-        legacy_events[event_key] = matches
-        # init_directions[event_key] = np.array(initial_directions[event_key], dtype=float)
+#         legacy_events[event_key] = matches
+#         # init_directions[event_key] = np.array(initial_directions[event_key], dtype=float)
 
-    if not legacy_events:
-        return {}, {}, {}
+#     if not legacy_events:
+#         return {}, {}, {}
 
-    try:
-        source_vectors, chi_list, all_matches = spherical_wave_model_deepseek(
-            legacy_events,
-            detector_positions,
-            c,
-            initial_directions,
-            "SWM_nopenal",
-        )
-    except SWMRecoverableFitError as exc:
-        logger.warning(
-            "SWM no-penalty fit hit recoverable failure, returning empty result: "
-            f"{exc}"
-        )
-        return {}, {}, {}
+#     try:
+#         source_vectors, chi_list, all_matches = spherical_wave_model_deepseek(
+#             legacy_events,
+#             detector_positions,
+#             c,
+#             initial_directions,
+#             "SWM_nopenal",
+#         )
+#     except SWMRecoverableFitError as exc:
+#         logger.warning(
+#             "SWM no-penalty fit hit recoverable failure, returning empty result: "
+#             f"{exc}"
+#         )
+#         return {}, {}, {}
 
-    directions = {}
-    chi_squares = {}
-    new_matches = {}
+#     directions = {}
+#     chi_squares = {}
+#     new_matches = {}
 
-    logger.info(
-        f"SWM no-penalty fit completed: {len(source_vectors)} events processed, "
-        f"{len(chi_list)} chi values, {len(all_matches)} match lists"
-    )
-    max_len = min(len(source_vectors), len(chi_list), len(all_matches))
-    if max_len != len(all_matches):
-        logger.warning(
-            "SWM no-penalty result length mismatch: "
-            f"vectors={len(source_vectors)} chi={len(chi_list)} all_matches={len(all_matches)}"
-        )
+#     logger.info(
+#         f"SWM no-penalty fit completed: {len(source_vectors)} events processed, "
+#         f"{len(chi_list)} chi values, {len(all_matches)} match lists"
+#     )
+#     max_len = min(len(source_vectors), len(chi_list), len(all_matches))
+#     if max_len != len(all_matches):
+#         logger.warning(
+#             "SWM no-penalty result length mismatch: "
+#             f"vectors={len(source_vectors)} chi={len(chi_list)} all_matches={len(all_matches)}"
+#         )
 
-    for event_key, new_match in all_matches.items():
-        directions[event_key] = np.array(source_vectors[event_key], dtype=float)
-        chi_squares[event_key] = float(chi_list[event_key])
-        new_matches[event_key] = new_match
+#     for event_key, new_match in all_matches.items():
+#         directions[event_key] = np.array(source_vectors[event_key], dtype=float)
+#         chi_squares[event_key] = float(chi_list[event_key])
+#         new_matches[event_key] = new_match
 
-    return directions, chi_squares, new_matches
+#     return directions, chi_squares, new_matches
