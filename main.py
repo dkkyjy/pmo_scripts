@@ -404,7 +404,6 @@ def skip_fingerprint_stage(matching_file, with_signal, state):
         "skip-fingerprint",
     )
 
-    logger.info("Skipping fingerprint stage, loaded source payload from: {}", source_file)
     return state, False
 
 
@@ -957,8 +956,10 @@ def main(
     
     state, matching_computed = skip_matching_stage(metadata, with_signal, state)
     if skip_matching:
+        logger.info("Skipping matching stage")
         matching_computed=True
     else:
+        logger.info('Running matching stage with matching_file {}', matching_file)
         state, matching_computed = run_matching_stage(
             matching_file,
             metadata,
@@ -967,6 +968,7 @@ def main(
             force_recompute,
             state,
         )
+        logger.info('Finished matching stage')
         
     state, fingerprint_computed = skip_fingerprint_stage(
         matching_file,
@@ -974,8 +976,10 @@ def main(
         state,
     )
     if skip_fingerprint:
+        logger.info("Skipping fingerprint stage")
         fingerprint_computed = True
     else:
+        logger.info('Running fingerprint stage with matching_file={}', matching_file)
         state, fingerprint_computed = run_fingerprint_stage(
             matching_file,
             metadata,
@@ -985,7 +989,9 @@ def main(
             state,
             matching_computed,
         )
-
+        logger.info('Finished fingerprint stage')
+        
+    logger.info('Running PWM stage with matching_file={}', matching_file)
     state, pwm_computed = run_pwm_stage(
         matching_file,
         detector_positions,
@@ -996,7 +1002,9 @@ def main(
         fig_prefix,
         fingerprint_computed,
     )
-
+    logger.info('Finished PWM stage')
+    
+    logger.info('Running SWM stage with matching_file={}', matching_file)
     run_swm_stage(
         matching_file,
         detector_positions,
@@ -1007,6 +1015,7 @@ def main(
         fig_prefix,
         pwm_computed,
     )
+    logger.info('Finished SWM stage')
 
     return 0
 

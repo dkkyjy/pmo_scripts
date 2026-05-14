@@ -35,6 +35,7 @@ from logger_config import logger
 
 try:
     from PIL import Image
+
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
@@ -61,13 +62,14 @@ class TaskSpec:
 
 TaskResult = Tuple[str, int]
 
+
 def parse_datetime(s):
     """Parse datetime string in various formats."""
     formats = [
         "%Y-%m-%dT%H:%M:%S",  # ISO
-        "%Y%m%d%H%M%S",       # 20251127153000
-        "%Y-%m-%d%H%M",       # 2025-11-271530
-        "%Y/%m/%d%H%M",       # 2025/11/271530
+        "%Y%m%d%H%M%S",  # 20251127153000
+        "%Y-%m-%d%H%M",  # 2025-11-271530
+        "%Y/%m/%d%H%M",  # 2025/11/271530
     ]
     for fmt in formats:
         if len(s) < 14:
@@ -79,7 +81,9 @@ def parse_datetime(s):
     raise ValueError(f"Unable to parse datetime string: '{s}'")
 
 
-def times_between(start: datetime.datetime, end: datetime.datetime) -> Iterable[datetime.datetime]:
+def times_between(
+    start: datetime.datetime, end: datetime.datetime
+) -> Iterable[datetime.datetime]:
     """Yield times from start to end inclusive, one per day at midnight."""
     cur = start.replace(hour=0, minute=0, second=0)
     one = datetime.timedelta(days=1)
@@ -88,7 +92,9 @@ def times_between(start: datetime.datetime, end: datetime.datetime) -> Iterable[
         cur += one
 
 
-def get_file_list(file_start: int, file_end: int, date: str, base_path: str) -> list[str]:
+def get_file_list(
+    file_start: int, file_end: int, date: str, base_path: str
+) -> list[str]:
     """
     Find .root Trigger files that match the criteria under base_path/date and filter after sorting by filename.
     Return full path list.
@@ -179,6 +185,12 @@ def build_tasks(
     for date in times_between(start, end):
         date_str = date.strftime("%Y/%m/%d")
         logger.info(f"Processing date: {date_str}")
+
+        out_date_dir = Path(args.out_dir_base) / date_str
+        if not out_date_dir.exists():
+            out_date_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created output directory: {out_date_dir}")
+        
         tmp_start, tmp_end = get_file_bounds_for_date(start, end, date)
         file_path_list = get_file_list(tmp_start, tmp_end, date_str, args.base_path)
         tasks.extend(make_tasks_for_file_paths(file_path_list, date_str, args))
@@ -208,7 +220,9 @@ def make_readheader_command(file_path: str, date: str, out_dir_base: str) -> lis
     return cmd
 
 
-def make_readtrace_command(file_path: str, date: str, out_dir_base: str, left: int = 0, right: int = 512) -> list[str]:
+def make_readtrace_command(
+    file_path: str, date: str, out_dir_base: str, left: int = 0, right: int = 512
+) -> list[str]:
     """Construct the command for read_trace with file_path, left, right, date, out_dir_base parameters."""
     cmd = [
         sys.executable,  # use current python interpreter
@@ -231,7 +245,7 @@ def make_main_command(
     date: str,
     out_dir_base: str,
     with_signal: bool = False,
-    channel: str = 'X',
+    channel: str = "X",
     skip_matching: bool = False,
     skip_fingerprint: bool = False,
     force_recompute: bool = False,
@@ -241,12 +255,12 @@ def make_main_command(
     out_dir = Path(out_dir_base) / date
     # print(out_dir)  # Removed debug print
 
-    file_name = os.path.basename(file_path).replace('.root', '')
+    file_name = os.path.basename(file_path).replace(".root", "")
 
     if with_signal:
-        matching_file = out_dir / (file_name + f'_{channel}.yaml')
+        matching_file = out_dir / (file_name + f"_{channel}.yaml")
     else:
-        matching_file = out_dir / (file_name + '.yaml')
+        matching_file = out_dir / (file_name + ".yaml")
     # print(matching_file)  # Removed debug print
 
     cmd = [
@@ -267,7 +281,9 @@ def make_main_command(
     return cmd
 
 
-def merge_images_to_pdf(pdf_basename: str, with_signal: bool, search_dir: str | Path) -> bool:
+def merge_images_to_pdf(
+    pdf_basename: str, with_signal: bool, search_dir: str | Path
+) -> bool:
     """Find images for the date (png) and merge into a single PDF at pdf_path.
 
     If `search_dir` is provided, look for PNGs under that directory (non-recursive) using
@@ -277,7 +293,9 @@ def merge_images_to_pdf(pdf_basename: str, with_signal: bool, search_dir: str | 
     Returns True on success, False if nothing was done or PIL not available.
     """
     if not PIL_AVAILABLE:
-        logger.warning(f"Pillow not available: skipping PDF creation. Install pillow to enable this feature.")
+        logger.warning(
+            f"Pillow not available: skipping PDF creation. Install pillow to enable this feature."
+        )
         return False
 
     pattern_suffix = "*_with_signal.png" if with_signal else "*.png"
@@ -296,7 +314,9 @@ def merge_images_to_pdf(pdf_basename: str, with_signal: bool, search_dir: str | 
         search_pattern = str(search_root / f"{relative_base}{pattern_suffix}")
         png_files.extend(glob.glob(search_pattern))
         if not png_files:
-            logger.info(f"No PNG images found under search_dir={search_root}, falling back to cwd pattern")
+            logger.info(
+                f"No PNG images found under search_dir={search_root}, falling back to cwd pattern"
+            )
             png_files.extend(glob.glob(cwd_pattern))
     else:
         png_files.extend(glob.glob(cwd_pattern))
@@ -359,19 +379,29 @@ def process_date(task: TaskSpec) -> TaskResult:
         logger.info(f"Skipping read_header for {file_path}")
     else:
         if with_signal:
-            readtrace_cmd = make_readtrace_command(file_path, date, out_dir_base, left, right)
+            readtrace_cmd = make_readtrace_command(
+                file_path, date, out_dir_base, left, right
+            )
             logger.info(f"{' '.join(readtrace_cmd)}")
-            
+
             if do_run:
                 try:
                     p = subprocess.run(readtrace_cmd, check=False)
                     if p.returncode != 0:
-                        logger.error(f"Command failed for {file_path} with exit {p.returncode}")
-                        logger.info(f"Aborting task before main.py due to read stage failure: {file_path}")
+                        logger.error(
+                            f"Command failed for {file_path} with exit {p.returncode}"
+                        )
+                        logger.info(
+                            f"Aborting task before main.py due to read stage failure: {file_path}"
+                        )
                         return (file_path, p.returncode)
                 except FileNotFoundError:
-                    logger.error(f"Executable not found when running: {readtrace_cmd[0]}")
-                    logger.info(f"Aborting task before main.py due to read stage executable error: {file_path}")
+                    logger.error(
+                        f"Executable not found when running: {readtrace_cmd[0]}"
+                    )
+                    logger.info(
+                        f"Aborting task before main.py due to read stage executable error: {file_path}"
+                    )
                     return (file_path, 2)
         else:
             readheader_cmd = make_readheader_command(file_path, date, out_dir_base)
@@ -381,12 +411,20 @@ def process_date(task: TaskSpec) -> TaskResult:
                 try:
                     p = subprocess.run(readheader_cmd, check=False)
                     if p.returncode != 0:
-                        logger.error(f"Command failed for {file_path} with exit {p.returncode}")
-                        logger.info(f"Aborting task before main.py due to read stage failure: {file_path}")
+                        logger.error(
+                            f"Command failed for {file_path} with exit {p.returncode}"
+                        )
+                        logger.info(
+                            f"Aborting task before main.py due to read stage failure: {file_path}"
+                        )
                         return (file_path, p.returncode)
                 except FileNotFoundError:
-                    logger.error(f"Executable not found when running: {readheader_cmd[0]}")
-                    logger.info(f"Aborting task before main.py due to read stage executable error: {file_path}")
+                    logger.error(
+                        f"Executable not found when running: {readheader_cmd[0]}"
+                    )
+                    logger.info(
+                        f"Aborting task before main.py due to read stage executable error: {file_path}"
+                    )
                     return (file_path, 2)
 
     if only_read:
@@ -403,12 +441,14 @@ def process_date(task: TaskSpec) -> TaskResult:
             force_recompute,
         )
         logger.info(f"{' '.join(main_cmd)}")
-        
+
         if do_run:
             try:
                 p = subprocess.run(main_cmd, check=False)
                 if p.returncode != 0:
-                    logger.error(f"Command failed for {file_path} with exit {p.returncode}")
+                    logger.error(
+                        f"Command failed for {file_path} with exit {p.returncode}"
+                    )
                     return (file_path, p.returncode)
             except FileNotFoundError:
                 logger.error(f"Executable not found when running: {main_cmd[0]}")
@@ -425,28 +465,86 @@ def process_date(task: TaskSpec) -> TaskResult:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for loop orchestration."""
-    ap = argparse.ArgumentParser(description="Run read_header and find_events over dates")
+    ap = argparse.ArgumentParser(
+        description="Run read_header and find_events over dates"
+    )
     ap.add_argument("start", help="start time YYYY-MM-DDThh:mm:ss")
     ap.add_argument("end", help="end time YYYY-MM-DDThh:mm:ss")
-    ap.add_argument("--base-path", default="/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD", help="value for --base-path passed to script")
-    ap.add_argument("--out-dir-base", dest="out_dir_base", default="../Reco_Dir", help="value for --out-dir-base passed to script")
-    ap.add_argument("--run", action="store_true", help="actually run the commands instead of printing them")
-    ap.add_argument("--jobs", type=int, default=1, help="number of worker processes to use (1 = no parallelism)")
-    ap.add_argument("--limit", type=int, default=0, help="limit number of files to show/run (0 = all)")
-    ap.add_argument("--skip-read", action="store_true", help="skip the read_header stage")
-    ap.add_argument("--only-read", action="store_true", help="Execute only the read_header stage (skip main.py and image merging)")
+    ap.add_argument(
+        "--base-path",
+        default="/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD",
+        help="value for --base-path passed to script",
+    )
+    ap.add_argument(
+        "--out-dir-base",
+        dest="out_dir_base",
+        default="../Reco_Dir",
+        help="value for --out-dir-base passed to script",
+    )
+    ap.add_argument(
+        "--run",
+        action="store_true",
+        help="actually run the commands instead of printing them",
+    )
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="number of worker processes to use (1 = no parallelism)",
+    )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="limit number of files to show/run (0 = all)",
+    )
+    ap.add_argument(
+        "--skip-read", action="store_true", help="skip the read_header stage"
+    )
+    ap.add_argument(
+        "--only-read",
+        action="store_true",
+        help="Execute only the read_header stage (skip main.py and image merging)",
+    )
     ap.add_argument(
         "--with-signal",
         dest="with_signal",
         action="store_true",
-        help="Whether to process signal amplitude related processes (such as signal amplitude fitting, signal related plotting, etc.). Adding this parameter will enable signal-related reading and analysis logic, disabled by default."
+        help="Whether to process signal amplitude related processes (such as signal amplitude fitting, signal related plotting, etc.). Adding this parameter will enable signal-related reading and analysis logic, disabled by default.",
     )
-    ap.add_argument("--left", type=int, default=0, help="left parameter for read_trace.py (default 0)")
-    ap.add_argument("--right", type=int, default=512, help="right parameter for read_trace.py (default 512)")
-    ap.add_argument("--channel", choices=['F', 'X', 'Y', 'Z', 'XY'], default='X', help="Channel suffix for matching files when --with-signal is set (default X)")
-    ap.add_argument("--skip-matching", action="store_true", help="pass --skip-matching through to main.py")
-    ap.add_argument("--skip-fingerprint", action="store_true", help="pass --skip-fingerprint through to main.py")
-    ap.add_argument("--force-recompute", action="store_true", help="pass --force-recompute through to main.py")
+    ap.add_argument(
+        "--left",
+        type=int,
+        default=0,
+        help="left parameter for read_trace.py (default 0)",
+    )
+    ap.add_argument(
+        "--right",
+        type=int,
+        default=512,
+        help="right parameter for read_trace.py (default 512)",
+    )
+    ap.add_argument(
+        "--channel",
+        choices=["F", "X", "Y", "Z", "XY"],
+        default="X",
+        help="Channel suffix for matching files when --with-signal is set (default X)",
+    )
+    ap.add_argument(
+        "--skip-matching",
+        action="store_true",
+        help="pass --skip-matching through to main.py",
+    )
+    ap.add_argument(
+        "--skip-fingerprint",
+        action="store_true",
+        help="pass --skip-fingerprint through to main.py",
+    )
+    ap.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="pass --force-recompute through to main.py",
+    )
     return ap
 
 
@@ -469,7 +567,9 @@ def apply_task_limit(tasks: list[TaskSpec], limit: int) -> list[TaskSpec]:
     return tasks
 
 
-def summarize_results(results: list[TaskResult], start: datetime.datetime, end: datetime.datetime) -> int:
+def summarize_results(
+    results: list[TaskResult], start: datetime.datetime, end: datetime.datetime
+) -> int:
     """Aggregate worker results and compute final process exit code."""
     count = len(results)
     exit_code = 0
@@ -478,7 +578,9 @@ def summarize_results(results: list[TaskResult], start: datetime.datetime, end: 
             logger.error(f"Task for {ds} returned non-zero exit {code}")
             exit_code = 2
 
-    logger.info(f"Processed {count} files from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}")
+    logger.info(
+        f"Processed {count} files from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}"
+    )
     return exit_code
 
 
@@ -488,21 +590,23 @@ def main() -> int:
 
     start = parse_datetime(args.start)
     end = parse_datetime(args.end)
-    logger.info(f"Processing from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}")
+    logger.info(
+        f"Processing from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}"
+    )
     if start > end:
         build_arg_parser().error("start must be <= end")
 
     file_start = int(start.strftime("%Y%m%d%H%M%S"))
     file_end = int(end.strftime("%Y%m%d%H%M%S"))
     logger.info(f"File range: {file_start} to {file_end}")
-    
+
     # Validate that base path exists
     if not os.path.exists(args.base_path):
         logger.error(f"Base path does not exist: {args.base_path}")
         return 1
     tasks = build_tasks(start, end, args)
     tasks = apply_task_limit(tasks, args.limit)
-    
+
     # When jobs==1 run sequentially; otherwise use multiprocessing.
     results = execute_tasks(tasks, args.jobs)
 

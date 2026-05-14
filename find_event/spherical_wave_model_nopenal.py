@@ -572,7 +572,7 @@ def fit_3param(matches, detector_positions, c, initial_guesses=None):
     t0 = np.mean(measured_times) - np.mean(travel_times)
     
     # 计算chi2（自由度=1）
-    chi2 = best_chi2 / max(1, len(matches) - 3)
+    chi2 = best_chi2 / max(1, len(times) - 3)
     
     return rho, theta, phi, t0, chi2, best_chi2, True
 
@@ -593,7 +593,7 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
 
     # 提取探测器的位置和时间
     positions = np.array([detector_positions[det_id] for det_id in times.keys()])
-    t_ns = np.array([times[det_id] for det_id in times.keys()])
+    t_ns = list(times.values())
     average_t_value = np.mean(t_ns)
 
     for detector_id, ns in matches:
@@ -617,7 +617,7 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
             f"theoretical_diff: {theoretical_time:.2f}, contribution: {residual:.2f}"
         )
         total_error += residual 
-    reduced_total_err = total_error/(len(matches) - 4)
+    reduced_total_err = total_error/(len(times) - 4)
     return reduced_total_err
 
 def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM'):  # pragma: no cover
@@ -627,14 +627,14 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
     all_matches = {}  # 存储每个事件最终的DU列表
     cmap = plt.cm.viridis
     
-    for i, (event_key, matches) in enumerate(matching_times.items()): 
-        # if i >= len(initial_directions): break
-        if len(matches) < 5: continue
+    for i, (event_key, times) in enumerate(matching_times.items()): 
+        if i % 1000 == 1:
+            print(f"SWM EventNo{i}/{len(matching_times)}")
+        if len(times) < 5: continue
         
-        times = {det_id: ns for det_id, ns in matches}
         t_ns = np.array(list(times.values()))
-        current_pos = np.array([detector_positions[det_id] for det_id in times.keys()])
-        pos_list = np.array([detector_positions[det_id] for det_id in times.keys()])
+        # current_pos = np.array([detector_positions[int(det_id)] for det_id in times.keys()])
+        pos_list = np.array([detector_positions[int(det_id)] for det_id in times.keys()])
         t_mean_ns = np.mean(t_ns)
         min_index = np.argmin(t_ns)
         max_index = np.argmax(t_ns)
@@ -657,7 +657,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
         # 简化的初值估计
         #zenith_init = 45.0; azimuth_init = 0.0; t0_init = t_mean_ns
         
-        zenith_init, azimuth_init, t0_init, success = estimate_initial_direction_robust(current_pos, t_ns, c)
+        zenith_init, azimuth_init, t0_init, success = estimate_initial_direction_robust(pos_list, t_ns, c)
         if not success:
             # 如果估算失败（例如探测器太少），使用默认保守初值
             zenith_init = 45.0
@@ -673,7 +673,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             positions_array = np.zeros((n_du, 3))
             times_array = np.zeros(n_du)
             for idx, did in enumerate(du_ids_list):
-                positions_array[idx] = detector_positions[did]
+                positions_array[idx] = detector_positions[int(did)]
                 times_array[idx] = times[did]
             sigma_numba = 6.0  # 时间分辨率
         # phi 转 (u,v) 的辅助函数
@@ -846,10 +846,10 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             ])
             # 计算近似卡方
             err_fallback = 0
-            for did, ns in matches:
-                tp = np.linalg.norm(detector_positions[did] - src_fallback) / c + t0_fallback
+            for did, ns in times.items():
+                tp = np.linalg.norm(detector_positions[int(did)] - src_fallback) / c + t0_fallback
                 err_fallback += ((tp - (ns - t_mean_ns)) / 6.0) ** 2
-            chi2_fallback = err_fallback / max(1, len(matches)-4)
+            chi2_fallback = err_fallback / max(1, len(times)-4)
             
             results[event_key] = src_fallback
             chi_squares[event_key] = chi2_fallback
@@ -868,13 +868,13 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             src = rho * np.array([np.sin(np.deg2rad(theta))*np.cos(np.deg2rad(phi)),
                                   np.sin(np.deg2rad(theta))*np.sin(np.deg2rad(phi)),
                                   np.cos(np.deg2rad(theta))])
-            chi2 = min_chi2 / max(1, len(matches)-4)
+            chi2 = min_chi2 / max(1, len(times)-4)
             
             # 调试：检测异常高卡方和0度聚集
             ##if chi2 > 1000 or (0 <= phi % 360 <= 10) or (350 <= phi % 360 <= 360):
             ##    print(f"  DEBUG Event {index}: chi2={chi2:.1f}, phi={phi:.1f}, theta={theta:.1f}, rho={rho:.0f}")
             ##    print(f"    initial_phi={initial_phi:.1f}, azimuth_init={azimuth_init:.1f}")
-            ##    print(f"    DUs={len(matches)}, min_chi2={min_chi2:.1f}")
+            ##    print(f"    DUs={len(times)}, min_chi2={min_chi2:.1f}")
             #if chi2 < 1e-2: chi2=max(chi2,1e-2)
             
             # ===== 高卡方事件逐个DU剔除优化 =====
@@ -882,9 +882,9 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             original_chi2 = chi2  # 保存原始卡方用于显示
             needs_3param_fit = False  # 标记是否需要后续3参数拟合（当DU=4时）
              
-            while chi2 > 10 and len(matches) >= 5:
+            while chi2 > 10 and len(times) >= 5:
                 # ===== 特殊处理：当DU=5且chi2>200时，尝试所有4-DU组合（方案1）=====
-                if len(matches) == 5 and chi2 > 200:
+                if len(times) == 5 and chi2 > 200:
                     from itertools import combinations
                     best_4du_chi2 = np.inf
                     best_4du_matches = None
@@ -895,7 +895,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                     # 尝试所有C(5,4)=5种4-DU组合
                     best_4du_params = None  # 保存最佳拟合参数
                     
-                    for combo in combinations(matches, 4):
+                    for combo in combinations(times.items(), 4):
                         combo_matches = list(combo)
                         combo_times = {d: ns for d, ns in combo_matches}
                         combo_t_mean = np.mean(list(combo_times.values()))
@@ -923,7 +923,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                             best_4du_min_chi2 = min_chi2_4
                             # 记录被剔除的DU
                             combo_dus = set(d for d, _ in combo_matches)
-                            all_dus = set(d for d, _ in matches)
+                            all_dus = set(d for d, _ in times.items())
                             removed_du_id = list(all_dus - combo_dus)[0]
                     
                     # 如果找到更好的4-DU组合，验证被剔除的DU是否真的有问题
@@ -983,8 +983,8 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                 
                 # 计算每个DU的卡方贡献
                 du_contributions = []
-                for did, ns in matches:
-                    tp = np.linalg.norm(detector_positions[did] - src) / c + t0
+                for did, ns in times.items():
+                    tp = np.linalg.norm(detector_positions[int(did)] - src) / c + t0
                     contribution = ((tp - (ns - t_mean_ns)) / 6.0) ** 2
                     du_contributions.append((contribution, did, ns))
                 
@@ -993,9 +993,9 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                 # 尝试剔除贡献最大的DU（确保剩余>=5个）
                 removed_du = None
                 for contrib, did_to_remove, _ in du_contributions:
-                    if len(matches) - 1 >= 3:  # 确保剩余至少4个DU（但4个DU时用3参数）
+                    if len(times) - 1 >= 3:  # 确保剩余至少4个DU（但4个DU时用3参数）
                         # 构建剔除后的matches
-                        new_matches = [(d, ns) for d, ns in matches if d != did_to_remove]
+                        new_matches = [(d, ns) for d, ns in times.items() if d != did_to_remove]
                         n_new = len(new_matches)
                         
                         # 重新计算均值
@@ -1050,7 +1050,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                 new_positions_array = np.zeros((n_new, 3))
                                 new_times_array = np.zeros(n_new)
                                 for idx_new, (d_new, ns_new) in enumerate(new_matches):
-                                    new_positions_array[idx_new] = detector_positions[d_new]
+                                    new_positions_array[idx_new] = detector_positions[int(d_new)]
                                     new_times_array[idx_new] = ns_new
                                 # Numba UV包装函数
                                 def obj_reduced_uv_with_jac(p):
@@ -1169,11 +1169,11 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                     
                                     # ===== 被剔除DU验证步骤 =====
                                     # 计算被剔除DU的理论时间和残差
-                                    removed_du_pos = detector_positions[did_to_remove]
+                                    removed_du_pos = detector_positions[int(did_to_remove)]
                                     tp_removed = np.linalg.norm(removed_du_pos - src_new) / c + t0_new
                                     removed_du_time = new_times.get(did_to_remove, None)
                                     # 从原始matches中获取该DU的时间（因为new_times中没有）
-                                    for d_orig, ns_orig in matches:
+                                    for d_orig, ns_orig in times.items():
                                         if d_orig == did_to_remove:
                                             removed_du_time = ns_orig
                                             break
@@ -1217,7 +1217,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                                         f"  Event {index} {fit_type}: Removed DU {removed_du} "
                                                         f"(contrib={du_contributions[0][0]:.1f}), "
                                                         f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, "
-                                                        f"remaining DUs: {len(matches)}"
+                                                        f"remaining DUs: {len(times)}"
                                                 )
                     # 如果已经用3参数拟合过（即当前DU=4），退出while循环
                     if needs_3param_fit:
@@ -1236,19 +1236,19 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             
             results[event_key] = src
             chi_squares[event_key] = chi2
-            all_matches[event_key] = matches
+            all_matches[event_key] = times
 
             epsilon = 1e-12
             zenith = np.arccos(src[2] / (np.linalg.norm(src) + epsilon ) ) * 180 / np.pi
             azimuth = np.arctan2(src[1], src[0]) * 180 / np.pi 
             azimuth = np.where(azimuth < 0, azimuth + 360, azimuth)
             # 根据 DU 数量选择正确的自由度：4 DU 时用 3 参数（自由度=1），>4 DU 时用 4 参数
-            dof = max(1, len(matches) - 3) if len(matches) == 4 else max(1, len(matches) - 4)
+            dof = max(1, len(times) - 3) if len(times) == 4 else max(1, len(times) - 4)
             chi_square = min_chi2 / dof
             if chi_square > 1e3 and index%2000 ==1 :
                 logger.debug(
                     f"Event No.{index}, LargeChi {chi_square:.1e}, "
-                    f"Number of DUs:{len(matches)}"
+                    f"Number of DUs:{len(times)}"
                 )
             #if (chi2 < 1e2 and 53 < zenith < 86 and ( (abs(src[2]/1e3 - 9) > 1.5 and 40 <= azimuth <= 225) or (azimuth < 40 or azimuth > 225)) and not (296.7 <= azimuth <= 298.7 and zenith > 80)):
             if False:
@@ -1320,104 +1320,3 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                logger.debug(f"Saved detector plot for SWM Event {i}")
             
     return results, chi_squares, all_matches
-
-
-# def _coerce_time_ns(value):
-#     """Normalize one cached/event time payload into a scalar float ns value."""
-#     if isinstance(value, np.ndarray):
-#         if value.size == 0:
-#             raise ValueError("empty time array")
-#         return float(value.reshape(-1)[0])
-#     if isinstance(value, (list, tuple)):
-#         if len(value) == 0:
-#             raise ValueError("empty time sequence")
-#         return float(value[0])
-#     return float(value)
-
-
-# def spherical_wave_model(matching_times, matching_signals, detector_positions, initial_directions):
-#     """Main-pipeline compatible SWM entrypoint.
-
-#     Contract compatible with main.run_swm_stage:
-#     - input: dict[event_key] -> dict[du_id] = time_ns (or one-item list/array)
-#     - output: (dict[event_key] -> np.ndarray([x, y, z]), dict[event_key] -> chi_square)
-#     """
-#     # del matching_signals
-
-#     legacy_events = {}
-#     # init_directions = {}
-
-#     for event_key, times in matching_times.items():
-#         if event_key not in initial_directions:
-#             logger.warning(f"Skipping SWM event {event_key}: missing initial direction")
-#             continue
-
-#         if not isinstance(times, dict):
-#             logger.warning(f"Skipping SWM event {event_key}: times payload is not a dict")
-#             continue
-
-#         matches = []
-#         bad_event = False
-#         for raw_det_id, raw_time in times.items():
-#             try:
-#                 det_id = int(raw_det_id)
-#                 time_ns = _coerce_time_ns(raw_time)
-#             except (TypeError, ValueError) as exc:
-#                 logger.warning(
-#                     f"Skipping SWM event {event_key}: bad detector/time entry {raw_det_id} ({exc})"
-#                 )
-#                 bad_event = True
-#                 break
-#             matches.append((det_id, time_ns))
-
-#         if bad_event:
-#             continue
-
-#         if len(matches) < 5:
-#             logger.warning(
-#                 f"Skipping SWM event {event_key}: requires at least 5 detectors, got {len(matches)}"
-#             )
-#             continue
-
-#         legacy_events[event_key] = matches
-#         # init_directions[event_key] = np.array(initial_directions[event_key], dtype=float)
-
-#     if not legacy_events:
-#         return {}, {}, {}
-
-#     try:
-#         source_vectors, chi_list, all_matches = spherical_wave_model_deepseek(
-#             legacy_events,
-#             detector_positions,
-#             c,
-#             initial_directions,
-#             "SWM_nopenal",
-#         )
-#     except SWMRecoverableFitError as exc:
-#         logger.warning(
-#             "SWM no-penalty fit hit recoverable failure, returning empty result: "
-#             f"{exc}"
-#         )
-#         return {}, {}, {}
-
-#     directions = {}
-#     chi_squares = {}
-#     new_matches = {}
-
-#     logger.info(
-#         f"SWM no-penalty fit completed: {len(source_vectors)} events processed, "
-#         f"{len(chi_list)} chi values, {len(all_matches)} match lists"
-#     )
-#     max_len = min(len(source_vectors), len(chi_list), len(all_matches))
-#     if max_len != len(all_matches):
-#         logger.warning(
-#             "SWM no-penalty result length mismatch: "
-#             f"vectors={len(source_vectors)} chi={len(chi_list)} all_matches={len(all_matches)}"
-#         )
-
-#     for event_key, new_match in all_matches.items():
-#         directions[event_key] = np.array(source_vectors[event_key], dtype=float)
-#         chi_squares[event_key] = float(chi_list[event_key])
-#         new_matches[event_key] = new_match
-
-#     return directions, chi_squares, new_matches

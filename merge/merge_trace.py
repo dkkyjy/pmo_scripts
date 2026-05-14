@@ -169,7 +169,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
     total_files = len(files)
     for index, path in enumerate(files, start=1):
         content = load_yaml_dict(path)
-        logger.debug(
+        logger.info(
             "Processing file [{}/{}] {} with {} top-level entries",
             index,
             total_files,
@@ -207,17 +207,17 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
         for event_key, payload in current_file_events.items():
             if event_key in previous_file_events:
                 original_payload = previous_file_events[event_key]
-                logger.info(
+                logger.debug(
                     "Merging adjacent duplicate event_number={} from file={}",
                     event_key,
                     path,
                 )
-                logger.info(
+                logger.debug(
                     "Previous-file record before merge for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(original_payload),
                 )
-                logger.info(
+                logger.debug(
                     "Incoming record for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(payload),
@@ -229,7 +229,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
                 merged_count += 1
                 file_merged += 1
                 merged_event_keys.add(event_key)
-                logger.info(
+                logger.debug(
                     "Merged result for event_number={}:\n{}",
                     event_key,
                     payload_to_log_text(merged_payload),
@@ -243,7 +243,7 @@ def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
 
         previous_file_events = current_processed
 
-        logger.debug(
+        logger.info(
             "File summary [{}/{}] {}: inserted={}, merged={}, skipped={}",
             index,
             total_files,

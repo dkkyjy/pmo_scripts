@@ -12,10 +12,10 @@ def setup_logger(
     rotation: Optional[str] = None,
     retention: Optional[str] = "30 days",
     compression: Optional[str] = None,
-    fmt: str = "<cyan>{time:YYYY-MM-DD HH:mm:ss.SSS}</cyan> | <level>{level}</level> | <cyan>{file}:{line}</cyan> | <level>{message}</level>",
+    fmt: str = "<cyan>{time:YYYY-MM-DD HH:mm:ss.SSS}</cyan> | <level>{level}</level> | <cyan>{file}:{line}</cyan> | <level>{function}</level> ==== \n{message}\n",
     enqueue: bool = True,
     **kwargs: Any,
- ) -> Any:
+) -> Any:
     """Configure and return a loguru logger.
 
     Args:
@@ -50,7 +50,7 @@ def setup_logger(
         log_file = env_log_file
 
     if console:
-        logger.add(sys.stdout, colorize=True, level='INFO', format=fmt, enqueue=enqueue)
+        logger.add(sys.stdout, colorize=True, level="INFO", format=fmt, enqueue=enqueue)
 
     if log_file is not None:
         p = Path(log_file)
