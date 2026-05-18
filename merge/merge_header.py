@@ -25,6 +25,7 @@ from merge.common import (
 )
 
 PATTERN = "Trigger*.yaml"
+TRACE_SUFFIX_PATTERN = re.compile(r"_(F|X|Y|Z|XY|matched|fingerprint|PWM|SWM)\.yaml$")
 YAML_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
 
@@ -52,6 +53,15 @@ def _filter_files_by_run_number(files: List[Path], run_number: Optional[int]) ->
     # Match RUN<run_number> where next character is not a digit.
     run_pattern = re.compile(rf"RUN{run_number}(?!\d)")
     return [path for path in files if run_pattern.search(path.name)]
+
+
+def _filter_out_trace_suffix_files(files: List[Path]) -> List[Path]:
+    """Exclude trace-type suffix files from header merge inputs."""
+    return [
+        path
+        for path in files
+        if TRACE_SUFFIX_PATTERN.search(path.name) is None
+    ]
 
 
 def _to_scalar_or_list(value: Any) -> List[Any]:
@@ -362,6 +372,13 @@ def merge_files_for_pattern(
     code, message, files = find_files(dirpath, pattern)
     if code != 0:
         return code, message
+
+    files = _filter_out_trace_suffix_files(files)
+    if not files:
+        return (
+            1,
+            f"No header-compatible files in {dirpath} after trace-suffix filtering",
+        )
 
     files = _filter_files_by_run_number(files, run_number)
     if run_number is not None and not files:

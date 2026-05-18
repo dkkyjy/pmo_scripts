@@ -128,6 +128,36 @@ python -m merge.merge_trace 2026/02/14 -o ../Reco_Dir
 python -m merge.merge_results 2026/02/14 -o ../Reco_Dir
 ```
 
+### Date-range merge orchestration
+
+```bash
+# Dry-run first (header + trace)
+python scripts/run_merge_date.py 2026-02-14 2026-02-16 \
+  --out-dir-base ../Reco_Dir
+
+# Dry-run trace only
+python scripts/run_merge_date.py 2026-02-14 2026-02-16 \
+  --target trace --out-dir-base ../Reco_Dir
+
+# Actual execution
+python scripts/run_merge_date.py 2026-02-14 2026-02-16 \
+  --target both --out-dir-base ../Reco_Dir --run
+```
+
+> [!NOTE]
+> `scripts/run_merge_trace_range.py` is kept as a compatibility wrapper and now delegates to:
+
+```bash
+python scripts/run_merge_date.py ... --target trace
+```
+
+### Legacy wrapper (trace only)
+
+```bash
+python scripts/run_merge_trace_range.py 2026-02-14 2026-02-16 \
+  --out-dir-base ../Reco_Dir
+```
+
 ### Statistics (examples)
 
 ```bash

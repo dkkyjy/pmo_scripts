@@ -369,6 +369,57 @@ class TestMerge(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("RUN10", msg)
 
+    def test_merge_files_for_pattern_excludes_trace_suffix_files(self) -> None:
+        """Header merge should ignore _F/_X/_Y/_Z/_XY suffix files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            input_dir = root / "2026" / "03" / "03"
+            input_dir.mkdir(parents=True)
+            out_file = root / "merged.yaml"
+
+            write_yaml(
+                input_dir / "Trigger_a_RUN10_demo_matched.yaml",
+                {"a": {"event_number": 10, "du_id": ["10"], "time": {"10": 1}}},
+            )
+            write_yaml(
+                input_dir / "Trigger_a_RUN10_demo_XY.yaml",
+                {"b": {"event_number": 20, "du_id": ["20"], "time": {"20": 2}}},
+            )
+
+            code, _ = merge.merge_files_for_pattern(
+                input_dir,
+                "Trigger*.yaml",
+                out_file,
+                run_number=10,
+            )
+
+            self.assertEqual(code, 0)
+            data = read_merged_yaml_without_header(out_file)
+            self.assertEqual(sorted(data.keys()), ["10"])
+
+    def test_merge_files_for_pattern_returns_1_when_only_trace_suffix_files(self) -> None:
+        """Header merge should return code 1 after trace-suffix exclusion empties inputs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            input_dir = root / "2026" / "03" / "03"
+            input_dir.mkdir(parents=True)
+            out_file = root / "merged.yaml"
+
+            write_yaml(
+                input_dir / "Trigger_a_RUN10_demo_X.yaml",
+                {"a": {"event_number": 10, "du_id": ["10"], "time": {"10": 1}}},
+            )
+
+            code, msg = merge.merge_files_for_pattern(
+                input_dir,
+                "Trigger*.yaml",
+                out_file,
+                run_number=10,
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("header-compatible", msg)
+
     def test_merge_files_for_pattern_error_cases(self) -> None:
         """Should return correct error code when directory/files are missing."""
         with tempfile.TemporaryDirectory() as tmpdir:
