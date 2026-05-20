@@ -144,6 +144,16 @@ python scripts/run_merge_date.py 2026-02-14 2026-02-16 \
   --target both --out-dir-base ../Reco_Dir --run
 ```
 
+### Slurm submit for `main.py`
+
+```bash
+# Dry-run first (one merged YAML per Slurm job)
+scripts/submit_run_main_date.sh -d 20260501 --end-date 20260503 --dry-run
+
+# Actual execution
+scripts/submit_run_main_date.sh -d 20260501 --end-date 20260503 --run
+```
+
 > [!NOTE]
 > `scripts/run_merge_trace_range.py` is kept as a compatibility wrapper and now delegates to:
 

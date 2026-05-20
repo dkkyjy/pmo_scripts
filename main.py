@@ -968,6 +968,9 @@ def main(
             force_recompute,
             state,
         )
+        if len(state['times']) == 0:
+            logger.warning("No events after matching stage, skipping subsequent stages.")
+            return 0
         logger.info('Finished matching stage')
         
     state, fingerprint_computed = skip_fingerprint_stage(
@@ -989,6 +992,9 @@ def main(
             state,
             matching_computed,
         )
+        if len(state['times']) == 0:
+            logger.warning("No events after fingerprint stage, skipping subsequent stages.")
+            return 0
         logger.info('Finished fingerprint stage')
         
     logger.info('Running PWM stage with matching_file={}', matching_file)

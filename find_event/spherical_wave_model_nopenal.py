@@ -1115,8 +1115,8 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                         jac_r[0] += 2 * residual_r * dr_drho_r
                                         jac_r[1] += 2 * residual_r * dr_dtheta_r
                                         jac_r[2] += 2 * residual_r * dr_du
-                                    jac_r[3] += 2 * residual_r * dr_dv
-                                    jac_r[4] += 2 * residual_r * dr_dt0
+                                        jac_r[3] += 2 * residual_r * dr_dv
+                                        jac_r[4] += 2 * residual_r * dr_dt0
                                 
                                 return err_r, jac_r
                             
@@ -1213,12 +1213,12 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                     # 成功剔除DU并优化（可能是4参数或3参数拟合）
                     fit_type = "3-param" if needs_3param_fit else "4-param"
                     if(index%1==0) : 
-                                                logger.debug(
-                                                        f"  Event {index} {fit_type}: Removed DU {removed_du} "
-                                                        f"(contrib={du_contributions[0][0]:.1f}), "
-                                                        f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, "
-                                                        f"remaining DUs: {len(times)}"
-                                                )
+                        logger.debug(
+                            f"  Event {index} {fit_type}: Removed DU {removed_du} "
+                            f"(contrib={du_contributions[0][0]:.1f}), "
+                            f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, "
+                            f"remaining DUs: {len(times)}"
+                        )
                     # 如果已经用3参数拟合过（即当前DU=4），退出while循环
                     if needs_3param_fit:
                         break
