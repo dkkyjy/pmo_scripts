@@ -628,8 +628,8 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
     cmap = plt.cm.viridis
     
     for i, (event_key, times) in enumerate(matching_times.items()): 
-        if i % 1000 == 1:
-            print(f"SWM EventNo{i}/{len(matching_times)}")
+        if i % 1000 == 0:
+            logger.info(f"SWM EventNo{i}/{len(matching_times)}")
         if len(times) < 5: continue
         
         t_ns = np.array(list(times.values()))

@@ -30,8 +30,8 @@ from stats import common as scommon
 
 plt.style.use(["science", "grid", "notebook"])
 
-DELTA_PLOT_MIN_NS = -5e4
-DELTA_PLOT_MAX_NS = 5e4
+DELTA_PLOT_MIN_NS = -5e1
+DELTA_PLOT_MAX_NS = 5e1
 
 def make_named_row(fields: Iterable[str], **values: Any):
     """Create one named row based on a predefined field schema using namedtuple."""
@@ -804,6 +804,70 @@ def plot_shared_du_count_vs_time(
     plt.close(fig)
 
 
+def plot_top_du_pair_delta_histograms(
+    path: Path,
+    rows: Sequence[AdjacentPairRow],
+    bins: int,
+    top_n: int = 10,
+) -> None:
+    """Plot adjacent-delta histograms for top-N most frequent DU pairs."""
+    if not rows:
+        logger.warning("No adjacent common DU-pair rows; skip top-pair plotting")
+        return
+
+    grouped_deltas: Dict[tuple[str, str], List[float]] = defaultdict(list)
+    for row in rows:
+        pair_key = (str(row.du_a), str(row.du_b))
+        grouped_deltas[pair_key].append(float(row.adjacent_delta_ns))
+
+    sorted_pairs = sorted(
+        grouped_deltas.items(),
+        key=lambda item: (-len(item[1]), sort_du_id_key(item[0][0]),
+                          sort_du_id_key(item[0][1])),
+    )
+    selected_pairs = sorted_pairs[: max(1, int(top_n))]
+    if not selected_pairs:
+        logger.warning("No DU pairs available for top-pair histogram plotting")
+        return
+
+    subplot_count = len(selected_pairs)
+    cols = min(5, subplot_count)
+    rows_count = (subplot_count + cols - 1) // cols
+
+    fig, axes = plt.subplots(
+        rows_count,
+        cols,
+        figsize=(4.2 * cols, 3.4 * rows_count),
+        squeeze=False,
+    )
+    flat_axes = list(axes.flat)
+
+    for axis_index, ((du_a, du_b), deltas) in enumerate(selected_pairs):
+        ax = flat_axes[axis_index]
+        ax.hist(
+            deltas,
+            bins=max(1, bins),
+            edgecolor="black",
+            range=(DELTA_PLOT_MIN_NS, DELTA_PLOT_MAX_NS),
+        )
+        ax.set_title(f"DU {du_a}-{du_b} (n={len(deltas)})")
+        ax.set_xlabel("DU-pair delta difference (ns)")
+        ax.set_ylabel("Count")
+        # ax.set_yscale("log")
+        ax.set_xlim(DELTA_PLOT_MIN_NS, DELTA_PLOT_MAX_NS)
+
+    for axis_index in range(subplot_count, len(flat_axes)):
+        flat_axes[axis_index].axis("off")
+
+    fig.suptitle(
+        f"Top {subplot_count} DU-pair adjacent delta histograms",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -816,7 +880,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bins",
         type=int,
-        default=120,
+        default=100,
         help="Histogram bins (default: 120)",
     )
     parser.add_argument(
@@ -827,8 +891,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lookback",
         type=int,
-        default=10,
-        help="Compare each event with up to N previous events (default: 10)",
+        default=50,
+        help="Compare each event with up to N previous events (default: 50)",
     )
     parser.add_argument(
         "--force-recompute",
@@ -898,6 +962,9 @@ def main() -> int:
     )
     du_count_time_out = yaml_path.with_name(
         f"{yaml_path.stem}_lookback{normalized_lookback}_shared_du_count_vs_time.png"
+    )
+    top_pair_hist_out = yaml_path.with_name(
+        f"{yaml_path.stem}_lookback{normalized_lookback}_top10_du_pair_delta_hist.png"
     )
 
     use_csv_cache = csv_out.exists() and not args.force_recompute
@@ -1000,9 +1067,16 @@ def main() -> int:
                     du_count_time_out,
                     du_count_rows,
                 )
+                plot_top_du_pair_delta_histograms(
+                    top_pair_hist_out,
+                    rows,
+                    args.bins,
+                    top_n=10,
+                )
                 if rows:
                     logger.info("Plot written: {}", plot_out)
                     logger.info("Plot written: {}", time_plot_out)
+                    logger.info("Plot written: {}", top_pair_hist_out)
                 if count_rows:
                     logger.info("Plot written: {}", count_hist_out)
                     logger.info("Plot written: {}", count_time_out)
@@ -1065,9 +1139,16 @@ def main() -> int:
             du_count_time_out,
             du_count_rows,
         )
+        plot_top_du_pair_delta_histograms(
+            top_pair_hist_out,
+            rows,
+            args.bins,
+            top_n=10,
+        )
         if rows:
             logger.info("Plot written: {}", plot_out)
             logger.info("Plot written: {}", time_plot_out)
+            logger.info("Plot written: {}", top_pair_hist_out)
         if count_rows:
             logger.info("Plot written: {}", count_hist_out)
             logger.info("Plot written: {}", count_time_out)

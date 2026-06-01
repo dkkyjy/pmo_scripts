@@ -41,6 +41,7 @@ def make_named_row(fields: Iterable[str], **values: Any):
         PAIR_DISTRIBUTION_FIELDS: PairDistributionRow,
         EVENT_PAIR_COUNT_FIELDS: EventPairCountRow,
         EVENT_MAX_RATIO_FIELDS: EventMaxRatioRow,
+        EVENT_MAX_DELTA_PAIR_FIELDS: EventMaxDeltaPairRow,
     }.get(fields)
     if tuple_type is None:
         raise ValueError(f"Unknown row fields: {fields}")
@@ -83,6 +84,14 @@ EVENT_MAX_RATIO_FIELDS = (
     "event_time",
     "max_observed_theoretical_ratio",
 )
+EVENT_MAX_DELTA_PAIR_FIELDS = (
+    "event_number",
+    "event_time",
+    "du_a",
+    "du_b",
+    "max_observed_abs_delta_ns",
+    "corresponding_theoretical_delta_ns",
+)
 
 # Define namedtuple row models
 ObservedPairDelta = namedtuple("ObservedPairDelta", OBSERVED_PAIR_DELTA_FIELDS)
@@ -90,6 +99,10 @@ ExpectedPairDelta = namedtuple("ExpectedPairDelta", EXPECTED_PAIR_DELTA_FIELDS)
 PairDistributionRow = namedtuple("PairDistributionRow", PAIR_DISTRIBUTION_FIELDS)
 EventPairCountRow = namedtuple("EventPairCountRow", EVENT_PAIR_COUNT_FIELDS)
 EventMaxRatioRow = namedtuple("EventMaxRatioRow", EVENT_MAX_RATIO_FIELDS)
+EventMaxDeltaPairRow = namedtuple(
+    "EventMaxDeltaPairRow",
+    EVENT_MAX_DELTA_PAIR_FIELDS,
+)
 
 DATETIME_FORMAT = scommon.DATETIME_FORMAT
 DATETIME_HELP_FORMAT = scommon.DATETIME_HELP_FORMAT
@@ -480,6 +493,55 @@ def build_pair_distribution_rows(
     return rows
 
 
+def filter_pairs_by_observed_abs_delta_threshold(
+    rows: Sequence[PairDistributionRow],
+    threshold_ns: float = 20000.0,
+    max_print_count: int = 200,
+) -> List[PairDistributionRow]:
+    """Print and remove pairs whose observed absolute delta exceeds threshold."""
+    kept_rows: List[PairDistributionRow] = []
+    removed_rows: List[PairDistributionRow] = []
+
+    for row in rows:
+        observed_abs_delta_ns = float(row.observed_abs_delta_ns)
+        if observed_abs_delta_ns > threshold_ns:
+            removed_rows.append(row)
+            continue
+        kept_rows.append(row)
+
+    if removed_rows:
+        logger.info(
+            "Remove {} pairs where observed |Δt| > {:.3f} ns",
+            len(removed_rows),
+            threshold_ns,
+        )
+        for index, row in enumerate(removed_rows, start=1):
+            if index > max_print_count:
+                break
+            logger.info(
+                "Removed pair: event_number={}, event_time={}, du_a={}, du_b={}, "
+                "observed_delta_ns={:.6f}, observed_abs_delta_ns={:.6f}, "
+                "theoretical_delta_ns={:.6f}",
+                int(row.event_number),
+                int(row.event_time),
+                str(row.du_a),
+                str(row.du_b),
+                float(row.observed_delta_ns),
+                float(row.observed_abs_delta_ns),
+                float(row.theoretical_delta_ns),
+            )
+        if len(removed_rows) > max_print_count:
+            logger.info(
+                "Removed pair log truncated: printed first {}, omitted {}",
+                max_print_count,
+                len(removed_rows) - max_print_count,
+            )
+    else:
+        logger.info("No pairs removed by observed |Δt| threshold filter")
+
+    return kept_rows
+
+
 def write_pair_distribution_csv(path: Path, rows: Sequence[PairDistributionRow]) -> None:
     """Write DU-pair distribution CSV with observed and theoretical deltas."""
     with path.open("w", newline="", encoding="utf-8") as file_obj:
@@ -764,6 +826,96 @@ def plot_theoretical_delta_histogram(
     plt.close(fig)
 
 
+def plot_causality_allowed_region(
+    path: Path,
+    rows: Sequence[PairDistributionRow],
+    jitter_delta_ns: float,
+) -> None:
+    """Plot DU-pair causality allowed region with observed samples.
+
+    X-axis is DU-pair theoretical time-delta ``d/c`` (ns), Y-axis is observed
+    absolute time-delta ``|Δt|`` (ns). The allowed boundary is:
+        |Δt| <= d/c + δ
+    where ``d/c`` is ``theoretical_delta_ns`` and ``δ`` is
+    ``jitter_delta_ns``.
+    """
+    samples = [
+        (float(row.theoretical_delta_ns), float(row.observed_abs_delta_ns))
+        for row in rows
+        if float(row.theoretical_delta_ns) > 0
+    ]
+    if not samples:
+        logger.warning(
+            "No causality samples available; skip allowed-region plot"
+        )
+        return
+
+    theoretical_delta = np.array([item[0] for item in samples], dtype=float)
+    observed_abs_delta = np.array([item[1] for item in samples], dtype=float)
+
+    allowed_upper = theoretical_delta + float(jitter_delta_ns)
+    inside_mask = observed_abs_delta <= allowed_upper
+    outside_mask = observed_abs_delta > allowed_upper
+
+    sort_idx = np.argsort(theoretical_delta)
+    sorted_theoretical_x = theoretical_delta[sort_idx]
+    sorted_theoretical = theoretical_delta[sort_idx]
+    sorted_allowed_upper = allowed_upper[sort_idx]
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    ax.fill_between(
+        sorted_theoretical_x,
+        0,
+        sorted_allowed_upper,
+        color="deepskyblue",
+        alpha=0.12,
+        label=r"Allowed region",
+    )
+    ax.plot(
+        sorted_theoretical_x,
+        sorted_allowed_upper,
+        color="royalblue",
+        linestyle="-",
+        linewidth=1.2,
+        label=rf"Boundary: $|\Delta t| = d/c + \delta$)",
+    )
+    # ax.plot(
+    #     sorted_theoretical_x,
+    #     sorted_theoretical,
+    #     color="black",
+    #     linewidth=1.2,
+    #     label=r"Ideal causality line: $|\Delta t| = d/c$",
+    # )
+
+    if np.any(inside_mask):
+        ax.scatter(
+            theoretical_delta[inside_mask],
+            observed_abs_delta[inside_mask],
+            s=10,
+            alpha=0.55,
+            color="tab:blue",
+            label="Pairs inside allowed region",
+        )
+    if np.any(outside_mask):
+        ax.scatter(
+            theoretical_delta[outside_mask],
+            observed_abs_delta[outside_mask],
+            s=10,
+            alpha=0.65,
+            color="tab:red",
+            label="Pairs outside allowed region",
+        )
+
+    ax.set_xlabel("DU pair theoretical delta d/c (ns)")
+    ax.set_ylabel("Observed absolute time delta |Δt| (ns)")
+    ax.set_title("DU-pair causality allowed-region diagnostic")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
 def build_event_max_ratio_rows(
     rows: Sequence[PairDistributionRow],
 ) -> List[EventMaxRatioRow]:
@@ -826,6 +978,131 @@ def build_event_pair_count_rows(
         )
 
     return result_rows
+
+
+def build_event_max_delta_pair_rows(
+    rows: Sequence[PairDistributionRow],
+) -> List[EventMaxDeltaPairRow]:
+    """Build per-event max observed delta rows with corresponding theory."""
+    event_best_row_map: Dict[tuple[int, int], PairDistributionRow] = {}
+
+    for row in rows:
+        event_number = int(row.event_number)
+        event_time = int(row.event_time)
+        key = (event_number, event_time)
+        previous = event_best_row_map.get(key)
+        if previous is None:
+            event_best_row_map[key] = row
+            continue
+
+        if float(row.observed_abs_delta_ns) > float(previous.observed_abs_delta_ns):
+            event_best_row_map[key] = row
+
+    result_rows: List[EventMaxDeltaPairRow] = []
+    for event_number, event_time in sorted(
+        event_best_row_map.keys(),
+        key=lambda item: (item[1], item[0]),
+    ):
+        best_row = event_best_row_map[(event_number, event_time)]
+        result_rows.append(
+            make_named_row(
+                EVENT_MAX_DELTA_PAIR_FIELDS,
+                event_number=event_number,
+                event_time=event_time,
+                du_a=str(best_row.du_a),
+                du_b=str(best_row.du_b),
+                max_observed_abs_delta_ns=float(best_row.observed_abs_delta_ns),
+                corresponding_theoretical_delta_ns=float(best_row.theoretical_delta_ns),
+            )
+        )
+
+    return result_rows
+
+
+def plot_event_max_observed_vs_theoretical(
+    path: Path,
+    rows: Sequence[EventMaxDeltaPairRow],
+    jitter_delta_ns: float,
+) -> None:
+    """Plot per-event max observed delta against theory with allowed region."""
+    samples = [
+        (
+            float(row.corresponding_theoretical_delta_ns),
+            float(row.max_observed_abs_delta_ns),
+        )
+        for row in rows
+        if float(row.corresponding_theoretical_delta_ns) > 0
+    ]
+    if not samples:
+        logger.warning(
+            "No per-event max-delta samples available; skip max-observed-vs-"
+            "theoretical plot"
+        )
+        return
+
+    x_values = np.array([item[0] for item in samples], dtype=float)
+    y_values = np.array([item[1] for item in samples], dtype=float)
+
+    allowed_upper = x_values + float(jitter_delta_ns)
+    inside_mask = y_values <= allowed_upper
+    outside_mask = y_values > allowed_upper
+
+    sort_idx = np.argsort(x_values)
+    sorted_x = x_values[sort_idx]
+    sorted_allowed_upper = allowed_upper[sort_idx]
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    ax.fill_between(
+        sorted_x,
+        0,
+        sorted_allowed_upper,
+        color="deepskyblue",
+        alpha=0.12,
+        label="Allowed region",
+    )
+    ax.plot(
+        sorted_x,
+        sorted_allowed_upper,
+        color="royalblue",
+        linestyle="-",
+        linewidth=1.2,
+        label=rf"Boundary: $|\Delta t| = d/c + \delta$)",
+    )
+    # ax.plot(
+    #     sorted_x,
+    #     sorted_x,
+    #     color="black",
+    #     linewidth=1.2,
+    #     label=r"Ideal line: $|\Delta t| = d/c$",
+    # )
+
+    if np.any(inside_mask):
+        ax.scatter(
+            x_values[inside_mask],
+            y_values[inside_mask],
+            s=12,
+            alpha=0.65,
+            color="tab:blue",
+            label="Events inside allowed region",
+        )
+    if np.any(outside_mask):
+        ax.scatter(
+            x_values[outside_mask],
+            y_values[outside_mask],
+            s=12,
+            alpha=0.65,
+            color="tab:red",
+            label="Events outside allowed region",
+        )
+
+    ax.set_xlabel("Corresponding theoretical Δt (ns)")
+    ax.set_ylabel("Per-event max observed |Δt| (ns)")
+    ax.set_title("Per-event max observed delta vs corresponding theory")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def plot_event_max_ratio_vs_time(
@@ -998,6 +1275,15 @@ def parse_args() -> argparse.Namespace:
             f"{DATETIME_HELP_FORMAT}"
         ),
     )
+    parser.add_argument(
+        "--jitter-delta-ns",
+        type=float,
+        default=100.0,
+        help=(
+            "Allowed time-jitter δ in ns for causality region plot "
+            "(default: 100)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1006,6 +1292,7 @@ def render_plots(
     stem: str,
     distribution_rows: Sequence[PairDistributionRow],
     event_time_label_map: Optional[EventTimeLabelMap] = None,
+    jitter_delta_ns: float = 100.0,
 ) -> List[Path]:
     """Render all DU-pair plots and return generated plot paths."""
     pair_delta_plot = root / f"{stem}_du_pair_delta_distribution.png"
@@ -1018,9 +1305,14 @@ def render_plots(
     event_pair_count_hist_plot = root / f"{stem}_event_du_pair_count_hist.png"
     event_max_ratio_time_plot = root / f"{stem}_event_max_ratio_vs_time.png"
     event_max_ratio_hist_plot = root / f"{stem}_event_max_ratio_hist.png"
+    event_max_observed_vs_theoretical_plot = (
+        root / f"{stem}_event_max_observed_vs_theoretical.png"
+    )
+    causality_allowed_plot = root / f"{stem}_causality_allowed_region.png"
 
     event_pair_count_rows = build_event_pair_count_rows(distribution_rows)
     event_max_ratio_rows = build_event_max_ratio_rows(distribution_rows)
+    event_max_delta_pair_rows = build_event_max_delta_pair_rows(distribution_rows)
 
     plot_pair_delta_distribution(
         pair_delta_plot,
@@ -1052,6 +1344,16 @@ def render_plots(
         event_max_ratio_hist_plot,
         event_max_ratio_rows,
     )
+    plot_event_max_observed_vs_theoretical(
+        event_max_observed_vs_theoretical_plot,
+        event_max_delta_pair_rows,
+        jitter_delta_ns=jitter_delta_ns,
+    )
+    plot_causality_allowed_region(
+        causality_allowed_plot,
+        distribution_rows,
+        jitter_delta_ns=jitter_delta_ns,
+    )
 
     return [
         pair_delta_plot,
@@ -1064,6 +1366,8 @@ def render_plots(
         event_pair_count_hist_plot,
         event_max_ratio_time_plot,
         event_max_ratio_hist_plot,
+        event_max_observed_vs_theoretical_plot,
+        causality_allowed_plot,
     ]
 
 
@@ -1138,6 +1442,10 @@ def main() -> int:
                 start_datetime,
                 end_datetime,
             )
+            distribution_rows = filter_pairs_by_observed_abs_delta_threshold(
+                distribution_rows,
+                threshold_ns=20000.0,
+            )
             logger.info("Loaded distribution rows from cache: {}", len(distribution_rows))
             event_time_label_map = build_event_time_label_map_from_rows(distribution_rows)
 
@@ -1147,6 +1455,7 @@ def main() -> int:
                     stem,
                     distribution_rows,
                     event_time_label_map,
+                    jitter_delta_ns=args.jitter_delta_ns,
                 )
                 for plot_path in plot_paths:
                     logger.info("Plot written: {}", plot_path)
@@ -1210,6 +1519,10 @@ def main() -> int:
         expected_rows,
         event_time_label_map,
     )
+    distribution_rows = filter_pairs_by_observed_abs_delta_threshold(
+        distribution_rows,
+        threshold_ns=20000.0,
+    )
 
     write_pair_distribution_csv(distribution_csv, distribution_rows)
     expected_meta = build_distribution_cache_meta(
@@ -1231,6 +1544,7 @@ def main() -> int:
             stem,
             distribution_rows,
             event_time_label_map,
+            jitter_delta_ns=args.jitter_delta_ns,
         )
         for plot_path in plot_paths:
             logger.info("Plot written: {}", plot_path)

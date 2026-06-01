@@ -467,6 +467,7 @@ def run_matching_stage(
                 MATCHING_STATE_FIELDS,
                 "run-matching-cache",
             )
+            matching_computed = True
         else:
             logger.warning(
                 f"Invalid matching cache payload in {matched_file}: {reason}; falling back to recompute."
@@ -489,8 +490,7 @@ def run_matching_stage(
         )
 
         if len(times) < 1:
-            logger.warning("No events after filtering, skipping subsequent stages.")
-            return state, True
+            return state, False
 
         results = {}
         for key in times.keys():
@@ -547,14 +547,12 @@ def run_fingerprint_stage(
     matching_computed,
 ):
     """Ensure fingerprint-stage data is available in memory and cache."""
-    matched_file = matching_file.replace(".yaml", "_matched.yaml")
-    source_file = matched_file if os.path.exists(matched_file) else matching_file
     fingerprint_file = matching_file.replace(".yaml", "_fingerprint.yaml")
     fingerprint_meta_file = _meta_file_for(fingerprint_file)
     expected_meta = _build_stage_cache_meta(
         "fingerprint",
         {
-            "matched_file": _build_file_signature(matched_file),
+            "matching_file": _build_file_signature(matching_file),
             "det_pos_file": _build_file_signature(det_pos_file),
             "with_signal": bool(with_signal),
         },
@@ -594,7 +592,7 @@ def run_fingerprint_stage(
         if force_recompute and os.path.exists(fingerprint_file):
             logger.info("Force recompute enabled, ignoring cache: {}", fingerprint_file)
 
-        source_payload = _read_yaml_dict(source_file)
+        source_payload = _read_yaml_dict(matching_file)
         if not isinstance(source_payload, dict):
             raise ValueError("Top-level matching payload must be a mapping")
 
@@ -646,12 +644,11 @@ def run_pwm_stage(
     """Ensure PWM-stage data is available in memory and cache."""
     pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
     pwm_meta_file = _meta_file_for(pwm_fitted_file)
-    fingerprint_file = matching_file.replace(".yaml", "_fingerprint.yaml")
     pwm_computed = False
     expected_meta = _build_stage_cache_meta(
         "pwm",
         {
-            "fingerprint_file": _build_file_signature(fingerprint_file),
+            "matching_file": _build_file_signature(matching_file),
             "det_pos_file": _build_file_signature(det_pos_file),
             "with_signal": bool(with_signal),
         },
@@ -751,6 +748,7 @@ def run_pwm_stage(
             if with_signal:
                 results[key]["signal"] = state["signals"][key]
 
+        logger.info(f"Plane wave fitting completed for {len(results)} events, writing cache to {pwm_fitted_file}")
         _write_yaml_dict(pwm_fitted_file, results)
         _write_cache_meta(pwm_meta_file, expected_meta)
         pwm_computed = True
@@ -777,7 +775,6 @@ def run_pwm_stage(
             "run-pwm-recompute",
         )
 
-    logger.info(f"Number of events after plane wave fitting: {len(results)}")
     _plot_pwm_if_needed(state, fig_prefix)
     return state, pwm_computed
 
@@ -795,11 +792,10 @@ def run_swm_stage(
     """Ensure SWM-stage data is available in memory and cache."""
     swm_fitted_file = matching_file.replace(".yaml", "_SWM.yaml")
     swm_meta_file = _meta_file_for(swm_fitted_file)
-    pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
     expected_meta = _build_stage_cache_meta(
         "swm",
         {
-            "pwm_file": _build_file_signature(pwm_fitted_file),
+            "matching_file": _build_file_signature(matching_file),
             "det_pos_file": _build_file_signature(det_pos_file),
             "with_signal": bool(with_signal),
         },
@@ -891,6 +887,7 @@ def run_swm_stage(
             if with_signal:
                 results[key]["signal"] = state["signals"][key]
 
+        logger.info(f"Spherical wave fitting completed for {len(results)} events, writing cache to {swm_fitted_file}")
         _write_yaml_dict(swm_fitted_file, results)
         _write_cache_meta(swm_meta_file, expected_meta)
 
@@ -905,7 +902,6 @@ def run_swm_stage(
             "run-swm-recompute",
         )
 
-    logger.info(f"Number of events after spherical wave fitting: {len(results)}")
     _plot_swm_if_needed(state, fig_prefix)
     return state
 
@@ -968,7 +964,10 @@ def main(
             force_recompute,
             state,
         )
-        if len(state['times']) == 0:
+        
+        matching_file = matching_file.replace(".yaml", "_matched.yaml")
+        
+        if not matching_computed:
             logger.warning("No events after matching stage, skipping subsequent stages.")
             return 0
         logger.info('Finished matching stage')
@@ -992,9 +991,8 @@ def main(
             state,
             matching_computed,
         )
-        if len(state['times']) == 0:
-            logger.warning("No events after fingerprint stage, skipping subsequent stages.")
-            return 0
+        
+        matching_file = matching_file.replace(".yaml", "_fingerprint.yaml")
         logger.info('Finished fingerprint stage')
         
     logger.info('Running PWM stage with matching_file={}', matching_file)

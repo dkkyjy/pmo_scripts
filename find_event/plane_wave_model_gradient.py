@@ -349,8 +349,8 @@ def plane_wave_model(matching_times, detector_positions):
     chi_squares = {}
 
     for event_index, (event_key, times) in enumerate(matching_times.items(), start=1):
-        if event_index % 1000 == 1:
-            print(f"PWM EventNo{event_index}/{len(matching_times)}")
+        if event_index % 1000 == 0:
+            logger.info(f"PWM EventNo{event_index}/{len(matching_times)}")
 
         try:
             matches, _det_ids, positions, time_values = _normalize_matches(times, detector_positions)
