@@ -8,7 +8,7 @@ from collections import namedtuple
 from logger_config import logger
 from find_event.io import load_data_from_file
 
-SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
+SPEED_OF_LIGHT_M_PER_S = 299_792_458.0 / 1.000259 # m/s in air at STP, adjusted for refractive index
 NS_PER_SECOND = 1e9
 
 EXPECTED_PAIR_DELTA_FIELDS = (

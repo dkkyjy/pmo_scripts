@@ -328,6 +328,7 @@ def merge_trigger_files(
     ymd: str,
     outdir: Path,
     run_number: Optional[int] = None,
+    channel: str = "XY",
 ) -> int:
     """Merge Trigger*.yaml in one date directory into one output file."""
     if run_number is None:
@@ -336,29 +337,30 @@ def merge_trigger_files(
             "falling back to full-day per-type Trigger merge"
         )
 
-    for trace_type, pattern in TYPE_PATTERNS.items():
-        effective_pattern = build_trigger_pattern(trace_type, run_number)
-        if run_number is None:
-            outpath = outdir / f"Trigger_{ymd}_{trace_type}_merged.yaml"
-        else:
-            outpath = outdir / f"Trigger_{ymd}_RUN{run_number}_{trace_type}_merged.yaml"
-        logger.info(
-            "Start merge workflow: input_dir={}, output_dir={}, output_file={}, run_number={}",
-            dirpath,
-            outdir,
-            outpath,
-            run_number,
-        )
-        code, msg = merge_files_for_pattern(
-            dirpath,
-            effective_pattern,
-            outpath,
-            run_number=run_number,
-        )
-        if code != 0:
-            logger.error(msg)
-            return code
-        logger.info(msg)
+    pattern = TYPE_PATTERNS[channel]
+    effective_pattern = build_trigger_pattern(channel, run_number)
+    if run_number is None:
+        outpath = outdir / f"Trigger_{ymd}_{channel}_merged.yaml"
+    else:
+        outpath = outdir / f"Trigger_{ymd}_RUN{run_number}_{channel}_merged.yaml"
+    logger.info(
+        "Start merge workflow: input_dir={}, output_dir={}, output_file={}, run_number={}, channel={}",
+        dirpath,
+        outdir,
+        outpath,
+        run_number,
+        channel,
+    )
+    code, msg = merge_files_for_pattern(
+        dirpath,
+        effective_pattern,
+        outpath,
+        run_number=run_number,
+    )
+    if code != 0:
+        logger.error(msg)
+        return code
+    logger.info(msg)
     return 0
 
 
@@ -388,20 +390,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             "When omitted, script keeps legacy per-type full-day merge behavior."
         ),
     )
+    parser.add_argument(
+        "--channel",
+        choices=["F", "X", "Y", "Z", "XY"],
+        default="XY",
+        help="Trace channel to merge (default: XY)",
+    )
     args = parser.parse_args(argv)
     outdir = Path(args.output)
 
     logger.info(
-        "CLI arguments: dir={}, output={}, run_number={}",
+        "CLI arguments: dir={}, output={}, run_number={}, channel={}",
         args.dir,
         outdir,
         args.run_number,
+        args.channel,
     )
 
     input_dir, ymd = resolve_input_dir(args.dir, outdir)
     logger.info(f"Resolved date={ymd}, input_dir={input_dir}")
 
-    return merge_trigger_files(input_dir, ymd, outdir, run_number=args.run_number)
+    return merge_trigger_files(
+        input_dir, ymd, outdir, run_number=args.run_number, channel=args.channel
+    )
 
 
 if __name__ == "__main__":

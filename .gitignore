@@ -10,6 +10,7 @@ __pycache__/
 # VSCode/IDE
 .vscode/
 .github/
+.codebuddy
 
 # Output files
 *.png

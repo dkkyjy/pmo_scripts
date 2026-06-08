@@ -87,7 +87,7 @@ def times_between(
     """Yield times from start to end inclusive, one per day at midnight."""
     cur = start.replace(hour=0, minute=0, second=0)
     one = datetime.timedelta(days=1)
-    while cur <= end:
+    while cur < end:
         yield cur
         cur += one
 
@@ -221,9 +221,9 @@ def make_readheader_command(file_path: str, date: str, out_dir_base: str) -> lis
 
 
 def make_readtrace_command(
-    file_path: str, date: str, out_dir_base: str, left: int = 0, right: int = 512
+    file_path: str, date: str, out_dir_base: str, left: int = 0, right: int = 512, channel: str = "XY"
 ) -> list[str]:
-    """Construct the command for read_trace with file_path, left, right, date, out_dir_base parameters."""
+    """Construct the command for read_trace with file_path, left, right, channel, date, out_dir_base parameters."""
     cmd = [
         sys.executable,  # use current python interpreter
         "readroot/read_trace.py",
@@ -232,6 +232,8 @@ def make_readtrace_command(
         str(left),
         "--right",
         str(right),
+        "--channel",
+        channel,
         "--date",
         date,
         "--out_dir_base",
@@ -380,7 +382,7 @@ def process_date(task: TaskSpec) -> TaskResult:
     else:
         if with_signal:
             readtrace_cmd = make_readtrace_command(
-                file_path, date, out_dir_base, left, right
+                file_path, date, out_dir_base, left, right, channel
             )
             logger.info(f"{' '.join(readtrace_cmd)}")
 

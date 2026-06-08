@@ -3,16 +3,16 @@ ROOT file data reading and processing module.
 
 This module reads a single ROOT file (teventadc) containing "Trigger",
 extracts du_id, gps_time, du_nanoseconds, and trace data,
-calculates the maximum ADC values and XY combined amplitude maximum values
-within the interval [left:right] for each channel, and outputs matching files.
+calculates the maximum ADC values (or XY combined amplitude for channel XY)
+within the interval [left:right] for the specified channel, and outputs a matching file.
 
 Main functions:
 1. Parse command line arguments
 2. Read and process ROOT file data
 3. Generate matching files
 
-Usage: python read_trace.py <file_path> <left> <right> <base_path> <out_dir_base>
-left/right are optional, default 0,512
+Usage: python read_trace.py <file_path> --left <L> --right <R> --channel <F|X|Y|Z|XY>
+left/right are optional, default 0,512; channel defaults to XY
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ YamlData = Dict[str, EventPayload]
 def parse_args(argv: List[str]) -> argparse.Namespace:
     """Parse command line arguments and perform basic validation."""
     parser = argparse.ArgumentParser(
-        description="Read ROOT trace and generate matching files (XY/FilterY/X)"
+        description="Read ROOT trace and generate matching files (F/X/Y/Z/XY)"
     )
     parser.add_argument("file_path", help="Path to the ROOT file to process")
     parser.add_argument(
@@ -78,6 +78,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         default=None,
         type=int,
         help="Right boundary of clipping interval (default None)",
+    )
+    parser.add_argument(
+        "--channel",
+        choices=["F", "X", "Y", "Z", "XY"],
+        default="XY",
+        help="Channel to read from trace data (default: XY)",
     )
     parser.add_argument(
         "--date",
@@ -257,14 +263,11 @@ def process_single_file(
     file_path: str,
     left: int,
     right: int,
-    dict_list_f: YamlData,
-    dict_list_x: YamlData,
-    dict_list_y: YamlData,
-    dict_list_z: YamlData,
-    dict_list_xy: YamlData,
+    data_dict: YamlData,
+    channel: str,
 ) -> None:
-    """Process one ROOT file and fill F/X/Y/Z/XY result dictionaries."""
-    logger.info(f"Processing file: {file_path}")
+    """Process one ROOT file and fill the result dictionary for the specified channel."""
+    logger.info(f"Processing file: {file_path} channel={channel}")
     try:
         (
             run_number_list,
@@ -279,25 +282,26 @@ def process_single_file(
             xytrace_adc_maxvalue_list,
         ) = read_file_du_time_ns(file_path, left, right)
 
+        channel_map = {
+            "F": ftrace_adc_maxvalue_list,
+            "X": xtrace_adc_maxvalue_list,
+            "Y": ytrace_adc_maxvalue_list,
+            "Z": ztrace_adc_maxvalue_list,
+            "XY": xytrace_adc_maxvalue_list,
+        }
+        maxvalue_list = channel_map[channel]
+
         file_name = os.path.basename(file_path)
-        channel_targets = [
-            (dict_list_f, ftrace_adc_maxvalue_list),
-            (dict_list_x, xtrace_adc_maxvalue_list),
-            (dict_list_y, ytrace_adc_maxvalue_list),
-            (dict_list_z, ztrace_adc_maxvalue_list),
-            (dict_list_xy, xytrace_adc_maxvalue_list),
-        ]
-        for target_dict, maxvalue_list in channel_targets:
-            cal_dict_du_ns(
-                run_number_list,
-                event_number_list,
-                du_id_list,
-                gps_time_list,
-                du_nanosecond_list,
-                target_dict,
-                maxvalue_list,
-                file_name,
-            )
+        cal_dict_du_ns(
+            run_number_list,
+            event_number_list,
+            du_id_list,
+            gps_time_list,
+            du_nanosecond_list,
+            data_dict,
+            maxvalue_list,
+            file_name,
+        )
     except Exception as exc:
         logger.warning(f"Error processing file {file_path}, skipping: {exc}")
 
@@ -316,27 +320,15 @@ def write_single_output(data_dict: YamlData, file_path: str) -> None:
 
 
 def write_outputs(
-    data_dict_f: YamlData,
-    data_dict_x: YamlData,
-    data_dict_y: YamlData,
-    data_dict_z: YamlData,
-    data_dict_xy: YamlData,
+    data_dict: YamlData,
     out_dir: str,
     file_name: str,
+    channel: str,
 ) -> None:
-    """Write F/X/Y/Z/XY dictionaries to corresponding output files."""
-    output_configs = [
-        (data_dict_f, f"{file_name}_F.yaml"),
-        (data_dict_x, f"{file_name}_X.yaml"),
-        (data_dict_y, f"{file_name}_Y.yaml"),
-        (data_dict_z, f"{file_name}_Z.yaml"),
-        (data_dict_xy, f"{file_name}_XY.yaml"),
-    ]
-
-    for data_dict, filename in output_configs:
-        file_path = os.path.join(out_dir, filename)
-        write_single_output(data_dict, file_path)
-
+    """Write channel dictionary to the corresponding output file."""
+    output_filename = f"{file_name}_{channel}.yaml"
+    file_path = os.path.join(out_dir, output_filename)
+    write_single_output(data_dict, file_path)
     logger.info(f"Results written to directory: {out_dir}")
 
 
@@ -346,42 +338,26 @@ def process_root_file(
     right: int,
     date: str,
     out_dir_base: str,
+    channel: str,
 ) -> bool:
-    """Main function to process one ROOT file into five channel YAML outputs."""
+    """Main function to process one ROOT file into the specified channel YAML output."""
     try:
         out_dir = os.path.join(out_dir_base, date)
         mkdir(out_dir)
 
-        dict_list_f: YamlData = {}
-        dict_list_x: YamlData = {}
-        dict_list_y: YamlData = {}
-        dict_list_z: YamlData = {}
-        dict_list_xy: YamlData = {}
+        data_dict: YamlData = {}
 
         process_single_file(
             file_path,
             left,
             right,
-            dict_list_f,
-            dict_list_x,
-            dict_list_y,
-            dict_list_z,
-            dict_list_xy,
+            data_dict,
+            channel,
         )
-        logger.info(
-            f"Processed file events: {len(dict_list_f)}, {len(dict_list_x)}, {len(dict_list_y)}, {len(dict_list_z)}, {len(dict_list_xy)}"
-        )
+        logger.info(f"Processed file events: {len(data_dict)}")
 
         output_filename = os.path.splitext(os.path.basename(file_path))[0]
-        write_outputs(
-            dict_list_f,
-            dict_list_x,
-            dict_list_y,
-            dict_list_z,
-            dict_list_xy,
-            out_dir,
-            output_filename,
-        )
+        write_outputs(data_dict, out_dir, output_filename, channel)
         return True
     except Exception as exc:
         logger.error(f"Processing failed: {exc}")
@@ -397,6 +373,7 @@ def main(argv: List[str]) -> int:
         args.right,
         args.date,
         args.out_dir_base,
+        args.channel,
     )
     return 0 if success else 2
 
