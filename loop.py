@@ -529,8 +529,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--channel",
         choices=["F", "X", "Y", "Z", "XY"],
-        default="X",
-        help="Channel suffix for matching files when --with-signal is set (default X)",
+        default="XY",
+        help="Channel suffix for matching files when --with-signal is set (default XY)",
     )
     ap.add_argument(
         "--skip-matching",
