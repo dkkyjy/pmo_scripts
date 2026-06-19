@@ -160,8 +160,8 @@ def parse_args():
         "det_pos",
         type=str,
         nargs="?",
-        default="_gp65_rtksort.txt",
-        help="Path to detector positions file (default: _gp65_rtksort.txt)",
+        default="_gp65_rtksort_2002_DU7.txt",
+        help="Path to detector positions file (default: _gp65_rtksort_2002_DU7.txt)",
     )
     parser.add_argument(
         "--force-recompute",

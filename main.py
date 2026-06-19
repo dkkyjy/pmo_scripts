@@ -76,7 +76,7 @@ def parse_args(argv):
     parser.add_argument(
         "--det-pos",
         help="Detector position file (optional), if not specified, use the default path in the script",
-        default="_gp65_rtksort.txt",
+        default="_gp65_rtksort_2002_DU7.txt",
     )
     parser.add_argument(
         "--with-signal",
@@ -484,7 +484,7 @@ def run_matching_stage(
             state["times"],
             state["signals"],
             det_pos_file,
-            min_detectors=5,
+            min_detectors=6,
             speed_of_light_tolerance=1.05,
             force_recompute=force_recompute,
         )

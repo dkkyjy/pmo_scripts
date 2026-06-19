@@ -32,6 +32,7 @@ from merge.common import (
 
 TYPE_PATTERNS = {
     "matched": "Trigger*matched.yaml",
+    "fingerprint": "Trigger*fingerprint.yaml",
     "PWM": "Trigger*PWM.yaml",
     "SWM": "Trigger*SWM.yaml",
 }

@@ -1,27 +1,38 @@
 #!/usr/bin/env python3
-"""Merge Trigger YAML files by event_number.
+"""Merge Trigger*<TYPE>.yaml trace files in a date directory into single files.
 
-Behavior:
-- Match only `Trigger*.yaml` under the input directory.
-- Always merge by `event_number` (append mode is not supported).
+This script merges trace channel files found in the specified directory:
+- F  -> `Trigger*_F.yaml`  -> `Trigger_yyyymmdd_F_merged.yaml` (or `_RUN{run}_F_merged.yaml`)
+- X  -> `Trigger*_X.yaml`  -> `Trigger_yyyymmdd_X_merged.yaml`
+- Y  -> `Trigger*_Y.yaml`  -> `Trigger_yyyymmdd_Y_merged.yaml`
+- Z  -> `Trigger*_Z.yaml`  -> `Trigger_yyyymmdd_Z_merged.yaml`
+- XY -> `Trigger*_XY.yaml` -> `Trigger_yyyymmdd_XY_merged.yaml`
+
+Usage examples:
+  python -m merge.merge_trace 2025/10/28
+  python -m merge.merge_trace 2025/10/28 -o /tmp/output_dir
+  python -m merge.merge_trace 2025/10/28 --channel XY --run-number 10192
+
+If `-o/--output` is omitted, output files are created inside the input directory.
+If `-o` is provided it will be treated as an output directory (because multiple output files are produced).
+If `--channel` is specified, only that channel is merged instead of all five.
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
-import yaml
-
-from logger_config import logger
 from merge.common import (
     build_traceability_header,
     find_files,
-    parse_date_dir as _parse_date_dir,
     resolve_input_dir,
+    write_text_with_header,
 )
+
 
 TYPE_PATTERNS = {
     "F": "Trigger*_F.yaml",
@@ -32,264 +43,20 @@ TYPE_PATTERNS = {
 }
 
 
-def build_trigger_pattern(trace_type: str, run_number: Optional[int]) -> str:
-    """Build coarse glob pattern per trace type and optional RUN number."""
+def build_result_pattern(merge_type: str, run_number: Optional[int]) -> str:
+    """Build coarse glob pattern for one result type and optional RUN number."""
     if run_number is None:
-        return TYPE_PATTERNS[trace_type]
-    return f"Trigger_*_RUN{run_number}_*_{trace_type}.yaml"
+        return TYPE_PATTERNS[merge_type]
+    return f"Trigger*_RUN{run_number}_*_{merge_type}.yaml"
 
 
-def _filter_files_by_run_number(files: List[Path], run_number: Optional[int]) -> List[Path]:
-    """Filter file list by exact RUN segment (avoid RUN10/RUN100 collision)."""
+def _filter_files_by_run_number(files: list[Path], run_number: Optional[int]) -> list[Path]:
+    """Filter files by exact RUN segment to avoid RUN10/RUN100 collisions."""
     if run_number is None:
         return files
 
     run_pattern = re.compile(rf"RUN{run_number}(?!\d)")
     return [path for path in files if run_pattern.search(path.name)]
-
-
-def payload_to_log_text(payload: Dict[str, Any]) -> str:
-    """Convert one event payload into readable YAML text for logs."""
-    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
-
-
-def _to_scalar_or_list(value: Any) -> List[Any]:
-    """Normalize one DU value into a list for safe concatenation."""
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
-def merge_du_value_map(base_map: Dict[str, Any], incoming_map: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge DU-value maps and preserve repeated trigger samples per DU.
-
-    Supports both legacy scalar values and list values. If the same DU exists
-    in both maps, values are concatenated in order.
-    """
-    merged: Dict[str, Any] = dict(base_map)
-    for du_id, incoming_value in incoming_map.items():
-        du_id_str = str(du_id)
-        if du_id_str not in merged:
-            merged[du_id_str] = incoming_value
-            continue
-
-        existing_list = _to_scalar_or_list(merged[du_id_str])
-        incoming_list = _to_scalar_or_list(incoming_value)
-        merged[du_id_str] = [*existing_list, *incoming_list]
-
-    return merged
-
-
-def merge_event_payload(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge two event payload dicts for the same event_number."""
-    merged = dict(base)
-    logger.debug(
-        "Merging payloads for event_number={} with incoming fields={}",
-        incoming.get("event_number"),
-        list(incoming.keys()),
-    )
-
-    for field, value in incoming.items():
-        logger.debug("Processing field='{}' (type={})", field, type(value).__name__)
-        if field in {"time", "signal"} and isinstance(value, dict):
-            existing = merged.get(field)
-            if not isinstance(existing, dict):
-                existing = {}
-            before_count = len(existing)
-            merged[field] = merge_du_value_map(existing, value)
-            logger.debug(
-                "Merged dict field='{}': before_keys={}, incoming_keys={}, after_keys={}",
-                field,
-                before_count,
-                len(value),
-                len(merged[field]),
-            )
-            continue
-
-        if field == "du_id" and isinstance(value, list):
-            existing_ids = merged.get("du_id")
-            if not isinstance(existing_ids, list):
-                existing_ids = []
-            before_count = len(existing_ids)
-            seen = set(str(item) for item in existing_ids)
-            for item in value:
-                item_str = str(item)
-                if item_str not in seen:
-                    existing_ids.append(item_str)
-                    seen.add(item_str)
-            merged["du_id"] = existing_ids
-            logger.debug(
-                "Merged du_id list: before_count={}, incoming_count={}, after_count={}",
-                before_count,
-                len(value),
-                len(existing_ids),
-            )
-            continue
-
-        if field not in merged or merged[field] is None:
-            merged[field] = value
-            logger.debug("Set field='{}' from incoming payload", field)
-        else:
-            logger.debug("Kept existing field='{}' and ignored incoming value", field)
-
-    return merged
-
-
-def load_yaml_dict(path: Path) -> Dict[str, Dict[str, Any]]:
-    """Load one YAML file and ensure top-level is dict."""
-    logger.debug(f"Loading YAML file: {path}")
-    with path.open("r", encoding="utf-8") as file_obj:
-        content = yaml.safe_load(file_obj)
-    if content is None:
-        logger.warning(f"YAML file is empty: {path}")
-        return {}
-    if not isinstance(content, dict):
-        logger.warning(f"Skipping YAML with non-dict top-level: {path}")
-        return {}
-    logger.debug(f"Loaded {len(content)} entries from {path}")
-    return content
-
-
-def merge_yaml_by_event_number(files: List[Path]) -> Dict[str, Dict[str, Any]]:
-    """Merge entries by event_number with adjacent-file comparison only.
-
-    For file N, duplicates are merged only against file N-1. This avoids
-    full-history comparisons while preserving per-event payload merge rules.
-    """
-    logger.info(f"Merging by event_number from {len(files)} files")
-    logger.info("Using adjacent-window merge mode (current file vs previous file)")
-
-    grouped: Dict[str, Dict[str, Any]] = {}
-    previous_file_events: Dict[str, Dict[str, Any]] = {}
-    merged_event_keys = set()
-
-    merged_count = 0
-    skipped_count = 0
-
-    total_files = len(files)
-    for index, path in enumerate(files, start=1):
-        content = load_yaml_dict(path)
-        logger.info(
-            "Processing file [{}/{}] {} with {} top-level entries",
-            index,
-            total_files,
-            path,
-            len(content),
-        )
-
-        current_file_events: Dict[str, Dict[str, Any]] = {}
-        file_skipped = 0
-        for _, payload in content.items():
-            if not isinstance(payload, dict):
-                skipped_count += 1
-                file_skipped += 1
-                continue
-
-            event_number = payload.get("event_number")
-            if event_number is None:
-                logger.warning(f"File {path} has entry without event_number; skipped")
-                skipped_count += 1
-                file_skipped += 1
-                continue
-
-            event_key = str(event_number)
-            if event_key not in current_file_events:
-                current_file_events[event_key] = payload
-            else:
-                current_file_events[event_key] = merge_event_payload(
-                    current_file_events[event_key],
-                    payload,
-                )
-
-        file_inserted = 0
-        file_merged = 0
-        current_processed: Dict[str, Dict[str, Any]] = {}
-        for event_key, payload in current_file_events.items():
-            if event_key in previous_file_events:
-                original_payload = previous_file_events[event_key]
-                logger.debug(
-                    "Merging adjacent duplicate event_number={} from file={}",
-                    event_key,
-                    path,
-                )
-                logger.debug(
-                    "Previous-file record before merge for event_number={}:\n{}",
-                    event_key,
-                    payload_to_log_text(original_payload),
-                )
-                logger.debug(
-                    "Incoming record for event_number={}:\n{}",
-                    event_key,
-                    payload_to_log_text(payload),
-                )
-
-                merged_payload = merge_event_payload(original_payload, payload)
-                grouped[event_key] = merged_payload
-                current_processed[event_key] = merged_payload
-                merged_count += 1
-                file_merged += 1
-                merged_event_keys.add(event_key)
-                logger.debug(
-                    "Merged result for event_number={}:\n{}",
-                    event_key,
-                    payload_to_log_text(merged_payload),
-                )
-                continue
-
-            grouped[event_key] = payload
-            current_processed[event_key] = payload
-            file_inserted += 1
-            logger.debug("Inserted new event key={} from file={}", event_key, path)
-
-        previous_file_events = current_processed
-
-        logger.info(
-            "File summary [{}/{}] {}: inserted={}, merged={}, skipped={}",
-            index,
-            total_files,
-            path,
-            file_inserted,
-            file_merged,
-            file_skipped,
-        )
-
-    logger.info(
-        "event_number merge completed: unique_events={}, merged_collisions={}, skipped_entries={}",
-        len(grouped),
-        merged_count,
-        skipped_count,
-    )
-    if merged_event_keys:
-        merged_event_list = sorted(
-            merged_event_keys,
-            key=lambda item: int(item) if item.isdigit() else item,
-        )
-        logger.info(
-            "Merged event_number list ({}): {}",
-            len(merged_event_list),
-            ",".join(merged_event_list),
-        )
-    else:
-        logger.info("No duplicate event_number entries were merged")
-
-    return dict(sorted(grouped.items(), key=lambda item: int(item[0]) if item[0].isdigit() else item[0]))
-
-
-def write_merged_yaml(outpath: Path, files: List[Path], merged_data: Dict[str, Dict[str, Any]]) -> None:
-    """Write merged YAML with traceability header."""
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    logger.debug(f"Writing merged YAML: {outpath}")
-
-    header_text = build_traceability_header(
-        outpath.name,
-        files,
-        include_time=True,
-    )
-    yaml_text = yaml.safe_dump(merged_data, allow_unicode=True, sort_keys=False)
-    with outpath.open("w", encoding="utf-8") as file_obj:
-        file_obj.write(header_text)
-        file_obj.write(yaml_text)
-    logger.info(f"Merged YAML written: {outpath} (records={len(merged_data)})")
 
 
 def merge_files_for_pattern(
@@ -298,8 +65,7 @@ def merge_files_for_pattern(
     outpath: Path,
     run_number: Optional[int] = None,
 ) -> Tuple[int, str]:
-    """Merge files matching pattern and write to outpath."""
-    logger.info(f"Searching files in {dirpath} with pattern '{pattern}'")
+    """Concatenate files matching one pattern into one output file."""
     code, message, files = find_files(dirpath, pattern)
     if code != 0:
         return code, message
@@ -311,75 +77,79 @@ def merge_files_for_pattern(
             f"No files matching RUN{run_number} in {dirpath} after boundary filtering",
         )
 
-    logger.info(f"Found {len(files)} input files for merge")
-    logger.debug("Input files:\n{}", "\n".join(str(file_path) for file_path in files))
-
-    merged_data = merge_yaml_by_event_number(files)
-    write_merged_yaml(outpath, files, merged_data)
-    return (
-        0,
-        f"Wrote {len(files)} files -> {outpath} "
-        f"(records={len(merged_data)}, mode=event-number, run_number={run_number})",
+    header_text = build_traceability_header(
+        outpath.name,
+        files,
+        include_time=False,
     )
+    chunks = [file_path.read_text(encoding="utf-8") for file_path in files]
+    write_text_with_header(outpath, header_text, chunks, ensure_newline_between_chunks=True)
+
+    return 0, f"Wrote {len(files)} files -> {outpath} (run_number={run_number})"
 
 
-def merge_trigger_files(
+def merge_all_types(
     dirpath: Path,
     ymd: str,
     outdir: Path,
     run_number: Optional[int] = None,
-    channel: str = "XY",
+    channel: Optional[str] = None,
 ) -> int:
-    """Merge Trigger*.yaml in one date directory into one output file."""
+    """Concatenate all configured result types.
+
+    When channel is provided, only that trace channel is merged.
+    """
+    any_error = 0
+
     if run_number is None:
-        logger.warning(
+        print(
             "Deprecated usage: --run-number is not provided; "
-            "falling back to full-day per-type Trigger merge"
+            "falling back to full-day per-type merge",
+            file=sys.stderr,
         )
 
-    pattern = TYPE_PATTERNS[channel]
-    effective_pattern = build_trigger_pattern(channel, run_number)
-    if run_number is None:
-        outpath = outdir / f"Trigger_{ymd}_{channel}_merged.yaml"
-    else:
-        outpath = outdir / f"Trigger_{ymd}_RUN{run_number}_{channel}_merged.yaml"
-    logger.info(
-        "Start merge workflow: input_dir={}, output_dir={}, output_file={}, run_number={}, channel={}",
-        dirpath,
-        outdir,
-        outpath,
-        run_number,
-        channel,
-    )
-    code, msg = merge_files_for_pattern(
-        dirpath,
-        effective_pattern,
-        outpath,
-        run_number=run_number,
-    )
-    if code != 0:
-        logger.error(msg)
-        return code
-    logger.info(msg)
-    return 0
+    merge_types = [channel] if channel else list(TYPE_PATTERNS)
+    for merge_type in merge_types:
+        if merge_type not in TYPE_PATTERNS:
+            print(f"Unknown channel: {merge_type}", file=sys.stderr)
+            return 1
+
+        pattern = build_result_pattern(merge_type, run_number)
+        if run_number is None:
+            outpath = outdir / f"Trigger_{ymd}_{merge_type}_merged.yaml"
+        else:
+            outpath = outdir / f"Trigger_{ymd}_RUN{run_number}_{merge_type}_merged.yaml"
+
+        code, msg = merge_files_for_pattern(
+            dirpath,
+            pattern,
+            outpath,
+            run_number=run_number,
+        )
+        if code != 0:
+            print(msg, file=sys.stderr)
+            any_error = max(any_error, code)
+        else:
+            print(msg)
+
+    return any_error
 
 
-def parse_date_dir(date_dir: str) -> Tuple[Path, str]:
-    """Parse yyyy/mm/dd directory string and return path + yyyymmdd."""
-    return _parse_date_dir(date_dir)
-
-
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point."""
+    argv = argv if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(
-        description="Merge Trigger*.yaml files in a date directory by event_number"
+        description="Merge Trigger*<TYPE>.yaml trace files in a date directory"
     )
-    parser.add_argument("dir", help="Date directory path like yyyy/mm/dd")
+    parser.add_argument("dir", help="Directory path like yyyy/mm/dd or full path")
     parser.add_argument(
         "-o",
         "--output",
         default="../Reco_Dir",
-        help="Output directory for merged files (default: ../Reco_Dir)",
+        help=(
+            "Output directory. Because multiple type-files are produced, "
+            "this should be a directory. If omitted, outputs are created in the input directory."
+        ),
     )
     parser.add_argument(
         "--run-number",
@@ -393,26 +163,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--channel",
         choices=["F", "X", "Y", "Z", "XY"],
-        default="XY",
-        help="Trace channel to merge (default: XY)",
+        default=None,
+        help="Trace channel to merge (default: all five channels)",
     )
+
     args = parser.parse_args(argv)
     outdir = Path(args.output)
-
-    logger.info(
-        "CLI arguments: dir={}, output={}, run_number={}, channel={}",
-        args.dir,
-        outdir,
-        args.run_number,
-        args.channel,
-    )
-
     input_dir, ymd = resolve_input_dir(args.dir, outdir)
-    logger.info(f"Resolved date={ymd}, input_dir={input_dir}")
 
-    return merge_trigger_files(
-        input_dir, ymd, outdir, run_number=args.run_number, channel=args.channel
-    )
+    return merge_all_types(input_dir, ymd, outdir, run_number=args.run_number, channel=args.channel)
 
 
 if __name__ == "__main__":
