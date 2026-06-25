@@ -750,7 +750,6 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         f"  Event {index}: [prune-loop-1] 5-DU special handling, "
                         f"chi2={chi2:.1f} > 200, trying C(5,4)=5 combos"
                     )
-                    from itertools import combinations
                     best_4du_chi2 = np.inf
                     best_4du_matches = None
                     best_4du_times = None
@@ -759,7 +758,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                     
                     # 尝试所有C(5,4)=5种4-DU组合
                     best_4du_params = None  # 保存最佳拟合参数
-                    
+                    from itertools import combinations
                     for combo in combinations(times.items(), 4):
                         combo_matches = list(combo)
                         combo_times = {d: ns for d, ns in combo_matches}
@@ -1049,7 +1048,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         f"  Event {index}: [prune-loop-2] 6-DU special handling, "
                         f"chi2={chi2:.1f} > 200, trying C(6,4)=15 combos"
                     )
-                    from itertools import combinations
+                    
                     best_4du_chi2 = np.inf
                     best_4du_matches = None
                     best_4du_times = None
@@ -1058,7 +1057,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                     
                     # 尝试所有C(6,4)=15种4-DU组合
                     best_4du_params = None  # 保存最佳拟合参数
-                    
+                    from itertools import combinations
                     for combo in combinations(times.items(), 4):
                         combo_matches = list(combo)
                         combo_times = {d: ns for d, ns in combo_matches}
@@ -1124,7 +1123,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                             src = src_new
                             needs_3param_fit = True
                             logger.debug(
-                                f"  Event {index}: [prune-loop-2] 5-DU optimal removal "
+                                f"  Event {index}: [prune-loop-2] 6-DU optimal removal "
                                 f"(removed DU {removed_du_id}, "
                                 f"residual={residual_removed:.1f}ns/{n_sigma:.1f}σ), "
                                 f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
@@ -1156,6 +1155,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                 
                 # 遍历所有 DU 对组合，收集 chi2 改善的候选，最后选取 chi2 最小的
                 best_removal = None  # (chi2, state_dict)
+                from itertools import combinations
                 for did_to_remove in combinations(times.items(), 2):
                     all_dus = set(d for d, _ in times.items())
                     removed_dus = set(d for d, _ in did_to_remove)
