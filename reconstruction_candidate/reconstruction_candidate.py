@@ -468,22 +468,23 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
         ADC_single_du_time_filtered = np.fft.irfft(ADC_single_du_rfft, n = N_time, axis = 0) # 对滤波后的频域数据进行逆变换，得到滤波后的时域数据，形状为 (N_time, 3)
 
 
-        plt.figure(figsize=(10, 4)) # 绘制时域ADC波形图
-        plt.plot(ADC_single_du_time_filtered[:, 0], color = 'red', linewidth = 1.0, label = 'Port X')
-        plt.plot(ADC_single_du_time_filtered[:, 1], color = 'green', linewidth = 1.0, label = 'Port Y')
-        plt.plot(ADC_single_du_time_filtered[:, 2], color = 'blue', linewidth = 1.0, label = 'Port Z')
-        plt.title(f"DU {triggered_du_ids[i]}: ADC Time Domain", fontsize = 18)
-        plt.xlabel("Time index (2 ns interval)", fontsize = 16)
-        plt.ylabel("ADC", fontsize = 16)
-        plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
-        plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
-        for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
-        for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
-        plt.tick_params(axis='x', pad=6)
-        plt.tick_params(axis='y', pad=6)
-        plt.legend(fontsize = 14, loc = 'upper right')
-        plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_ADC_Traces.png'), dpi = 300, bbox_inches = 'tight')
-        plt.close()
+        if False:
+            plt.figure(figsize=(10, 4)) # 绘制时域ADC波形图
+            plt.plot(ADC_single_du_time_filtered[:, 0], color = 'red', linewidth = 1.0, label = 'Port X')
+            plt.plot(ADC_single_du_time_filtered[:, 1], color = 'green', linewidth = 1.0, label = 'Port Y')
+            plt.plot(ADC_single_du_time_filtered[:, 2], color = 'blue', linewidth = 1.0, label = 'Port Z')
+            plt.title(f"DU {triggered_du_ids[i]}: ADC Time Domain", fontsize = 18)
+            plt.xlabel("Time index (2 ns interval)", fontsize = 16)
+            plt.ylabel("ADC", fontsize = 16)
+            plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
+            plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
+            for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
+            for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
+            plt.tick_params(axis='x', pad=6)
+            plt.tick_params(axis='y', pad=6)
+            plt.legend(fontsize = 14, loc = 'upper right')
+            plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_ADC_Traces.png'), dpi = 300, bbox_inches = 'tight')
+            plt.close()
 
         #-----------------------------------------------------------------------
         
@@ -516,25 +517,26 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
             ADC_1MHz_interp[:, ch] = interp_amp(freqs_1MHz) * np.exp(1j * interp_phase(freqs_1MHz))
 
 
-        plt.figure(figsize=(10, 7)) # 绘制频域插值检查图，比较原始频域数据和插值结果
-        plt.plot(freqs_real_MHz[band_mask], np.abs(ADC_single_du_rfft[band_mask, 0]), 'r-', alpha=0.5, label='X Original')
-        plt.plot(freqs_real_MHz[band_mask], np.abs(ADC_single_du_rfft[band_mask, 1]), 'g-', alpha=0.5, label='Y Original')
-        plt.plot(freqs_real_MHz[band_mask], np.abs(ADC_single_du_rfft[band_mask, 2]), 'b-', alpha=0.5, label='Z Original')
-        plt.plot(freqs_1MHz, np.abs(ADC_1MHz_interp[:, 0]), 'k--', label='X Interpolated')
-        plt.plot(freqs_1MHz, np.abs(ADC_1MHz_interp[:, 1]), 'm--', label='Y Interpolated')
-        plt.plot(freqs_1MHz, np.abs(ADC_1MHz_interp[:, 2]), 'c--', label='Z Interpolated')
-        plt.title(f"DU {triggered_du_ids[i]}: ADC FFT Interpolation Check", fontsize = 18)
-        plt.xlabel("Frequency [MHz]", fontsize = 16)
-        plt.ylabel("ADC", fontsize = 16)
-        plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
-        plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
-        for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
-        for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
-        plt.tick_params(axis='x', pad=6)
-        plt.tick_params(axis='y', pad=6)
-        plt.legend(fontsize = 14, loc = 'upper right')
-        plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_ADC_Interpolation_Comparison.png'), dpi = 300, bbox_inches = 'tight')
-        plt.close()
+        if False:
+            plt.figure(figsize=(10, 7)) # 绘制频域插值检查图，比较原始频域数据和插值结果
+            plt.plot(freqs_real_MHz[band_mask], np.abs(ADC_single_du_rfft[band_mask, 0]), 'r-', alpha=0.5, label='X Original')
+            plt.plot(freqs_real_MHz[band_mask], np.abs(ADC_single_du_rfft[band_mask, 1]), 'g-', alpha=0.5, label='Y Original')
+            plt.plot(freqs_real_MHz[band_mask], np.abs(ADC_single_du_rfft[band_mask, 2]), 'b-', alpha=0.5, label='Z Original')
+            plt.plot(freqs_1MHz, np.abs(ADC_1MHz_interp[:, 0]), 'k--', label='X Interpolated')
+            plt.plot(freqs_1MHz, np.abs(ADC_1MHz_interp[:, 1]), 'm--', label='Y Interpolated')
+            plt.plot(freqs_1MHz, np.abs(ADC_1MHz_interp[:, 2]), 'c--', label='Z Interpolated')
+            plt.title(f"DU {triggered_du_ids[i]}: ADC FFT Interpolation Check", fontsize = 18)
+            plt.xlabel("Frequency [MHz]", fontsize = 16)
+            plt.ylabel("ADC", fontsize = 16)
+            plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
+            plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
+            for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
+            for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
+            plt.tick_params(axis='x', pad=6)
+            plt.tick_params(axis='y', pad=6)
+            plt.legend(fontsize = 14, loc = 'upper right')
+            plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_ADC_Interpolation_Comparison.png'), dpi = 300, bbox_inches = 'tight')
+            plt.close()
 
         #---------------------------------------------------------------------------------------
 
@@ -562,44 +564,45 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
         Voc_time = np.fft.irfft(Voc_full_rfft, n = N_time, axis = 0) * (109.86) # units of uV.
         # if i == 0: print(len(Voc_time), N_time, np.argmax(np.abs(ADC_single_du_time[:, 1])), np.argmax(np.abs(Voc_time[:, 1])), flush = True)
 
-        
-        plt.figure(figsize=(10, 7))
-        plt.plot(freqs_1MHz, np.abs(Voc_1MHz[:, 0]), color = 'red', linewidth = 1.0, label = 'Port X')
-        plt.plot(freqs_1MHz, np.abs(Voc_1MHz[:, 1]), color = 'green', linewidth = 1.0, label = 'Port Y')
-        plt.plot(freqs_1MHz, np.abs(Voc_1MHz[:, 2]), color = 'blue', linewidth = 1.0, label = 'Port Z')
-        plt.plot(freqs_band, np.abs(Voc_rfft_band[:, 0]), 'r--')
-        plt.plot(freqs_band, np.abs(Voc_rfft_band[:, 1]), 'g--')
-        plt.plot(freqs_band, np.abs(Voc_rfft_band[:, 2]), 'b--')
-        plt.title(f"DU {triggered_du_ids[i]}: Voc Frequency Domain (After Interpolation)", fontsize = 18)
-        plt.xlabel("Frequency [MHz]", fontsize = 16)
-        plt.ylabel("ADC", fontsize = 16)
-        plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
-        plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
-        for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
-        for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
-        plt.tick_params(axis='x', pad=6)
-        plt.tick_params(axis='y', pad=6)
-        plt.legend(fontsize = 14, loc = 'upper right')
-        plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_Voc_Frequency_Comparison.png'), dpi = 300, bbox_inches = 'tight')
-        plt.close()
+        if False:
+            plt.figure(figsize=(10, 7))
+            plt.plot(freqs_1MHz, np.abs(Voc_1MHz[:, 0]), color = 'red', linewidth = 1.0, label = 'Port X')
+            plt.plot(freqs_1MHz, np.abs(Voc_1MHz[:, 1]), color = 'green', linewidth = 1.0, label = 'Port Y')
+            plt.plot(freqs_1MHz, np.abs(Voc_1MHz[:, 2]), color = 'blue', linewidth = 1.0, label = 'Port Z')
+            plt.plot(freqs_band, np.abs(Voc_rfft_band[:, 0]), 'r--')
+            plt.plot(freqs_band, np.abs(Voc_rfft_band[:, 1]), 'g--')
+            plt.plot(freqs_band, np.abs(Voc_rfft_band[:, 2]), 'b--')
+            plt.title(f"DU {triggered_du_ids[i]}: Voc Frequency Domain (After Interpolation)", fontsize = 18)
+            plt.xlabel("Frequency [MHz]", fontsize = 16)
+            plt.ylabel("ADC", fontsize = 16)
+            plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
+            plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
+            for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
+            for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
+            plt.tick_params(axis='x', pad=6)
+            plt.tick_params(axis='y', pad=6)
+            plt.legend(fontsize = 14, loc = 'upper right')
+            plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_Voc_Frequency_Comparison.png'), dpi = 300, bbox_inches = 'tight')
+            plt.close()
 
 
-        plt.figure(figsize=(10, 4)) # 绘制时域 Voc 波形图
-        plt.plot(Voc_time[:, 0], color = 'red', linewidth = 1.0, label = 'Port X')
-        plt.plot(Voc_time[:, 1], color = 'green', linewidth = 1.0, label = 'Port Y')
-        plt.plot(Voc_time[:, 2], color = 'blue', linewidth = 1.0, label = 'Port Z')
-        plt.title(f"DU {triggered_du_ids[i]}: Voc Time Domain (After IRFFT)", fontsize = 18)
-        plt.xlabel("Time index (2 ns interval)", fontsize = 16)
-        plt.ylabel("Voltage [uV]", fontsize = 16)
-        plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
-        plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
-        for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
-        for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
-        plt.tick_params(axis='x', pad=6)
-        plt.tick_params(axis='y', pad=6)
-        plt.legend(fontsize = 14, loc = 'upper right')
-        plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_Voc_Time_Domain.png'), dpi = 300, bbox_inches = 'tight')
-        plt.close()
+        if False:
+            plt.figure(figsize=(10, 4)) # 绘制时域 Voc 波形图
+            plt.plot(Voc_time[:, 0], color = 'red', linewidth = 1.0, label = 'Port X')
+            plt.plot(Voc_time[:, 1], color = 'green', linewidth = 1.0, label = 'Port Y')
+            plt.plot(Voc_time[:, 2], color = 'blue', linewidth = 1.0, label = 'Port Z')
+            plt.title(f"DU {triggered_du_ids[i]}: Voc Time Domain (After IRFFT)", fontsize = 18)
+            plt.xlabel("Time index (2 ns interval)", fontsize = 16)
+            plt.ylabel("Voltage [uV]", fontsize = 16)
+            plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
+            plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
+            for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
+            for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
+            plt.tick_params(axis='x', pad=6)
+            plt.tick_params(axis='y', pad=6)
+            plt.legend(fontsize = 14, loc = 'upper right')
+            plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_Voc_Time_Domain.png'), dpi = 300, bbox_inches = 'tight')
+            plt.close()
 
         #----------------------------------------------------------------------------------
         #----------------------------------------------------------------------------------
@@ -793,7 +796,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
         if False:
             fig, axs = plt.subplots(3, 1, figsize = (12, 10), sharex = True, gridspec_kw = {'hspace': 0.0})
             ports = ['X', 'Y', 'Z']
-    
+
             for ch in range(3):
                 ax = axs[ch]
                 ax.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
@@ -809,7 +812,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
                     ax.legend(loc='upper left', fontsize = 15)
                     ax.set_xlim(100, 200) # 只显示峰值附近的部分时间窗口以便对比
                     ax.set_title('Voc Consistency Check', fontsize = 18)
-    
+
             axs[-1].set_xlabel('Time index (2 ns interval)', fontsize = 18)
             plt.savefig(os.path.join(event_dir, f'event_{event_num}_DU_{triggered_du_ids[i]}_Voc_Consistency_Check.png'), dpi = 300, bbox_inches = 'tight')
             plt.close()
@@ -1461,9 +1464,10 @@ def energy_restruction(root_path, event_number_int):
     plt.arrow(-1 * corey, float(corex), -500 * np.sin(np.deg2rad(rec_theta_sph)) * np.sin(np.deg2rad(rec_phi_sph)), 500 * np.sin(np.deg2rad(rec_theta_sph)) * np.cos(np.deg2rad(rec_phi_sph)), head_width = 50, head_length = 100, fc = 'red', ec = 'red')
     plt.xlabel('West-East [m]', fontsize = 16)
     plt.ylabel('South-North [m]', fontsize = 16)
-    plt.title('Shower Core Position', fontsize = 16)
-    plt.xlim(-5000, 3000)
-    plt.ylim(-6000, 2000)
+    # plt.title('Shower Core Position', fontsize = 16)
+    plt.title(f'{event_dir} \n z = {rec_theta_sph:.2f} deg, a = {rec_phi_sph:.2f} deg, chi2/dof = {fmin:.2f}', fontsize = 12)
+    # plt.xlim(-5000, 3000)
+    # plt.ylim(-6000, 2000)
     plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
     plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
     for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
@@ -1472,7 +1476,7 @@ def energy_restruction(root_path, event_number_int):
     plt.tick_params(axis='y', pad=6)
     plt.legend(fontsize = 14, loc = 'lower left')
     plt.grid(True, linestyle='--', alpha=0.7)
-    # plt.axis('equal')
+    plt.axis('equal')
     plt.savefig(os.path.join(event_dir, 'shower_core_position.png'), dpi = 300, bbox_inches = 'tight')
     plt.close()
 
@@ -1557,6 +1561,8 @@ def energy_restruction(root_path, event_number_int):
 
     f_geo_pos = np.zeros(len(positions_x))
 
+    peak_vB_voltage, peak_vvB_voltage = np.zeros(len(positions_x)), np.zeros(len(positions_x))
+
     for ant in range(len(positions_x)):
 
         E_sph_t = np.zeros((E_rec_time_sph.shape[1], 3))
@@ -1567,6 +1573,9 @@ def energy_restruction(root_path, event_number_int):
         E_shower_t = cs.transform_to_vxB_vxvxB(E_cart_t.T).T
 
         E_vxB_t, E_vxvxB_t = E_shower_t[:, 0], E_shower_t[:, 1]
+
+
+        peak_vB_voltage[ant], peak_vvB_voltage[ant] = E_vxB_t[np.argmax(np.sqrt(E_vxB_t ** 2 + E_vxvxB_t ** 2))], E_vxvxB_t[np.argmax(np.sqrt(E_vxB_t ** 2 + E_vxvxB_t ** 2))]
 
         phi_iter = phi[ant]
         denom = np.abs(np.sin(phi_iter)) if np.abs(np.sin(phi_iter)) >= 1e-4 else 1e-4 * np.sign(np.sin(phi_iter)) + 1e-12 # 避免除以零
@@ -1606,24 +1615,66 @@ def energy_restruction(root_path, event_number_int):
 
     #-------------------------------------------------------------------------------------------------
 
+    angle_meas = np.arctan2(peak_vvB_voltage, peak_vB_voltage) * 180 / np.pi
+    # print("Measured polarization angles (degrees):", angle_meas, flush = True)
+
+    angle_expected = np.arctan2(0.10 * pos_vxB[:, 1] / np.sqrt(pos_vxB[:, 0] ** 2 + pos_vxB[:, 1] ** 2), 1.0 + 0.10 * pos_vxB[:, 0] / np.sqrt(pos_vxB[:, 0] ** 2 + pos_vxB[:, 1] ** 2)) * 180 / np.pi
+    # print("Expected polarization angles (degrees):", angle_expected, flush = True)
+
+    angle_meas, angle_expected = angle_meas % 180, angle_expected % 180 # 将角度折叠到 [0, 180) 范围内，因为偏振方向具有 180 度周期性
+
+    delta_angle = np.minimum(np.abs(angle_meas - angle_expected), 180 - np.abs(angle_meas - angle_expected)) # 计算测量和期望偏振角之间的最小差值，考虑到周期性
+    print("Difference (degrees):", np.abs(delta_angle), flush=True)
+
+    mean_delta_angle, median_delta_angle = np.mean(np.abs(delta_angle)), np.median(np.abs(delta_angle))
+    print("Mean difference (degrees):", mean_delta_angle, "Median difference (degrees):", median_delta_angle, flush=True)
+
+    #-------------------------------------------------------------------------------------------------
+
     plt.figure(figsize=(10, 8))
-    sc = plt.scatter(pos_vxB[:, 1], pos_vxB[:, 0], c = f_geo_pos, cmap = 'viridis', s = 50, alpha = 0.9, edgecolors = 'k')
-    cbar = plt.colorbar(sc)
-    cbar.set_label('Energy Fluence [eV/m$^2$]', fontsize=16)
-    cbar.ax.tick_params(labelsize=14)
-    plt.title('Shower Plane Energy Fluence Distribution', fontsize=18)
-    plt.xlabel(r'v $\times$ B [m]', fontsize=16)
-    plt.ylabel(r'v $\times$ (v $\times$ B) [m]', fontsize=16)
-    plt.grid(True, linestyle='--', alpha=0.3)
-    plt.axis('equal')
+    plt.scatter(pos_vxB[:, 0], pos_vxB[:, 1], c = 'blue', s = 50, alpha = 0.8)
+    for i in range(len(positions_x)): 
+        
+        if i == 0: 
+            plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -200, 0, head_width = 5, head_length = 20, fc = 'red', ec = 'red', label = 'Geomagnetic')
+            plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -1 * pos_vxB[i, 0] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, -1 * pos_vxB[i, 1] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, head_width = 5, head_length = 20, fc = 'blue', ec = 'blue', label = 'Charge-excess')
+            plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -200 -1 * pos_vxB[i, 0] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, -1 * pos_vxB[i, 1] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, head_width = 5, head_length = 20, fc = 'black', ec = 'black', label = 'Expected')
+            # plt.plot([pos_vxB[i, 0], 0], [pos_vxB[i, 1], 0], 'k--', linewidth = 0.5, alpha = 0.5)
+
+            if (-200 -1 * pos_vxB[i, 0] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20) * (-200 * np.cos(np.deg2rad(angle_meas[i]))) \
+            + (-1 * pos_vxB[i, 1] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20) * (-200 * np.sin(np.deg2rad(angle_meas[i]))) < 0:
+                plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], 200 * np.cos(np.deg2rad(angle_meas[i])), 200 * np.sin(np.deg2rad(angle_meas[i])), head_width=5, head_length=20, fc='green', ec='green', label = 'Measured')
+            else:
+                plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -200 * np.cos(np.deg2rad(angle_meas[i])), -200 * np.sin(np.deg2rad(angle_meas[i])), head_width=5, head_length=20, fc='green', ec='green', label = 'Measured')
+    
+        else:
+            plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -200, 0, head_width = 5, head_length = 20, fc = 'red', ec = 'red')
+            plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -1 * pos_vxB[i, 0] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, -1 * pos_vxB[i, 1] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, head_width = 5, head_length = 20, fc = 'blue', ec = 'blue')
+            plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -200 -1 * pos_vxB[i, 0] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, -1 * pos_vxB[i, 1] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20, head_width = 5, head_length = 20, fc = 'black', ec = 'black')
+            # plt.plot([pos_vxB[i, 0], 0], [pos_vxB[i, 1], 0], 'k--', linewidth = 0.5, alpha = 0.5)
+
+            if (-200 -1 * pos_vxB[i, 0] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20) * (-200 * np.cos(np.deg2rad(angle_meas[i]))) \
+            + (-1 * pos_vxB[i, 1] / np.sqrt(pos_vxB[i, 0] ** 2 + pos_vxB[i, 1] ** 2) * 20) * (-200 * np.sin(np.deg2rad(angle_meas[i]))) < 0:
+                plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], 200 * np.cos(np.deg2rad(angle_meas[i])), 200 * np.sin(np.deg2rad(angle_meas[i])), head_width=5, head_length=20, fc='green', ec='green')
+            else:
+                plt.arrow(pos_vxB[i, 0], pos_vxB[i, 1], -200 * np.cos(np.deg2rad(angle_meas[i])), -200 * np.sin(np.deg2rad(angle_meas[i])), head_width=5, head_length=20, fc='green', ec='green')
+
+        plt.text(pos_vxB[i, 0] - 150, pos_vxB[i, 1] + 40, rf"{du_ids[i]},$\Delta\beta$={delta_angle[i]:.1f}deg", fontsize = 12, color = 'black')
+    
+    # plt.scatter(0, 0, c = 'black', s = 150, marker = '+')
+    plt.title(f'{event_dir} \n z = {rec_theta_sph:.2f} deg, a = {rec_phi_sph:.2f} deg, chi2/dof = {fmin:.2f}', fontsize = 12)
+    plt.xlabel(r'$\hat{v} \times \hat{B}$ [m]', fontsize = 20)
+    plt.ylabel(r'$\hat{v} \times (\hat{v} \times \hat{B})$ [m]', fontsize = 20)
     plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
     plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
     for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
     for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
     plt.tick_params(axis='x', pad=6)
-    plt.savefig(os.path.join(event_dir, 'fluence_map_shower_plane.png'), dpi=300, bbox_inches='tight')
+    plt.legend(fontsize = 12, loc = 'best')
+    plt.axis("equal")
+    plt.savefig(os.path.join(event_dir, 'polarization_map_shower_plane.png'), dpi=300, bbox_inches='tight')
     plt.close()
-
+    
     #--------------------------------------------------------------------------------------------------
 
     '''
@@ -1780,7 +1831,8 @@ def energy_restruction(root_path, event_number_int):
     plt.axvline(x = rec_wc * 180 / np.pi, color = 'red', linestyle = '--', label = f'ADF Cherenkov angle: {rec_wc * 180 / np.pi:.2f} deg')
     plt.xlabel(r'$\omega$ [deg]', fontsize = 16)
     plt.ylabel(r'Fluence [$\rm eV/m^2$]', fontsize = 16)
-    plt.title('Cherenkov Angle Distribution', fontsize = 18)
+    # plt.title('Cherenkov Angle Distribution', fontsize = 18)
+    plt.title(f'{event_dir} \n z = {rec_theta_sph:.2f} deg, a = {rec_phi_sph:.2f} deg, chi2/dof = {fmin:.2f}', fontsize = 12)
     plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
     plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
     for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)
@@ -1798,4 +1850,4 @@ def energy_restruction(root_path, event_number_int):
 
     #----------------------------------------------------------------------------------------
 
-    return energy_result
+    return energy_result, delta_angle

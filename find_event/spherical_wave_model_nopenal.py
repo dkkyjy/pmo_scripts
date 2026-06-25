@@ -764,7 +764,6 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         combo_matches = list(combo)
                         combo_times = {d: ns for d, ns in combo_matches}
                         combo_t_mean = np.mean(list(combo_times.values()))
-                        # logger.debug(f'combo_matches: {combo_matches}')
 
                         # 使用统一的3参数拟合函数
                         candidates_4du = [
@@ -778,7 +777,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         rho_4, theta_4, phi_4, t0_4, chi2_4du, min_chi2_4, success_4 = fit_3param(
                             combo_matches, detector_positions, c, candidates_4du
                         )
-                        # logger.debug(f'chi2_4du: {chi2_4du}')
+
                         if success_4 and chi2_4du < best_4du_chi2:
                             best_4du_chi2 = chi2_4du
                             best_4du_matches = combo_matches
@@ -801,6 +800,14 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         confirmed, n_sigma, residual_removed = _verify_removed_du(
                             removed_du_id, src_new, t0_new, best_4du_t_mean,
                             detector_positions, matches
+                        )
+
+                        logger.debug(
+                            f"  Event {index}: [prune-loop-1] 5-DU special: "
+                            f"verify removed DUs={removed_du_id}, "
+                            f"confirmed={confirmed}, n_sigma={n_sigma:.1f}, "
+                            f"residual={residual_removed:.1f}ns, "
+                            f"best_4du_chi2={best_4du_chi2:.1f}"
                         )
 
                         if confirmed:
@@ -836,21 +843,21 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                     contribution = ((tp - (ns - t_mean_ns)) / 6.0) ** 2
                     du_contributions.append((contribution, did, ns))
                 
-                # 按贡献排序（从大到小）
-                du_contributions.sort(reverse=True)
-                top3 = [(f"DU{did}({contrib:.1f})") for contrib, did, _ in du_contributions[:3]]
-                logger.debug(
-                    f"  Event {index}: [prune-loop-1] top3 DU contributions: "
-                    f"{', '.join(top3)}, total chi2={chi2:.1f}"
-                )
-                # 尝试剔除贡献最大的DU（确保剩余>=5个）
-                removed_du = None
+                # # 按贡献排序（从大到小）
+                # du_contributions.sort(reverse=True)
+                # top3 = [(f"DU{did}({contrib:.1f})") for contrib, did, _ in du_contributions[:3]]
+                # logger.debug(
+                #     f"  Event {index}: [prune-loop-1] top3 DU contributions: "
+                #     f"{', '.join(top3)}, total chi2={chi2:.1f}"
+                # )
+
+                # 遍历所有 DU，收集 chi2 改善的候选，最后选取 chi2 最小的
+                best_removal = None  # (chi2, state_dict)
                 for contrib, did_to_remove, _ in du_contributions:
                     if len(times) - 1 >= 3:  # 确保剩余至少4个DU（但4个DU时用3参数）
                         # 构建剔除后的matches
                         new_matches = [(d, ns) for d, ns in times.items() if d != did_to_remove]
                         n_new = len(new_matches)
-                        # logger.debug(f'new_matches: {new_matches}')
 
                         # 重新计算均值
                         new_times = {d: ns for d, ns in new_matches}
@@ -858,7 +865,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         
                         # 根据剩余DU数量选择策略
                         if n_new == 4:
-                            # ===== 恰好4个DU：立即进行3参数拟合 =====
+                            # ===== 恰好4个DU：3参数拟合 =====
                             candidates_4du = [
                                 [rho, theta, phi],
                                 [rho*1.2, theta, phi+20],
@@ -875,24 +882,21 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                             rho_4, theta_4, phi_4, t0_4, chi2_4, min_chi2_4, success_4 = fit_3param(
                                 new_matches, detector_positions, c, candidates_4du
                             )
-                            # logger.debug(f'chi2_4: {chi2_4}')
 
                             if success_4 and chi2_4 < chi2 * 0.8:
-                                matches = new_matches
-                                removed_du = did_to_remove
-                                times = new_times
-                                t_mean_ns = new_t_mean_ns
-                                rho, theta, phi, t0 = rho_4, theta_4, phi_4, t0_4
-                                chi2 = chi2_4
-                                min_chi2 = min_chi2_4
-                                src = _build_src_vector(rho, theta, phi)
-                                needs_3param_fit = True  # 标记已完成3参数拟合
-                                logger.debug(
-                                    f"  Event {index}: [prune-loop-1] Removed DU {removed_du} "
-                                    f"-> 4-DU 3-param fit, "
-                                    f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
-                                )
-                            break
+                                src_4 = _build_src_vector(rho_4, theta_4, phi_4)
+                                if best_removal is None or chi2_4 < best_removal[0]:
+                                    best_removal = (chi2_4, {
+                                        'removed_du': did_to_remove,
+                                        'matches': new_matches,
+                                        'times': new_times,
+                                        't_mean_ns': new_t_mean_ns,
+                                        'rho': rho_4, 'theta': theta_4, 'phi': phi_4,
+                                        't0': t0_4, 'chi2': chi2_4,
+                                        'min_chi2': min_chi2_4,
+                                        'src': src_4,
+                                        'needs_3param_fit': True,
+                                    })
                         else:
                             # ===== 多于4个DU：使用4参数拟合（带解析梯度）=====
                             # 准备 Numba 数据（如果可用）
@@ -948,30 +952,33 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                         phi_new += 360
                                     if theta_new - 90 > 0:
                                         theta_new = 180 - theta_new
-                                    t0 = t0_new
                                     src_new = _build_src_vector(rho_new, theta_new, phi_new)
 
                                     confirmed, n_sigma, residual_removed = _verify_removed_du(
                                         did_to_remove, src_new, t0_new, new_t_mean_ns,
                                         detector_positions, matches
                                     )
+                                    
+                                    logger.debug(
+                                            f"  Event {index}: [prune-loop-1] removed DUs {did_to_remove}, "
+                                            f"confirmed={confirmed}, n_sigma={n_sigma:.1f}, "
+                                            f"residual_removed={residual_removed:.1f}ns, "
+                                            f"new_chi2_val={new_chi2_val:.1f}"
+                                    )
 
                                     if confirmed:
-                                        rho, theta, phi = rho_new, theta_new, phi_new
-                                        src = src_new
-                                        chi2 = new_chi2_val
-                                        min_chi2 = best_res_reduced.fun
-                                        matches = new_matches
-                                        removed_du = did_to_remove
-                                        times = new_times
-                                        t_mean_ns = new_t_mean_ns
-                                        logger.debug(
-                                            f"  Event {index}: [prune-loop-1] Removal of DU "
-                                            f"{did_to_remove} "
-                                            f"(residual={residual_removed:.1f}ns/"
-                                            f"{n_sigma:.1f}σ > 3σ). "
-                                        )
-                                        break
+                                        if best_removal is None or new_chi2_val < best_removal[0]:
+                                            best_removal = (new_chi2_val, {
+                                                'removed_du': did_to_remove,
+                                                'matches': new_matches,
+                                                'times': new_times,
+                                                't_mean_ns': new_t_mean_ns,
+                                                'rho': rho_new, 'theta': theta_new, 'phi': phi_new,
+                                                't0': t0_new, 'chi2': new_chi2_val,
+                                                'min_chi2': best_res_reduced.fun,
+                                                'src': src_new,
+                                                'needs_3param_fit': False,
+                                            })
                                     else:
                                         logger.debug(
                                             f"  Event {index}: [prune-loop-1] Rejected removal "
@@ -979,13 +986,34 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                             f"(residual={residual_removed:.1f}ns/"
                                             f"{n_sigma:.1f}σ < 3σ), trying next DU"
                                         )
-                
+
+                # 选取 chi2 最小的候选应用
+                if best_removal is not None:
+                    b = best_removal[1]
+                    removed_du = b['removed_du']
+                    matches = b['matches']
+                    times = b['times']
+                    t_mean_ns = b['t_mean_ns']
+                    rho, theta, phi, t0 = b['rho'], b['theta'], b['phi'], b['t0']
+                    chi2 = b['chi2']
+                    min_chi2 = b['min_chi2']
+                    src = b['src']
+                    needs_3param_fit = b['needs_3param_fit']
+                    fit_label = "3-param" if needs_3param_fit else "4-param"
+                    logger.debug(
+                        f"  Event {index}: [prune-loop-1] Best removal: DU {removed_du} "
+                        f"({fit_label}), "
+                        f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
+                    )
+                else:
+                    removed_du = None
+
                 if removed_du :
                     # 成功剔除DU并优化（可能是4参数或3参数拟合）
                     fit_type = "3-param" if needs_3param_fit else "4-param"
                     logger.debug(
-                        f"  Event {index} {fit_type}: [prune-loop-1] Removed DU {removed_du} "
-                        f"(contrib={du_contributions[0][0]:.1f}), "
+                        f"  Event {index}: [prune-loop-1] Removed DU {removed_du} "
+                        f"({fit_type}), "
                         f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, "
                         f"remaining DUs: {len(times)}"
                     )
@@ -1035,7 +1063,6 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         combo_matches = list(combo)
                         combo_times = {d: ns for d, ns in combo_matches}
                         combo_t_mean = np.mean(list(combo_times.values()))
-                        logger.debug(f'combo_matches: {combo_matches}')
                         
                         # 使用统一的3参数拟合函数
                         candidates_4du = [
@@ -1049,7 +1076,6 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         rho_4, theta_4, phi_4, t0_4, chi2_4du, min_chi2_4, success_4 = fit_3param(
                             combo_matches, detector_positions, c, candidates_4du
                         )
-                        logger.debug(f'chi2_4du: {chi2_4du}')
 
                         if success_4 and chi2_4du < best_4du_chi2:
                             best_4du_chi2 = chi2_4du
@@ -1083,7 +1109,8 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                             f"  Event {index}: [prune-loop-2] 6-DU special: "
                             f"verify removed DUs={removed_du_id}, "
                             f"confirmed={confirmed}, n_sigma={n_sigma:.1f}, "
-                            f"residual={residual_removed:.1f}ns"
+                            f"residual={residual_removed:.1f}ns, "
+                            f"best_4du_chi2={best_4du_chi2:.1f}"
                         )
                         
                         if confirmed:
@@ -1119,15 +1146,16 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                     contribution = ((tp - (ns - t_mean_ns)) / 6.0) ** 2
                     du_contributions.append((contribution, did, ns))
                 
-                # 按贡献排序（从大到小）
-                du_contributions.sort(reverse=True)
-                top3 = [(f"DU{did}({contrib:.1f})") for contrib, did, _ in du_contributions[:3]]
-                logger.debug(
-                    f"  Event {index}: [prune-loop-2] top3 DU contributions: "
-                    f"{', '.join(top3)}, total chi2={chi2:.1f}"
-                )
-                # 尝试剔除贡献最大的DU（确保剩余>=5个）
-                removed_du = None
+                # # 按贡献排序（从大到小）
+                # du_contributions.sort(reverse=True)
+                # top3 = [(f"DU{did}({contrib:.1f})") for contrib, did, _ in du_contributions[:3]]
+                # logger.debug(
+                #     f"  Event {index}: [prune-loop-2] top3 DU contributions: "
+                #     f"{', '.join(top3)}, total chi2={chi2:.1f}"
+                # )
+                
+                # 遍历所有 DU 对组合，收集 chi2 改善的候选，最后选取 chi2 最小的
+                best_removal = None  # (chi2, state_dict)
                 for did_to_remove in combinations(times.items(), 2):
                     all_dus = set(d for d, _ in times.items())
                     removed_dus = set(d for d, _ in did_to_remove)
@@ -1137,7 +1165,6 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         # 构建剔除后的matches
                         new_matches = [(d, ns) for d, ns in times.items() if d in contrib]
                         n_new = len(new_matches)
-                        logger.debug(f'new_matches: {new_matches}')
 
                         # 重新计算均值
                         new_times = {d: ns for d, ns in new_matches}
@@ -1145,7 +1172,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                         
                         # 根据剩余DU数量选择策略
                         if n_new == 4:
-                            # ===== 恰好4个DU：立即进行3参数拟合 =====
+                            # ===== 恰好4个DU：3参数拟合 =====
                             candidates_4du = [
                                 [rho, theta, phi],
                                 [rho*1.2, theta, phi+20],
@@ -1162,24 +1189,21 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                             rho_4, theta_4, phi_4, t0_4, chi2_4, min_chi2_4, success_4 = fit_3param(
                                 new_matches, detector_positions, c, candidates_4du
                             )
-                            logger.debug(f'chi2_4: {chi2_4}')
 
                             if success_4 and chi2_4 < chi2 * 0.8:
-                                matches = new_matches
-                                removed_du = did_to_remove
-                                times = new_times
-                                t_mean_ns = new_t_mean_ns
-                                rho, theta, phi, t0 = rho_4, theta_4, phi_4, t0_4
-                                chi2 = chi2_4
-                                min_chi2 = min_chi2_4
-                                src = _build_src_vector(rho, theta, phi)
-                                needs_3param_fit = True  # 标记已完成3参数拟合
-                                logger.debug(
-                                    f"  Event {index}: [prune-loop-2] Removed DU {removed_du} "
-                                    f"-> 4-DU 3-param fit, "
-                                    f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
-                                )
-                            break
+                                src_4 = _build_src_vector(rho_4, theta_4, phi_4)
+                                if best_removal is None or chi2_4 < best_removal[0]:
+                                    best_removal = (chi2_4, {
+                                        'removed_du': did_to_remove,
+                                        'matches': new_matches,
+                                        'times': new_times,
+                                        't_mean_ns': new_t_mean_ns,
+                                        'rho': rho_4, 'theta': theta_4, 'phi': phi_4,
+                                        't0': t0_4, 'chi2': chi2_4,
+                                        'min_chi2': min_chi2_4,
+                                        'src': src_4,
+                                        'needs_3param_fit': True,
+                                    })
                         else:
                             # ===== 多于4个DU：使用4参数拟合（带解析梯度）=====
                             # 准备 Numba 数据（如果可用）
@@ -1235,7 +1259,6 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                         phi_new += 360
                                     if theta_new - 90 > 0:
                                         theta_new = 180 - theta_new
-                                    t0 = t0_new
                                     src_new = _build_src_vector(rho_new, theta_new, phi_new)
 
                                     confirmed, n_sigma, residual_removed = _verify_multiple_removed_dus(
@@ -1246,30 +1269,23 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                             f"  Event {index}: [prune-loop-2] both removed DUs "
                                             f"{did_to_remove}, "
                                             f"confirmed={confirmed}, n_sigma={n_sigma:.1f}, "
-                                            f"residual={residual_removed:.1f}ns"
+                                            f"residual={residual_removed:.1f}ns, "
+                                            f"new_chi2_val={new_chi2_val:1f}"
                                     )
                                     
                                     if confirmed:
-                                        logger.debug(
-                                            f"  Event {index}: [prune-loop-2] both removed DUs "
-                                            f"{did_to_remove[0]} and {did_to_remove[1]} confirmed "
-                                            f"(residual={residual_removed:.1f}ns/{n_sigma:.1f}σ)"
-                                        )
-                                        rho, theta, phi = rho_new, theta_new, phi_new
-                                        src = src_new
-                                        chi2 = new_chi2_val
-                                        min_chi2 = best_res_reduced.fun
-                                        matches = new_matches
-                                        removed_du = did_to_remove
-                                        times = new_times
-                                        t_mean_ns = new_t_mean_ns
-                                        logger.debug(
-                                            f"  Event {index}: [prune-loop-2] Removal of DU "
-                                            f"{did_to_remove} "
-                                            f"(residual={residual_removed:.1f}ns/"
-                                            f"{n_sigma:.1f}σ > 3σ). "
-                                        )
-                                        break
+                                        if best_removal is None or new_chi2_val < best_removal[0]:
+                                            best_removal = (new_chi2_val, {
+                                                'removed_du': did_to_remove,
+                                                'matches': new_matches,
+                                                'times': new_times,
+                                                't_mean_ns': new_t_mean_ns,
+                                                'rho': rho_new, 'theta': theta_new, 'phi': phi_new,
+                                                't0': t0_new, 'chi2': new_chi2_val,
+                                                'min_chi2': best_res_reduced.fun,
+                                                'src': src_new,
+                                                'needs_3param_fit': False,
+                                            })
                                     else:
                                         logger.debug(
                                             f"  Event {index}: [prune-loop-2] Rejected removal "
@@ -1277,13 +1293,34 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                             f"(residual={residual_removed:.1f}ns/"
                                             f"{n_sigma:.1f}σ < 3σ), trying next DU"
                                         )
+
+                # 选取 chi2 最小的候选应用
+                if best_removal is not None:
+                    b = best_removal[1]
+                    removed_du = b['removed_du']
+                    matches = b['matches']
+                    times = b['times']
+                    t_mean_ns = b['t_mean_ns']
+                    rho, theta, phi, t0 = b['rho'], b['theta'], b['phi'], b['t0']
+                    chi2 = b['chi2']
+                    min_chi2 = b['min_chi2']
+                    src = b['src']
+                    needs_3param_fit = b['needs_3param_fit']
+                    fit_label = "3-param" if needs_3param_fit else "4-param"
+                    logger.debug(
+                        f"  Event {index}: [prune-loop-2] Best removal: DU {removed_du} "
+                        f"({fit_label}), "
+                        f"chi2: {original_chi2:.1f} -> {chi2:.1f}"
+                    )
+                else:
+                    removed_du = None
                 
                 if removed_du :
                     # 成功剔除DU并优化（可能是4参数或3参数拟合）
                     fit_type = "3-param" if needs_3param_fit else "4-param"
                     logger.debug(
-                        f"  Event {index} {fit_type}: [prune-loop-2] Removed DU {removed_du} "
-                        f"(contrib={du_contributions[0][0]:.1f}), "
+                        f"  Event {index}: [prune-loop-2] Removed DU {removed_du} "
+                        f"({fit_type}), "
                         f"chi2 improved: {original_chi2:.1f} -> {chi2:.1f}, "
                         f"remaining DUs: {len(times)}"
                     )

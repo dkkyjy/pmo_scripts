@@ -266,7 +266,7 @@ def reconstruct_one(args):
 
     # ── 步骤 2：能量重建 ──────────────────────────────────────────────────────
     try:
-        energy_result = energy_restruction(root_path, event_index)
+        energy_result, delta_angle = energy_restruction(root_path, event_index)
 
         entry['SWF']['rec_x_xmax']    = _safe(energy_result['rec_x_xmax'])
         entry['SWF']['rec_y_xmax']    = _safe(energy_result['rec_y_xmax'])
@@ -292,6 +292,8 @@ def reconstruct_one(args):
             u_ant  = obs / l_dist
             w      = np.arccos(np.clip(np.dot(shower_axis, u_ant), -1.0, 1.0))
             entry['antennas']['omega_rad'] = _safe_list(w)
+
+        entry['polarization'] = _safe(delta_angle)
 
     except Exception:
         entry['_status'] = 2
