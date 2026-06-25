@@ -35,6 +35,8 @@ TYPE_PATTERNS = {
     "fingerprint": "Trigger*fingerprint.yaml",
     "PWM": "Trigger*PWM.yaml",
     "SWM": "Trigger*SWM.yaml",
+    "SWM_with_signal": "Trigger*SWM_with_signal.yaml",
+    "candidates": "Trigger*_SWM_with_signal_slope_candidates.yaml"
 }
 
 

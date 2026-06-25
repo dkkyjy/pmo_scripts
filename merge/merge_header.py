@@ -29,7 +29,7 @@ from merge.common import (
 
 
 PATTERN = "Trigger*.yaml"
-TRACE_SUFFIX_PATTERN = re.compile(r"_(F|X|Y|Z|XY|matched|fingerprint|PWM|SWM)\.yaml$")
+TRACE_SUFFIX_PATTERN = re.compile(r"_(F|X|Y|Z|XY|matched|fingerprint|PWM|SWM|with_signal|candidates)\.yaml$")
 
 
 def build_trigger_pattern(run_number: Optional[int]) -> str:
