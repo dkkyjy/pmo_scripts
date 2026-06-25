@@ -104,6 +104,13 @@ def parse_args(argv):
         action="store_true",
         help="Skip the fingerprint stage and load source YAML payload directly.",
     )
+    parser.add_argument(
+        "--min-detectors",
+        dest="min_detectors",
+        type=int,
+        default=6,
+        help="Minimum number of detectors required in matching stage (default: 6).",
+    )
     return parser.parse_args(argv[1:])
 
 
@@ -414,6 +421,7 @@ def run_matching_stage(
     with_signal,
     force_recompute,
     state,
+    min_detectors=6,
 ):
     """Ensure matching-stage data is available in memory and cache."""
     matched_file = matching_file.replace(".yaml", "_matched.yaml")
@@ -484,7 +492,7 @@ def run_matching_stage(
             state["times"],
             state["signals"],
             det_pos_file,
-            min_detectors=6,
+            min_detectors=min_detectors,
             speed_of_light_tolerance=1.05,
             force_recompute=force_recompute,
         )
@@ -963,6 +971,7 @@ def main(
             with_signal,
             force_recompute,
             state,
+            min_detectors=args.min_detectors,
         )
         
         matching_file = matching_file.replace(".yaml", "_matched.yaml")

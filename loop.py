@@ -58,6 +58,7 @@ class TaskSpec:
     skip_matching: bool
     skip_fingerprint: bool
     force_recompute: bool
+    min_detectors: int
 
 
 TaskResult = Tuple[str, int]
@@ -170,6 +171,7 @@ def make_tasks_for_file_paths(
             skip_matching=args.skip_matching,
             skip_fingerprint=args.skip_fingerprint,
             force_recompute=args.force_recompute,
+            min_detectors=args.min_detectors,
         )
         for file_path in file_path_list
     ]
@@ -251,6 +253,7 @@ def make_main_command(
     skip_matching: bool = False,
     skip_fingerprint: bool = False,
     force_recompute: bool = False,
+    min_detectors: int = 6,
 ) -> list[str]:
     """Construct the command for: python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml yyyy-mm-dd --out-dir-base"""
 
@@ -280,6 +283,7 @@ def make_main_command(
         cmd.append("--skip-fingerprint")
     if force_recompute:
         cmd.append("--force-recompute")
+    cmd.extend(["--min-detectors", str(min_detectors)])
     return cmd
 
 
@@ -375,6 +379,7 @@ def process_date(task: TaskSpec) -> TaskResult:
     skip_matching = task.skip_matching
     skip_fingerprint = task.skip_fingerprint
     force_recompute = task.force_recompute
+    min_detectors = task.min_detectors
 
     # Log/read command
     if skip_read:
@@ -441,6 +446,7 @@ def process_date(task: TaskSpec) -> TaskResult:
             skip_matching,
             skip_fingerprint,
             force_recompute,
+            min_detectors=min_detectors,
         )
         logger.info(f"{' '.join(main_cmd)}")
 
@@ -546,6 +552,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--force-recompute",
         action="store_true",
         help="pass --force-recompute through to main.py",
+    )
+    ap.add_argument(
+        "--min-detectors",
+        type=int,
+        default=6,
+        help="Minimum number of detectors for matching stage, passed to main.py (default: 6).",
     )
     return ap
 
