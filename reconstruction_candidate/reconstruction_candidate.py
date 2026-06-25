@@ -425,6 +425,8 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
     cbar.ax.tick_params(labelsize = 12)
     for j_, du_ in enumerate(triggered_du_ids): plt.text(-1 * DU_positions_rotated[j_, 1], DU_positions_rotated[j_, 0], str(du_), fontsize = 10, fontweight = 'bold', ha = 'left', va = 'bottom', color = 'black')
     plt.arrow(0, 0, -1 * 500 * np.sin(np.deg2rad(rec_theta_plane)) * np.sin(np.deg2rad(rec_phi_plane)), 500 * np.sin(np.deg2rad(rec_theta_plane)) * np.cos(np.deg2rad(rec_phi_plane)), color = 'red', width = 20, head_width = 80, head_length = 120, label = 'PWM Fit')
+    plt.xlim(-5000, 2000)
+    plt.ylim(-3000, 2000)
     plt.xlabel("West-East [m]", fontsize = 16)
     plt.ylabel("South-North [m]", fontsize = 16)
     plt.title("Triggered DUs Position", fontsize = 18)
@@ -435,6 +437,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
     for label in plt.gca().get_xticklabels() + plt.gca().get_yticklabels(): label.set_fontweight('bold')
     plt.tick_params(axis='x', pad=6)
     plt.tick_params(axis='y', pad=6)
+    plt.axis('equal')
     plt.savefig(os.path.join(event_dir, f'event_{event_num}_Triggered_DUs_Position.png'), dpi = 300, bbox_inches = 'tight')
     plt.close()
 
@@ -1441,7 +1444,7 @@ def energy_restruction(root_path, event_number_int):
 
     #-------------------------------------------------------------------------------------------------
 
-    X_grid, Y_grid = np.linspace(-10000, 10000, 400), np.linspace(-10000, 10000, 400)
+    X_grid, Y_grid = np.linspace(-5000, 2000, 400), np.linspace(-3000, 2000, 400)
     XX_plot, YY_plot = np.meshgrid(X_grid, Y_grid)
 
     physics_Y, physics_X = -XX_plot, YY_plot # 转换为物理坐标系 (西-东, 南-北)
@@ -1466,8 +1469,8 @@ def energy_restruction(root_path, event_number_int):
     plt.ylabel('South-North [m]', fontsize = 16)
     # plt.title('Shower Core Position', fontsize = 16)
     plt.title(f'{event_dir} \n z = {rec_theta_sph:.2f} deg, a = {rec_phi_sph:.2f} deg, chi2/dof = {fmin:.2f}', fontsize = 12)
-    # plt.xlim(-5000, 3000)
-    # plt.ylim(-6000, 2000)
+    plt.xlim(-5000, 2000)
+    plt.ylim(-3000, 2000)
     plt.tick_params(axis='both', which='major', labelsize=16, width=1.2, length=8)
     plt.tick_params(axis='both', which='minor', labelsize=16, width=0.6, length=4)
     for spine in plt.gca().spines.values(): spine.set_linewidth(1.5)

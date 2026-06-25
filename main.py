@@ -1021,18 +1021,18 @@ def main(
     )
     logger.info('Finished SWM stage')
 
-    # logger.info('Running PWM stage with matching_file={}', matching_file)
-    # state, pwm_computed = run_pwm_stage(
-    #     matching_file,
-    #     detector_positions,
-    #     det_pos_file,
-    #     with_signal,
-    #     force_recompute,
-    #     state,
-    #     fig_prefix,
-    #     fingerprint_computed,
-    # )
-    # logger.info('Finished PWM stage')
+    logger.info('Running PWM stage with matching_file={}', matching_file)
+    state, pwm_computed = run_pwm_stage(
+        matching_file,
+        detector_positions,
+        det_pos_file,
+        with_signal,
+        force_recompute,
+        state,
+        fig_prefix,
+        fingerprint_computed,
+    )
+    logger.info('Finished PWM stage')
     
     return 0
 

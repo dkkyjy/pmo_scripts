@@ -739,7 +739,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                 needs_3param_fit = False  # 标记是否需要后续3参数拟合（当DU=4时）
                 matches = [(d, ns) for d, ns in times.items()]  # 初始化 matches（列表形式，供闭包和剔除逻辑使用）
                  
-            while prune_du1 and chi2 > 10 and len(times) >= 5:
+            while prune_du1 and chi2 > 100 and len(times) >= 5:
                 logger.debug(
                     f"  Event {index}: [prune-loop-1] iterating, "
                     f"chi2={chi2:.1f}, nDU={len(times)}"
