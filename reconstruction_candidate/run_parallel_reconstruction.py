@@ -293,7 +293,7 @@ def reconstruct_one(args):
             w      = np.arccos(np.clip(np.dot(shower_axis, u_ant), -1.0, 1.0))
             entry['antennas']['omega_rad'] = _safe_list(w)
 
-        entry['polarization'] = _safe(delta_angle)
+        entry['polarization'] = _safe_list(delta_angle)
 
     except Exception:
         entry['_status'] = 2

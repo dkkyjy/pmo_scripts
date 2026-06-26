@@ -739,7 +739,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                 needs_3param_fit = False  # 标记是否需要后续3参数拟合（当DU=4时）
                 matches = [(d, ns) for d, ns in times.items()]  # 初始化 matches（列表形式，供闭包和剔除逻辑使用）
                  
-            while prune_du1 and chi2 > 100 and len(times) >= 5:
+            while prune_du1 and chi2 > 10 and len(times) >= 5:
                 logger.debug(
                     f"  Event {index}: [prune-loop-1] iterating, "
                     f"chi2={chi2:.1f}, nDU={len(times)}"
@@ -978,13 +978,13 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                                 'src': src_new,
                                                 'needs_3param_fit': False,
                                             })
-                                    else:
-                                        logger.debug(
-                                            f"  Event {index}: [prune-loop-1] Rejected removal "
-                                            f"of DU {did_to_remove} "
-                                            f"(residual={residual_removed:.1f}ns/"
-                                            f"{n_sigma:.1f}σ < 3σ), trying next DU"
-                                        )
+                                    # else:
+                                    #     logger.debug(
+                                    #         f"  Event {index}: [prune-loop-1] Rejected removal "
+                                    #         f"of DU {did_to_remove} "
+                                    #         f"(residual={residual_removed:.1f}ns/"
+                                    #         f"{n_sigma:.1f}σ < 3σ), trying next DU"
+                                    #     )
 
                 # 选取 chi2 最小的候选应用
                 if best_removal is not None:
@@ -1037,7 +1037,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                 needs_3param_fit = False  # 标记是否需要后续3参数拟合（当DU=4时）
                 matches = [(d, ns) for d, ns in times.items()]  # 初始化 matches（列表形式，供闭包和剔除逻辑使用）
                  
-            while prune_du2 and chi2 > 100 and len(times) >= 6:
+            while prune_du2 and chi2 > 10 and len(times) >= 6:
                 logger.debug(
                     f"  Event {index}: [prune-loop-2] entering with "
                     f"chi2={chi2:.1f}, nDU={len(times)}"
@@ -1286,13 +1286,13 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                                 'src': src_new,
                                                 'needs_3param_fit': False,
                                             })
-                                    else:
-                                        logger.debug(
-                                            f"  Event {index}: [prune-loop-2] Rejected removal "
-                                            f"of DU {did_to_remove} "
-                                            f"(residual={residual_removed:.1f}ns/"
-                                            f"{n_sigma:.1f}σ < 3σ), trying next DU"
-                                        )
+                                    # else:
+                                    #     logger.debug(
+                                    #         f"  Event {index}: [prune-loop-2] Rejected removal "
+                                    #         f"of DU {did_to_remove} "
+                                    #         f"(residual={residual_removed:.1f}ns/"
+                                    #         f"{n_sigma:.1f}σ < 3σ), trying next DU"
+                                    #     )
 
                 # 选取 chi2 最小的候选应用
                 if best_removal is not None:
