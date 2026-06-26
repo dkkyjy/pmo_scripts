@@ -278,7 +278,7 @@ def reconstruct_one(args):
         entry['ADF']['rec_A']         = _safe(energy_result['rec_A'])
         entry['ADF']['rec_wc']        = _safe(energy_result['rec_wc'])
         entry['ADF']['rec_dw']        = _safe(energy_result['rec_dw'])
-        entry['ADF']['fmin_per_dof']  = _safe(energy_result['fmin_per_dof'])
+        entry['ADF']['chi2_per_dof']  = _safe(energy_result['fmin_per_dof'])
 
         # 重算视角 w，与 energy_restruction 内公式完全一致
         rx, ry, rz     = energy_result['rec_x_xmax'], energy_result['rec_y_xmax'], energy_result['rec_z_xmax']
@@ -293,7 +293,7 @@ def reconstruct_one(args):
             w      = np.arccos(np.clip(np.dot(shower_axis, u_ant), -1.0, 1.0))
             entry['antennas']['omega_rad'] = _safe_list(w)
 
-        entry['polarization'] = _safe_list(delta_angle)
+        entry['antennas']['polarization'] = _safe_list(delta_angle)
 
     except Exception:
         entry['_status'] = 2

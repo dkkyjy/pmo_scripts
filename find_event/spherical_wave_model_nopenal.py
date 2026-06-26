@@ -15,7 +15,7 @@ except ImportError:
     logger.debug("Install with: pip install numba")
 
 GPS_UTC_OFFSET = 18
-c = 299792458.0/1e9/1.000
+c = 299792458.0/1e9/1.000259
 np.set_printoptions(precision=3)
 DEFAULT_TIME_OFFSET_FILE = "_offset_byairplane_wyb_complete.txt"
 
