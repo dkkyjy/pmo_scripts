@@ -44,7 +44,7 @@ YAML 结构示例:
         rec_A:         1.23e+05
         rec_wc:        0.031
         rec_dw:        2.10
-        fmin_per_dof:  0.87
+        chi2_per_dof:  0.87
       antennas:
         du_ids:      [101, 203, 305, ...]
         omega_rad:   [0.031, 0.028, ...]
@@ -233,7 +233,7 @@ def reconstruct_one(args):
         ),
         ADF=dict(
             rec_theta_sph=None, rec_phi_sph=None,
-            rec_A=None, rec_wc=None, rec_dw=None, fmin_per_dof=None,
+            rec_A=None, rec_wc=None, rec_dw=None, chi2_per_dof=None,
         ),
         antennas=dict(
             du_ids=[], omega_rad=[], energy_flux=[],
@@ -278,7 +278,7 @@ def reconstruct_one(args):
         entry['ADF']['rec_A']         = _safe(energy_result['rec_A'])
         entry['ADF']['rec_wc']        = _safe(energy_result['rec_wc'])
         entry['ADF']['rec_dw']        = _safe(energy_result['rec_dw'])
-        entry['ADF']['chi2_per_dof']  = _safe(energy_result['fmin_per_dof'])
+        entry['ADF']['chi2_per_dof']  = _safe(energy_result['chi2_per_dof'])
 
         # 重算视角 w，与 energy_restruction 内公式完全一致
         rx, ry, rz     = energy_result['rec_x_xmax'], energy_result['rec_y_xmax'], energy_result['rec_z_xmax']
