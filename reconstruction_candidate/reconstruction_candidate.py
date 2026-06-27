@@ -1412,7 +1412,7 @@ def energy_restruction(root_path, event_number_int):
         rec_x_xmax=rec_x_xmax, rec_y_xmax=rec_y_xmax, rec_z_xmax=rec_z_xmax, chi2Sph=chi2Sph,
         rec_theta_sph=rec_theta_sph, rec_theta_err=rec_theta_err,
         rec_phi_sph=rec_phi_sph, rec_phi_err=rec_phi_err,
-        rec_A=rec_A, rec_wc=rec_wc, rec_dw=rec_dw, fmin_per_dof=fmin,
+        rec_A=rec_A, rec_wc=rec_wc, rec_dw=rec_dw, chi2_per_dof=fmin,
         rec_A_err=rec_A_err, rec_dw_err=rec_dw_err,
     )
 
