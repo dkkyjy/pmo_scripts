@@ -28,7 +28,6 @@ __pycache__/
 docs/
 todos/
 tests/
-scripts/
 cov_annotate/
 
 # External directories (如不需追踪)

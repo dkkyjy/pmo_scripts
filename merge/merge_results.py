@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
+import yaml
+
 from merge.common import (
     build_traceability_header,
     find_files,
