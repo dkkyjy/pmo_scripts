@@ -1444,7 +1444,7 @@ def energy_restruction(root_path, event_number_int):
 
     #-------------------------------------------------------------------------------------------------
 
-    X_grid, Y_grid = np.linspace(-5000, 2000, 400), np.linspace(-3000, 2000, 400)
+    X_grid, Y_grid = np.linspace(-5000, 2000, 400), np.linspace(-4000, 3000, 400)
     XX_plot, YY_plot = np.meshgrid(X_grid, Y_grid)
 
     physics_Y, physics_X = -XX_plot, YY_plot # 转换为物理坐标系 (西-东, 南-北)
@@ -1479,7 +1479,7 @@ def energy_restruction(root_path, event_number_int):
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.axis('equal')    
     plt.xlim(-5000, 2000)
-    plt.ylim(-3000, 2000)
+    plt.ylim(-4000, 3000)
     plt.savefig(os.path.join(event_dir, 'shower_core_position.png'), dpi = 300, bbox_inches = 'tight')
     plt.close()
 

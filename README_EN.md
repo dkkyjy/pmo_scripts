@@ -65,7 +65,7 @@ pip install -r requirements.txt
 - If using a separate environment, ensure `pytest` and `pytest-cov` are installed
 
 ```bash
-conda run -n base ./scripts/run_tests.sh
+./scripts/run_tests.sh
 ```
 
 ## Quick start
