@@ -63,8 +63,12 @@ def merge_files_for_pattern(
     pattern: str,
     outpath: Path,
     run_number: Optional[int] = None,
+    min_events: int = 1,
 ) -> Tuple[int, str]:
-    """Concatenate files matching one pattern into one output file."""
+    """Concatenate files matching one pattern into one output file.
+
+    Files with fewer than `min_events` events are skipped.
+    """
     code, message, files = find_files(dirpath, pattern)
     if code != 0:
         return code, message
@@ -76,15 +80,35 @@ def merge_files_for_pattern(
             f"No files matching RUN{run_number} in {dirpath} after boundary filtering",
         )
 
+    # 过滤：跳过空事例的 yaml 文件
+    non_empty_files: list[Path] = []
+    skipped = 0
+    for file_path in files:
+        try:
+            data = yaml.safe_load(file_path.read_text(encoding="utf-8"))
+        except Exception:
+            skipped += 1
+            continue
+        if data and isinstance(data, dict) and len(data) >= min_events:
+            non_empty_files.append(file_path)
+        else:
+            skipped += 1
+
+    if skipped:
+        print(f"  [merge_results] 跳过 {skipped} 个无事例文件 ({pattern})")
+
+    if not non_empty_files:
+        return 1, f"No files with >= {min_events} events for '{pattern}' in {dirpath}"
+
     header_text = build_traceability_header(
         outpath.name,
-        files,
+        non_empty_files,
         include_time=False,
     )
-    chunks = [file_path.read_text(encoding="utf-8") for file_path in files]
+    chunks = [file_path.read_text(encoding="utf-8") for file_path in non_empty_files]
     write_text_with_header(outpath, header_text, chunks, ensure_newline_between_chunks=True)
 
-    return 0, f"Wrote {len(files)} files -> {outpath} (run_number={run_number})"
+    return 0, f"Wrote {len(non_empty_files)} files -> {outpath} (run_number={run_number})"
 
 
 def merge_all_types(
