@@ -26,10 +26,12 @@ from readroot.common import (
     DATETIME_FORMAT,
     EventPayload,
     YamlData,
+    build_synthetic_gps_times,
     build_time_map_and_du_ids,
-    find_teventadc_key,
+    find_event_tree_key,
     format_event_datetime,
     mkdir as shared_mkdir,
+    parse_sim_base_time,
     write_yaml,
 )
 
@@ -70,19 +72,39 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv[1:])
 
 def read_file_du_time_ns(file_name: str) -> ReadHeaderResult:
-    """Read event fields from teventadc TTree and return lists."""
+    """Read event fields from the event TTree and return lists.
+
+    Supports both the real ``teventadc`` tree (populated ``gps_time`` vector)
+    and the CoREAS/Dunhuang ``tadc`` tree (no ``gps_time``; a monotonic time
+    axis is synthesised from the run's reference time instead).
+    """
     root_file = uproot.open(file_name)
-    key_name = find_teventadc_key(list(root_file.keys()), file_name)
+    key_name, tree_kind = find_event_tree_key(list(root_file.keys()), file_name)
     events = root_file[key_name]
-    data = events.arrays(
-        ["run_number", "event_number", "du_id", "gps_time", "du_nanoseconds"],
-        library="np",
-    )
+
+    if tree_kind == "teventadc":
+        data = events.arrays(
+            ["run_number", "event_number", "du_id", "gps_time", "du_nanoseconds"],
+            library="np",
+        )
+        gps_time_list = data["gps_time"].tolist()
+    else:  # tadc (CoREAS/Dunhuang simulation): synthesise a GPS time axis.
+        data = events.arrays(
+            ["run_number", "event_number", "du_id", "du_nanoseconds"],
+            library="np",
+        )
+        base_time = parse_sim_base_time(file_name)
+        if base_time is None:
+            raise ValueError(
+                f"cannot derive a reference time for simulation file: {file_name}"
+            )
+        gps_time_list = build_synthetic_gps_times(
+            base_time, data["event_number"].tolist()
+        )
 
     run_number_list = data["run_number"].tolist()
     event_number_list = data["event_number"].tolist()
     du_id_list = data["du_id"].tolist()
-    gps_time_list = data["gps_time"].tolist()
     du_nanosecond_list = data["du_nanoseconds"].tolist()
     return (
         run_number_list,

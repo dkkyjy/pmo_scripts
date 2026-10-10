@@ -25,6 +25,7 @@ import datetime
 import glob
 import multiprocessing
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -39,6 +40,11 @@ try:
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
+
+
+# Simulation (CoREAS/Dunhuang) run directories embed the date as
+# ``sim_..._<YYYYMMDD>_<HHMMSS>_...``.
+_SIM_DIR_DATE_PATTERN = re.compile(r"_(\d{8})_")
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,8 @@ class TaskSpec:
     skip_fingerprint: bool
     force_recompute: bool
     min_detectors: int
+    det_pos: str
+    reader: str
 
 
 TaskResult = Tuple[str, int]
@@ -93,13 +101,47 @@ def times_between(
         cur += one
 
 
+def _sim_file_date(full_path: str) -> int | None:
+    """Return the ``YYYYMMDD`` date embedded in a CoREAS run directory name.
+
+    Simulation files are laid out as ``<base>/<sim_..._YYYYMMDD_HHMMSS_...>/
+    adc_*.root`` (no date sub-directory), so the date is recovered from the
+    parent directory instead of the file name.
+    """
+    parent = os.path.basename(os.path.dirname(full_path))
+    match = _SIM_DIR_DATE_PATTERN.search(parent)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _real_file_date(full_path: str) -> int | None:
+    """Return the date embedded in a real ``Trigger_<YYYYMMDD...>`` file name."""
+    parts = os.path.basename(full_path).split("_")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
 def get_file_list(
-    file_start: int, file_end: int, date: str, base_path: str
+    file_start: int, file_end: int, date: str, base_path: str, reader: str = "trigger"
 ) -> list[str]:
+    """Find ``.root`` event files that match the criteria and return full paths.
+
+    ``reader="trigger"`` (default) scans ``base_path/date`` for ``Trigger*.root``
+    files, matching the historical behaviour. ``reader="coreas"`` scans
+    ``base_path`` recursively for ``adc_*.root`` simulation files, deriving each
+    file's date from its run directory.
     """
-    Find .root Trigger files that match the criteria under base_path/date and filter after sorting by filename.
-    Return full path list.
-    """
+    if reader == "coreas":
+        return _get_simulation_file_list(file_start, file_end, base_path)
+
     path = os.path.join(base_path, date)
     logger.info(f"Searching directory: {path}")
     logger.info(f"File from {file_start} to {file_end}")
@@ -116,19 +158,47 @@ def get_file_list(
     seen_files = set()  # Prevent duplicate entries
     # logger.info(f"Found ROOT Trigger files: {len(files)}")
     for f in files:
-        # It's safer to take the last part of the file path and split by '_'
-        name = os.path.basename(f)
-        parts = name.split("_")
-        if len(parts) < 2:
-            continue
-        try:
-            file_date = int(parts[1])
-        except ValueError:
+        file_date = _real_file_date(f)
+        if file_date is None:
             continue
         if file_start <= file_date <= file_end and f not in seen_files:
             selected.append(f)
             seen_files.add(f)
     logger.info(f"Found {len(selected)} matching files in {path}")
+    return selected
+
+
+def _get_simulation_file_list(
+    file_start: int, file_end: int, base_path: str
+) -> list[str]:
+    """Recursively find CoREAS ``adc_*.root`` files within the date range."""
+    logger.info(f"Searching simulation files under: {base_path}")
+    logger.info(f"File from {file_start} to {file_end}")
+    if not os.path.isdir(base_path):
+        logger.warning(f"Base path does not exist: {base_path}")
+        return []
+
+    # ``file_start``/``file_end`` are 14-digit ``YYYYMMDDHHMMSS`` bounds, but
+    # simulation files only carry an 8-digit ``YYYYMMDD`` run date; reduce the
+    # bounds to day granularity before comparing.
+    date_start = int(file_start) // 1_000_000
+    date_end = int(file_end) // 1_000_000
+
+    candidates: list[str] = []
+    for full in glob.glob(os.path.join(base_path, "**", "adc_*.root"), recursive=True):
+        candidates.append(full)
+    candidates.sort()
+
+    selected: list[str] = []
+    seen_files: set[str] = set()
+    for f in candidates:
+        file_date = _sim_file_date(f)
+        if file_date is None:
+            continue
+        if date_start <= file_date <= date_end and f not in seen_files:
+            selected.append(f)
+            seen_files.add(f)
+    logger.info(f"Found {len(selected)} matching simulation files in {base_path}")
     return selected
 
 
@@ -172,6 +242,8 @@ def make_tasks_for_file_paths(
             skip_fingerprint=args.skip_fingerprint,
             force_recompute=args.force_recompute,
             min_detectors=args.min_detectors,
+            det_pos=args.det_pos,
+            reader=args.reader,
         )
         for file_path in file_path_list
     ]
@@ -183,6 +255,9 @@ def build_tasks(
     args: argparse.Namespace,
 ) -> list[TaskSpec]:
     """Build all worker tasks for the date range."""
+    if args.reader == "coreas":
+        return _build_simulation_tasks(start, end, args)
+
     tasks: list[TaskSpec] = []
     for date in times_between(start, end):
         date_str = date.strftime("%Y/%m/%d")
@@ -192,10 +267,43 @@ def build_tasks(
         if not out_date_dir.exists():
             out_date_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Created output directory: {out_date_dir}")
-        
+
         tmp_start, tmp_end = get_file_bounds_for_date(start, end, date)
-        file_path_list = get_file_list(tmp_start, tmp_end, date_str, args.base_path)
+        file_path_list = get_file_list(
+            tmp_start, tmp_end, date_str, args.base_path, args.reader
+        )
         tasks.extend(make_tasks_for_file_paths(file_path_list, date_str, args))
+    return tasks
+
+
+def _build_simulation_tasks(
+    start: datetime.datetime,
+    end: datetime.datetime,
+    args: argparse.Namespace,
+) -> list[TaskSpec]:
+    """Build tasks for CoREAS simulation files, grouped by run-directory date."""
+    file_start = int(start.strftime("%Y%m%d%H%M%S"))
+    file_end = int(end.strftime("%Y%m%d%H%M%S"))
+    file_path_list = get_file_list(
+        file_start, file_end, "", args.base_path, args.reader
+    )
+
+    tasks: list[TaskSpec] = []
+    seen_dates: set[str] = set()
+    for file_path in file_path_list:
+        file_date = _sim_file_date(file_path)
+        if file_date is None:
+            continue
+        date_str = datetime.datetime.strptime(str(file_date), "%Y%m%d").strftime(
+            "%Y/%m/%d"
+        )
+        if date_str not in seen_dates:
+            seen_dates.add(date_str)
+            out_date_dir = Path(args.out_dir_base) / date_str
+            if not out_date_dir.exists():
+                out_date_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created output directory: {out_date_dir}")
+        tasks.extend(make_tasks_for_file_paths([file_path], date_str, args))
     return tasks
 
 
@@ -254,6 +362,7 @@ def make_main_command(
     skip_fingerprint: bool = False,
     force_recompute: bool = False,
     min_detectors: int = 6,
+    det_pos: str | None = None,
 ) -> list[str]:
     """Construct the command for: python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml yyyy-mm-dd --out-dir-base"""
 
@@ -275,6 +384,8 @@ def make_main_command(
         "--fig_name",
         str(file_name),
     ]
+    if det_pos:
+        cmd += ["--det-pos", det_pos]
     if with_signal:
         cmd.append("--with-signal")
     if skip_matching:
@@ -380,6 +491,7 @@ def process_date(task: TaskSpec) -> TaskResult:
     skip_fingerprint = task.skip_fingerprint
     force_recompute = task.force_recompute
     min_detectors = task.min_detectors
+    det_pos = task.det_pos
 
     # Log/read command
     if skip_read:
@@ -447,6 +559,7 @@ def process_date(task: TaskSpec) -> TaskResult:
             skip_fingerprint,
             force_recompute,
             min_detectors=min_detectors,
+            det_pos=det_pos,
         )
         logger.info(f"{' '.join(main_cmd)}")
 
@@ -482,6 +595,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--base-path",
         default="/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD",
         help="value for --base-path passed to script",
+    )
+    ap.add_argument(
+        "--reader",
+        choices=["trigger", "coreas"],
+        default="trigger",
+        help=(
+            "input layout: 'trigger' scans base-path/date for real Trigger*.root "
+            "files (default); 'coreas' scans base-path recursively for CoREAS "
+            "simulation adc_*.root files"
+        ),
+    )
+    ap.add_argument(
+        "--det-pos",
+        dest="det_pos",
+        default=None,
+        help=(
+            "detector position file passed through to main.py; defaults to "
+            "_gp65_rtksort_2002_DU7.txt inside main.py when omitted"
+        ),
     )
     ap.add_argument(
         "--out-dir-base",

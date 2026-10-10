@@ -30,7 +30,9 @@ def load_data_from_file(filename):
                 line = line.strip()
                 # Skip empty lines and comment lines
                 if line and not line.startswith("#"):
-                    parts = line.strip().split()
+                    # Accept both whitespace- and comma-separated columns
+                    # (GP65 uses spaces; CoREAS ``du_coords.txt`` uses commas).
+                    parts = [p for p in line.replace(",", " ").split() if p]
                     # Expect at least 4 columns: ID, x, y, z
                     if len(parts) >= 4:
                         duid =int(parts[0])
