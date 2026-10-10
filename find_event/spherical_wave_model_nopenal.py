@@ -19,6 +19,11 @@ c = 299792458.0/1e9/1.000259
 np.set_printoptions(precision=3)
 DEFAULT_TIME_OFFSET_FILE = "_offset_byairplane_wyb_complete.txt"
 
+# 球面波源距 rho 的拟合下/上界（米）。上界原为 2e5，会在极倾斜几何下
+# 截断真实远源（实测收敛到 ~2.6e5 m）；放宽到 1e6 后不再撞上限且 chi2 不恶化。
+RHO_MIN = 2e3
+RHO_MAX = 1e6
+
 
 def phi_to_uv(phi):
     """将方位角 phi（度）转换为 (u, v) 参数化表示。"""
@@ -406,7 +411,7 @@ def fit_3param(matches, detector_positions, c, initial_guesses=None):
         return err  # 无惩罚！
     
     # UV参数边界：(-1.5, 1.5) 给优化器足够缓冲空间
-    bounds_uv = [(2e3, 2e5), (0, 105), (-1.5, 1.5), (-1.5, 1.5)]
+    bounds_uv = [(RHO_MIN, RHO_MAX), (0, 105), (-1.5, 1.5), (-1.5, 1.5)]
     
     # 默认候选初值 - 8方向 × 2距离，均匀覆盖
     if initial_guesses is None:
@@ -659,7 +664,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
         options={'ftol': 1e-15, 'gtol': 1e-12, 'maxiter': 30000}
         
         # UV参数边界 [rho, theta, u, v, t0]
-        bounds_uv = [(2e3, 2e5), (5, 95), (-2.0, 2.0), (-2.0, 2.0), (-np.inf, np.inf)]
+        bounds_uv = [(RHO_MIN, RHO_MAX), (5, 95), (-2.0, 2.0), (-2.0, 2.0), (-np.inf, np.inf)]
         
         # 选择优化函数：Numba版本（更快）或 Python版本
         if NUMBA_AVAILABLE:
