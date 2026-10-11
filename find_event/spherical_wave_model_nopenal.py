@@ -24,6 +24,12 @@ DEFAULT_TIME_OFFSET_FILE = "_offset_byairplane_wyb_complete.txt"
 RHO_MIN = 2e3
 RHO_MAX = 1e6
 
+# UV 参数化主拟合的 theta(天顶角) 上界（度）。原为 95°，会在某些事件上
+# 产生贴边界的伪极小（见 ev63：坏解恰好停在 theta=95.000）；放宽到 105°
+# 可消除该伪解，但会为另一些事件（ev30）打开新的伪盆地。取 90° 既排除
+# theta>90 的镜像伪解区，又保留物理可达的天顶角范围。
+THETA_UV_HI = 90
+
 
 def phi_to_uv(phi):
     """将方位角 phi（度）转换为 (u, v) 参数化表示。"""
@@ -664,7 +670,8 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
         options={'ftol': 1e-15, 'gtol': 1e-12, 'maxiter': 30000}
         
         # UV参数边界 [rho, theta, u, v, t0]
-        bounds_uv = [(RHO_MIN, RHO_MAX), (5, 95), (-2.0, 2.0), (-2.0, 2.0), (-np.inf, np.inf)]
+        # theta 用模块常量 THETA_UV_HI，避免贴边界的伪极小
+        bounds_uv = [(RHO_MIN, RHO_MAX), (5, THETA_UV_HI), (-2.0, 2.0), (-2.0, 2.0), (-np.inf, np.inf)]
         
         # 选择优化函数：Numba版本（更快）或 Python版本
         if NUMBA_AVAILABLE:
