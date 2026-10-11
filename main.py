@@ -872,6 +872,8 @@ def run_swm_stage(
             state["times"],
             detector_positions,
             seed_directions,
+            prune_du1=True,
+            prune_du2=False,
         )
 
         results = {}
