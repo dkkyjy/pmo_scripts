@@ -33,6 +33,8 @@ import coordinatesystems, helper
 import models as atm
 from _optimized_read_matching_times_graph import optimized_read_matching_times_graph
 
+from readroot.common import find_event_tree_key, parse_sim_base_time
+
 #--------------------------------------------------------------------------
 
 # 定义一些全局参数和常量
@@ -60,6 +62,7 @@ logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 
 _DU_POSITION = None
 _DU_ALL_POSITIONS_ROTATED = None
+_DU_POSITION_CACHE = {}
 _DU_ROTATION_MATRIX = np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
 
 efield_rec_dir = './Reconstruction/' # 结果保存目录
@@ -69,17 +72,136 @@ def _ensure_output_dir():
     if not os.path.exists(efield_rec_dir):
         os.makedirs(efield_rec_dir)
 
-def _load_du_position():
-    """惰性加载 DU 位置数据并计算旋转后坐标。"""
+def _read_du_position_table(path):
+    """读取 DU 位置表，兼容空格分隔（GP65）与逗号分隔（CoREAS ``du_coords.txt``）。"""
+    try:
+        return np.loadtxt(path)  # GP65 使用空格/制表符分隔
+    except ValueError:
+        return np.loadtxt(path, delimiter=',')  # CoREAS 使用逗号分隔
+
+
+def _load_du_position(det_pos_path=None):
+    """惰性加载 DU 位置数据并计算旋转后坐标。
+
+    ``det_pos_path`` 为 ``None`` 时沿用历史上的
+    ``_gp65_rtksort_2002_DU7.txt``（相对当前工作目录），保持生产行为不变；
+    传入 CoREAS 的 ``du_coords.txt`` 等文件即可切换探测器布局。
+    """
     global _DU_POSITION, _DU_ALL_POSITIONS_ROTATED
-    if _DU_POSITION is None:
-        _DU_POSITION = np.loadtxt("_gp65_rtksort_2002_DU7.txt")
-        x = np.array(_DU_POSITION[:, 1])
-        y = np.array(_DU_POSITION[:, 2])
-        z = np.array(_DU_POSITION[:, 3])
-        all_positions = np.stack((x, y, z), axis=1)
-        _DU_ALL_POSITIONS_ROTATED = np.dot(_DU_ROTATION_MATRIX, all_positions.T).T
-    return _DU_POSITION, _DU_ALL_POSITIONS_ROTATED
+    key = det_pos_path or "_gp65_rtksort_2002_DU7.txt"
+    cached = _DU_POSITION_CACHE.get(key)
+    if cached is None:
+        position = _read_du_position_table(key)
+        all_positions = np.stack(
+            (np.array(position[:, 1]), np.array(position[:, 2]), np.array(position[:, 3])),
+            axis=1,
+        )
+        rotated = np.dot(_DU_ROTATION_MATRIX, all_positions.T).T
+        cached = (position, rotated)
+        _DU_POSITION_CACHE[key] = cached
+    _DU_POSITION, _DU_ALL_POSITIONS_ROTATED = cached
+    return cached
+
+
+def _synthesize_gps_times(root_path, event_number, n_du):
+    """为无 ``gps_time`` 向量的 CoREAS ``tadc`` 树合成扁平 GPS 时间轴。
+
+    复用 :func:`readroot.common.parse_sim_base_time` 从 run 目录名解析基准时间，
+    并按每个 DU 重复 ``[date, hhmmss, epoch + event_number]`` 三元组，使其与真实
+    ``teventadc`` 树的 ``gps_time`` 布局（长度 ``3 * n_du``）一致。
+    """
+    base = parse_sim_base_time(root_path)
+    if base is None:
+        logger.warning(f"无法从路径解析 CoREAS 基准时间，gps_time 置零: {root_path}")
+        return np.zeros(3 * n_du, dtype=int)
+    date_int, hhmmss_int, epoch = base
+    row = [int(date_int), int(hhmmss_int), int(epoch) + int(event_number)]
+    return np.array(row * n_du, dtype=int)
+
+
+def _resolve_coreas_det_pos(root_path, det_pos_path):
+    """为 CoREAS 输入选定 DU 坐标表。
+
+    优先级：显式 ``det_pos_path`` → 环境变量 ``RECON_COREAS_DET_POS`` →
+    在 root 文件同级/上级目录查找 ``du_coords.txt``。CoREAS 的 DU id 与 GP65 生产
+    表（``_gp65_rtksort_2002_DU7.txt``）不重合，必须使用独立的坐标表。
+    """
+    if det_pos_path:
+        return det_pos_path
+    env_path = os.environ.get("RECON_COREAS_DET_POS")
+    if env_path:
+        return env_path
+    start = os.path.dirname(os.path.abspath(root_path))
+    for base in (start, os.path.dirname(start)):
+        candidate = os.path.join(base, "du_coords.txt")
+        if os.path.exists(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "CoREAS 输入需要 DU 坐标表（du_coords.txt），请通过 det_pos_path 参数或 "
+        f"RECON_COREAS_DET_POS 环境变量指定: {root_path}"
+    )
+
+
+def _load_du_position_for_input(root_path, det_pos_path=None):
+    """根据输入 tree 类型加载合适的 DU 坐标表。
+
+    ``teventadc``（真实 trigger）沿用生产表；``tadc``（CoREAS）使用
+    :func:`_resolve_coreas_det_pos` 选定的独立坐标表。返回
+    ``(tree_kind, DU_position, DU_all_positions_rotated)``。
+    """
+    probe_file = uproot.open(root_path)
+    try:
+        tree_kind = find_event_tree_key(list(probe_file.keys()), root_path)[1]
+    finally:
+        probe_file.close()
+    if tree_kind == "tadc":
+        position, rotated = _load_du_position(_resolve_coreas_det_pos(root_path, det_pos_path))
+    else:
+        position, rotated = _load_du_position(det_pos_path)
+    return tree_kind, position, rotated
+
+
+def _read_event_arrays(root_path, event_index):
+    """读取指定事件的 ADC 波形，统一 ``teventadc`` 与 CoREAS ``tadc`` 两种 schema。
+
+    返回 ``(tree_kind, event_num, du_ids, gps_time_flat, du_nanoseconds,
+    trace_1, trace_2, trace_3)``。真实 trigger 的 ``teventadc`` 直接提供
+    ``trace_1/2/3`` 与 ``gps_time``；CoREAS 的 ``tadc`` 提供 ``trace_ch``
+    （形状 ``(n_du, 3, n_time)``）且 ``gps_time`` 为空，需要合成。
+    """
+    root_file = uproot.open(root_path)
+    try:
+        key, tree_kind = find_event_tree_key(list(root_file.keys()), root_path)
+        tree = root_file[key]
+        if tree_kind == "teventadc":
+            data = tree.arrays(
+                ["event_number", "du_id", "gps_time", "du_seconds", "du_nanoseconds",
+                 "trace_1", "trace_2", "trace_3"],
+                library="ak",
+            )
+            data = data[int(event_index)]
+            event_num = data["event_number"]
+            du_ids_all = np.array(data["du_id"])
+            gps_time = data["gps_time"]
+            du_nanoseconds = np.array(data["du_nanoseconds"])
+            trace_1 = np.array(data["trace_1"])
+            trace_2 = np.array(data["trace_2"])
+            trace_3 = np.array(data["trace_3"])
+        else:  # tadc (CoREAS/Dunhuang simulation)
+            data = tree.arrays(
+                ["event_number", "du_id", "du_nanoseconds", "trace_ch"],
+                library="ak",
+            )
+            data = data[int(event_index)]
+            event_num = data["event_number"]
+            du_ids_all = np.array(data["du_id"])
+            du_nanoseconds = np.array(data["du_nanoseconds"])
+            trace_ch = np.array(data["trace_ch"].to_list())  # (n_du, 3, n_time)
+            trace_1, trace_2, trace_3 = trace_ch[:, 0], trace_ch[:, 1], trace_ch[:, 2]
+            gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
+    finally:
+        root_file.close()
+    return tree_kind, event_num, du_ids_all, gps_time, du_nanoseconds, trace_1, trace_2, trace_3
 
 #--------------------------------------------------------------------------
 
@@ -295,12 +417,14 @@ def PWF_fit(x, y, z, ant_t, theta0, phi0):
 
 #--------------------------------------------------------------------------
 
-def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面波前拟合 (PWF) 的电场重建
+def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path=None): # 基于平面波前拟合 (PWF) 的电场重建
 
     logger.info(f"Starting E-field reconstruction using PWF from {root_path}, event: {int(event_number_int)}")
 
     _ensure_output_dir()
-    DU_position, DU_all_positions_rotated = _load_du_position()
+
+    # 判定 tree 类型（teventadc / tadc），据此选择 DU 坐标表
+    _tree_kind, DU_position, DU_all_positions_rotated = _load_du_position_for_input(root_path, det_pos_path)
 
     filename = os.path.splitext(os.path.basename(root_path))[0] + f"_event_{int(event_number_int)}" # 得到文件名和事件编号
     event_dir = os.path.join(efield_rec_dir, filename)
@@ -308,23 +432,13 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
 
     #---------------------------------------------------------------------------
 
-    root_file = uproot.open(root_path)
-    try:
-        tree = root_file['teventadc'] # 获取 ADC 数据的 Tree
-        
-        data = tree.arrays(["event_number", "du_id", "gps_time", "du_seconds", "du_nanoseconds", "trace_1", "trace_2", "trace_3"], library = "ak")
+    tree_kind, event_num, du_ids_all, gps_time, du_nanoseconds, trace_1, trace_2, trace_3 = \
+        _read_event_arrays(root_path, event_number_int)
 
-        data = data[int(event_number_int)] # 直接索引到指定 Event 的数据
-    finally:
-        root_file.close()
-
-    event_num, du_ids_all, gps_time, du_nanoseconds = data["event_number"], np.array(data["du_id"]), data["gps_time"], np.array(data["du_nanoseconds"])
-
+    # gps_time 为每 DU 三元组 [date, hhmmss, epoch] 的扁平数组；取 epoch 字段（索引 2）
     LST_time = int(np.round(gps_to_lst(gps_time[2])[0]))
 
     logger.info(f"Trigger Time @ LST Time (hours): {LST_time}")
-
-    trace_1, trace_2, trace_3 = np.array(data["trace_1"]), np.array(data["trace_2"]), np.array(data["trace_3"]) # 获取三通道波形数据
     
     #---------------------------------------------------------------------------
     #---------------------------------------------------------------------------
@@ -1355,11 +1469,11 @@ def density_and_alpha_correction(E_em_GeV, rho, alpha):
 
 #--------------------------------------------------------------------------
 
-def energy_restruction(root_path, event_number_int):
+def energy_restruction(root_path, event_number_int, det_pos_path=None):
 
     logger.info(f"Starting energy reconstruction using ADF from {root_path}, event: {int(event_number_int)}")
 
-    _, DU_all_positions_rotated = _load_du_position()
+    _, _, DU_all_positions_rotated = _load_du_position_for_input(root_path, det_pos_path)
 
     filename = os.path.splitext(os.path.basename(root_path))[0] + f"_event_{int(event_number_int)}" # 得到文件名和事件编号
     event_dir = os.path.join(efield_rec_dir, filename)

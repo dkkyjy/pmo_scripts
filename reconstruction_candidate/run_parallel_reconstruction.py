@@ -219,6 +219,7 @@ def _safe_int_list(arr):
 def reconstruct_one(args):
     """单个事例全流程：电场重建 → 能量重建 → 返回结构化 dict。"""
     root_path, event_index = args[0], int(args[1])
+    det_pos_path = args[2] if len(args) > 2 else None
 
     # 默认返回结构（重建失败时仍保留文件路径信息）
     entry = dict(
@@ -243,7 +244,7 @@ def reconstruct_one(args):
 
     # ── 步骤 1：电场重建 ──────────────────────────────────────────────────────
     try:
-        efield_recons_from_efield_PWF(root_path, event_index)
+        efield_recons_from_efield_PWF(root_path, event_index, det_pos_path)
 
         fd = _read_efield_txt(root_path, event_index)
 
@@ -266,7 +267,7 @@ def reconstruct_one(args):
 
     # ── 步骤 2：能量重建 ──────────────────────────────────────────────────────
     try:
-        energy_result, delta_angle = energy_restruction(root_path, event_index)
+        energy_result, delta_angle = energy_restruction(root_path, event_index, det_pos_path)
 
         entry['SWF']['rec_x_xmax']    = _safe(energy_result['rec_x_xmax'])
         entry['SWF']['rec_y_xmax']    = _safe(energy_result['rec_y_xmax'])
@@ -379,6 +380,9 @@ def main():
                         help='并行进程数 (默认: 20)')
     parser.add_argument('--base-path', default='TD',
                         help='ROOT 文件基础目录，默认: TD。文件会自动定位到 base-path/YYYY/MM/DD/ 下')
+    parser.add_argument('--det-pos', default=None,
+                        help='DU 坐标表路径。CoREAS 输入需指向 du_coords.txt'
+                             '（默认自动在 root 文件同级/上级目录查找 du_coords.txt）')
     args = parser.parse_args()
 
     # 读取输入列表
@@ -389,6 +393,10 @@ def main():
     else:
         tasks = load_tasks_from_txt(args.input, args.base_path)
         input_path = args.input
+
+    # 将 det_pos 附加到每个任务，供 worker 传递给重建函数
+    if args.det_pos is not None:
+        tasks = [(p, i, args.det_pos) for (p, i) in tasks]
 
     # 自动生成输出文件名: {stem}_reconstruction_summary.yaml
     if args.output is None:
