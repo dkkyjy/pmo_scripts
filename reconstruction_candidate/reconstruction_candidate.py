@@ -73,7 +73,7 @@ def _load_du_position():
     """惰性加载 DU 位置数据并计算旋转后坐标。"""
     global _DU_POSITION, _DU_ALL_POSITIONS_ROTATED
     if _DU_POSITION is None:
-        _DU_POSITION = np.loadtxt("_gp65_rtksort_2002_DU7.txt")
+        _DU_POSITION = np.loadtxt("_gp65_rtksort_DU7_1029.txt")
         x = np.array(_DU_POSITION[:, 1])
         y = np.array(_DU_POSITION[:, 2])
         z = np.array(_DU_POSITION[:, 3])
@@ -320,6 +320,35 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
 
     event_num, du_ids_all, gps_time, du_nanoseconds = data["event_number"], np.array(data["du_id"]), data["gps_time"], np.array(data["du_nanoseconds"])
 
+    # ---- 时间/位置标定（默认启用；设置环境变量 SKIP_OFFSET=1 跳过）----
+    # 独立子程序 time_position_offset.py：按 gps 时间码取最接近的标定时间窗，
+    # 标定值正向加到 DU 触发时间(整数 ns)与坐标上。
+    import os as _os
+    _offs = None
+    if _os.environ.get("SKIP_OFFSET", "0") != "1":
+        try:
+            # time_position_offset.py 位于仓库根目录：脚本方式运行时 reconstruction_candidate/
+            # 才是 sys.path[0]，需先把仓库根加入搜索路径
+            _repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+            if _repo_root not in sys.path:
+                sys.path.insert(0, _repo_root)
+            from time_position_offset import load_offset_windows, select_window, GPS_UTC_OFFSET
+            _wins = load_offset_windows()
+            _wi, _wdist = select_window(float(gps_time[2]) - GPS_UTC_OFFSET, _wins)
+            if _wi >= 0:
+                _offs = _wins[_wi][2]
+                du_nanoseconds = du_nanoseconds + np.array([
+                    int(round(_offs.get(int(du), (0.0, 0.0, 0.0, 0.0))[0]))
+                    for du in du_ids_all
+                ], dtype=du_nanoseconds.dtype)
+                logger.info(f"[Offset calibration] event {event_num}: window #{_wi} "
+                            f"(distance {_wdist:.1f}s), {len(_offs)} DUs calibrated")
+            else:
+                logger.warning(f"[Offset calibration] event {event_num}: no calibration window found")
+        except Exception as _exc:
+            logger.warning(f"[Offset calibration] failed for event {event_num}: {_exc}; proceeding uncalibrated")
+    # ---- 标定结束 ----
+
     LST_time = int(np.round(gps_to_lst(gps_time[2])[0]))
 
     logger.info(f"Trigger Time @ LST Time (hours): {LST_time}")
@@ -338,6 +367,16 @@ def efield_recons_from_efield_PWF(root_path, event_number_int): # 基于平面�
         z_position.append(DU_position[np.where(DU_position[:, 0] == du)[0][0], 3])
 
     x_position, y_position, z_position = np.array(x_position), np.array(y_position), np.array(z_position)
+
+    # ---- 位置标定（与上方时间标定同一最近窗口，正向加到坐标上）----
+    if _offs is not None and _os.environ.get("SKIP_OFFSET", "0") != "1":
+        for _j, _du in enumerate(du_ids_all):
+            _off = _offs.get(int(_du))
+            if _off is not None:
+                x_position[_j] += _off[1]
+                y_position[_j] += _off[2]
+                z_position[_j] += _off[3]
+    # ---- 位置标定结束 ----
 
     DU_positions = np.stack((x_position, y_position, z_position), axis = 1) # 触发的 DU 的位置矩阵 (N x 3)
     DU_positions_rotated = np.dot(_DU_ROTATION_MATRIX, DU_positions.T).T # 旋转坐标系以适应 GRAND 的站点布局
