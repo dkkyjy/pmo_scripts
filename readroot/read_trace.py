@@ -274,13 +274,18 @@ def build_event_payload(
     index: int,
     file_path: str,
 ) -> EventPayload:
-    """Build one event payload with multi-trigger DU list values."""
+    """Build one event payload with per-DU amplitude values.
+
+    Both ``time`` and ``signal`` are one-to-one maps keyed by DU id, i.e.
+    ``{du: value}``: a DU fires at most once per event, so ``signal`` mirrors
+    the scalar shape of ``time``.
+    """
     time_map, list_du_id = build_time_map_and_du_ids(du_ids, du_nanoseconds)
-    signal_map: Dict[str, List[int]] = {}
+    signal_map: Dict[str, int] = {}
 
     for item_index, du_id_str in enumerate(list_du_id):
         max_value = trace_adc_maxvalue[item_index] if item_index < len(trace_adc_maxvalue) else 10
-        signal_map.setdefault(du_id_str, []).append(int(max_value))
+        signal_map[du_id_str] = int(max_value)
 
     gps_time = gps_times[2]
     datetime_str = format_event_datetime(gps_times)
