@@ -7,7 +7,6 @@ from scipy.fftpack import fftfreq
 from scipy.interpolate import interp1d
 from scipy.signal import hilbert, windows # 引入希尔伯特变换和窗函数
 from scipy import integrate # 引入数值积分函数
-from lmfit import Model, create_params, minimize # 引入非线性最小二乘拟合模型, 参数创建和最小化函数
 import h5py # 引入h5py库用于读取.mat文件
 import iminuit
 from multiprocessing.pool import Pool
@@ -913,7 +912,10 @@ def re_calculate_Voc_from_reconstruction(LST_time, N_time, freqs_band, freqs_rea
 
 #--------------------------------------------------------------------------
 
-def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = None): # 基于平面波前拟合 (PWF) 的电场重建
+def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = None, valid_du_ids = None, theta = None, phi = None): # 基于平面波前拟合 (PWF) 的电场重建
+    # 可选外部先验 (来自 candidates YAML 的 PWM 结果):
+    #   valid_du_ids: 给定则用 np.isin 直接筛天线, 替换内部 causality_filter 图优化筛选;
+    #   theta / phi : 给定则直接采用该平面波方向, 跳过 PWF 网格搜索。
 
     print("Starting E-field reconstruction using PWF from", root_path, ", event: ", int(event_number_int), flush = True)
 
@@ -936,27 +938,47 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
     #---------------------------------------------------------------------------
     #---------------------------------------------------------------------------
     
-    causal_out = causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanoseconds, trace_1, trace_2, trace_3, \
-                                  x_position, y_position, z_position, DU_positions_rotated)
+    if valid_du_ids is not None:
+        # 外部给定 DU 子集 (PWM): 直接 np.isin 筛选, 替换内部 causality_filter 图优化。
+        causal_mask = np.isin(du_ids_all, np.asarray(valid_du_ids))
+        triggered_du_ids        = du_ids_all[causal_mask]
+        du_nanoseconds_filtered = du_nanoseconds[causal_mask]
+        trace_1_filtered = trace_1[causal_mask]
+        trace_2_filtered = trace_2[causal_mask]
+        trace_3_filtered = trace_3[causal_mask]
+        DU_positions_rotated = DU_positions_rotated[causal_mask]
+        n_triggered = len(triggered_du_ids)
+        print(f"[PWM] 使用外部 valid_du_ids 筛选天线: {n_triggered} DUs retained: {triggered_du_ids}", flush = True)
+        if n_triggered < 4:
+            print(f"Event {event_num} has only {n_triggered} DUs after valid_du_ids filter (< 4 minimum). Skipping.", flush = True)
+            return -1
+    else:
+        causal_out = causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanoseconds, trace_1, trace_2, trace_3, \
+                                      x_position, y_position, z_position, DU_positions_rotated)
 
-    if causal_out is None: return -1
+        if causal_out is None: return -1
 
-    triggered_du_ids, du_nanoseconds_filtered, trace_1_filtered, trace_2_filtered, trace_3_filtered, DU_positions_rotated, n_triggered = causal_out
-    
+        triggered_du_ids, du_nanoseconds_filtered, trace_1_filtered, trace_2_filtered, trace_3_filtered, DU_positions_rotated, n_triggered = causal_out
+
     #---------------------------------------------------------------------------
 
-    rec_theta_plane, rec_phi_plane, chi2Plane = np.inf, np.inf, np.inf # 平面波前拟合 (PWF) 寻找最佳角度
+    if theta is not None and phi is not None:
+        # 外部给定平面波方向 (PWM): 直接采用, 跳过 PWF 网格搜索。
+        rec_theta_plane, rec_phi_plane, chi2Plane = theta, phi, np.inf
+        print(f"[PWM] 使用外部平面波方向: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg", flush = True)
+    else:
+        rec_theta_plane, rec_phi_plane, chi2Plane = np.inf, np.inf, np.inf # 平面波前拟合 (PWF) 寻找最佳角度
 
-    for theta0 in thetaList:
-        for phi0 in phiList:
-            theta, phi, fval = PWF_fit(DU_positions_rotated[:, 0], DU_positions_rotated[:, 1], DU_positions_rotated[:, 2], du_nanoseconds_filtered * 1e-9, theta0, phi0)
-            if fval < chi2Plane:
-                chi2Plane, rec_theta_plane, rec_phi_plane = fval, theta, phi
-            
-    rec_theta_plane, rec_phi_plane = 180 - rec_theta_plane, rec_phi_plane + 180
-    if rec_phi_plane > 360: rec_phi_plane = rec_phi_plane - 360
+        for theta0 in thetaList:
+            for phi0 in phiList:
+                theta, phi, fval = PWF_fit(DU_positions_rotated[:, 0], DU_positions_rotated[:, 1], DU_positions_rotated[:, 2], du_nanoseconds_filtered * 1e-9, theta0, phi0)
+                if fval < chi2Plane:
+                    chi2Plane, rec_theta_plane, rec_phi_plane = fval, theta, phi
 
-    print(f"Best PWF fit: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg, chi2/dof = {chi2Plane:.2e}", flush = True)
+        rec_theta_plane, rec_phi_plane = 180 - rec_theta_plane, rec_phi_plane + 180
+        if rec_phi_plane > 360: rec_phi_plane = rec_phi_plane - 360
+
+        print(f"Best PWF fit: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg, chi2/dof = {chi2Plane:.2e}", flush = True)
 
     #---------------------------------------------------------------------------
 
@@ -1461,7 +1483,7 @@ def ADF_fit_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, A0, obs_altitud
 
 #--------------------------------------------------------------------------
 
-def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None):  # time given in ns
+def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_external=None, y_xmax_external=None, z_xmax_external=None, chi_square_external=None):  # time given in ns
     """
     联合重建簇射方向和 Xmax 位置。
     
@@ -1478,17 +1500,23 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None):  # time
     返回:
         tuple: 重建结果 (初始角度, 平面波chi2, 重建Xmax坐标, 球面波chi2, 重建角度, dw, A, 最小chi2)。
     """
-    rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph = np.inf, np.inf, np.inf, np.inf
-    
-    for x0 in xList: # 网格搜索最佳 Xmax 位置 (SWF 拟合)
-        for y0 in yList:
-            for z0 in zList:
-                x_xmax, y_xmax, z_xmax, fval = SWF_fit(x, y, z, t, x0, y0, z0)
-                if fval < chi2Sph:
-                    chi2Sph = fval
-                    rec_x_xmax = x_xmax
-                    rec_y_xmax = y_xmax
-                    rec_z_xmax = z_xmax
+    if x_xmax_external is not None and y_xmax_external is not None and z_xmax_external is not None:
+        # 外部给定 Xmax 源点 (来自 candidates YAML 的 SWM 结果): 直接采用, 跳过 SWF 网格搜索。
+        rec_x_xmax, rec_y_xmax, rec_z_xmax = float(x_xmax_external), float(y_xmax_external), float(z_xmax_external)
+        chi2Sph = float(chi_square_external) if chi_square_external is not None else 0.0
+        print(f"[SWM] 使用外部 Xmax 源点: ({rec_x_xmax}, {rec_y_xmax}, {rec_z_xmax}), chi2 = {chi2Sph}", flush = True)
+    else:
+        rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph = np.inf, np.inf, np.inf, np.inf
+
+        for x0 in xList: # 网格搜索最佳 Xmax 位置 (SWF 拟合)
+            for y0 in yList:
+                for z0 in zList:
+                    x_xmax, y_xmax, z_xmax, fval = SWF_fit(x, y, z, t, x0, y0, z0)
+                    if fval < chi2Sph:
+                        chi2Sph = fval
+                        rec_x_xmax = x_xmax
+                        rec_y_xmax = y_xmax
+                        rec_z_xmax = z_xmax
                     
     zenith_ini, azimuth_ini, chi2Plane  = init_input
     rec_dw, rec_A, rec_theta, rec_phi, fmin = np.inf, np.inf, np.inf, np.inf, np.inf
@@ -1725,7 +1753,9 @@ def density_and_alpha_correction(E_em_GeV, rho, alpha):
 
 #--------------------------------------------------------------------------
 
-def energy_restruction(root_path, event_number_int, det_pos_path = None):
+def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax = None, y_xmax = None, z_xmax = None, chi_square_external = None):
+    # 可选外部先验 (来自 candidates YAML 的 SWM 结果): x_xmax/y_xmax/z_xmax/chi_square_external
+    # 给定则透传给 recons_angle, 跳过其内部 SWF 网格搜索。
 
     print("Starting energy reconstruction using ADF from", root_path, ", event: ", int(event_number_int), flush = True)
 
@@ -1773,7 +1803,7 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None):
     rec_theta_plane, rec_phi_plane, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, \
     chi2Sph, rec_theta_sph, rec_phi_sph, rec_dw, rec_A, fmin, rec_wc, \
     rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err = \
-    recons_angle(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma)
+    recons_angle(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
 
 
     print("Reconstructed Xmax coordinates (m) and chi2:", rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph, flush = True)
