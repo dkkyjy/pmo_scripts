@@ -372,12 +372,28 @@ def plane_wave_model(matching_times, detector_positions):
         theta = float(result.x[0])
         phi = float(result.x[1])
 
-        direction = _direction_from_angles(theta, phi)
-        azimuth = float(calculate_azimuth(direction))
-        chi_square = calculate_PWM_chi_square(matches, detector_positions, direction, 0.0, C_LIGHT_NS)
+        # result.x is the fitted *propagation* direction (pointing away from the
+        # source along the shower axis). Flip it to the *arrival* direction
+        # (detector -> source) so that the exported direction/azimuth follow the
+        # CoREAS truth convention: azimuth +180 deg, zenith unchanged. The
+        # chi-square is still evaluated with the propagation direction, so its
+        # value is unchanged.
+        propagation_direction = _direction_from_angles(theta, phi)
+        chi_square = calculate_PWM_chi_square(
+            matches, detector_positions, propagation_direction, 0.0, C_LIGHT_NS
+        )
+        arrival_direction = np.array(
+            [
+                -propagation_direction[0],
+                -propagation_direction[1],
+                propagation_direction[2],
+            ]
+        )
+        zenith = float(np.degrees(np.arccos(np.clip(arrival_direction[2], -1.0, 1.0))))
+        azimuth = float(calculate_azimuth(arrival_direction))
 
-        directions[event_key] = direction
-        zeniths[event_key] = theta
+        directions[event_key] = arrival_direction
+        zeniths[event_key] = zenith
         azimuths[event_key] = azimuth
         chi_squares[event_key] = chi_square
 

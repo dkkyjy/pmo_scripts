@@ -637,6 +637,11 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             logger.info(f"SWM EventNo{i}/{len(matching_times)}")
         if len(times) < 5: continue
         
+        # 统一键类型：matching_times 内层键可能来自 YAML 反序列化为 str，
+        # 而 detector_positions 使用 int 键；在事件入口规范为 int，
+        # 避免内部各处 detector_positions[did] 因键类型不一致而 KeyError。
+        times = {int(k): v for k, v in times.items()}
+        
         t_ns = np.array(list(times.values()))
         # current_pos = np.array([detector_positions[int(det_id)] for det_id in times.keys()])
         pos_list = np.array([detector_positions[int(det_id)] for det_id in times.keys()])
@@ -646,6 +651,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
         initial_direction = initial_directions[event_key]
         initial_t0 = t_ns[min_index] - t_mean_ns - 7.3e3/c
         current_du_ids = list(times.keys())
+        matches = list(times.items())
         index=i+1
         if(index%500 == 1 ) :
             logger.debug(
@@ -1122,8 +1128,8 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
                                         jac_r[2] += 2 * residual_r * dr_du
                                         jac_r[3] += 2 * residual_r * dr_dv
                                         jac_r[4] += 2 * residual_r * dr_dt0
-                                
-                                return err_r, jac_r
+                                    
+                                    return err_r, jac_r
                             
                             # UV参数化候选初值（基于当前拟合参数）
                             u_cur, v_cur = phi_to_uv(phi)
@@ -1241,7 +1247,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             
             results[event_key] = src
             chi_squares[event_key] = chi2
-            all_matches[event_key] = times
+            all_matches[event_key] = {str(k): v for k, v in times.items()}
 
             epsilon = 1e-12
             zenith = np.arccos(src[2] / (np.linalg.norm(src) + epsilon ) ) * 180 / np.pi
