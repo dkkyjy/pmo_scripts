@@ -65,6 +65,7 @@ DU_ROTATION_FILE = _resolve_data_file('RECON_DU_ROTATION_FILE', '_rtk_fred_rotat
 
 #--------------------------------------------------------------------------
 
+from logger_config import logger  # 统一日志输出 (loguru), 替代 print
 from equivalent import CEL # 引入计算天线有效长度的函数
 from galacticnoise_get import gala, gala_new # 引入获取银河噪声的函数
 from Time_domain_Shower_Edata_get import time_data_get # 引入获取时域簇射电场数据的函数
@@ -131,7 +132,7 @@ N, f0, f1 = 2000, 1.0, np.linspace(0, 1000, 1001) # 定义频率点数和频率�
 
 # magnetic_field_vector = helper.spherical_to_cartesian(np.deg2rad(60.79) + np.pi / 2, 0) # GRAND 站点的地磁场矢量, 单位矢量, 笛卡尔坐标系下
 magnetic_field_vector = helper.spherical_to_cartesian(np.pi / 2 - np.deg2rad(60.79), 180 * np.pi / 180) # GRAND 站点的地磁场矢量, 单位矢量, 笛卡尔坐标系下
-print("Magnetic field vector (cartesian):", magnetic_field_vector, flush = True)
+logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 # ? ? ? ? ? 地磁场矢量方位角 0.36 deg ?
 
 #--------------------------------------------------------------------------
@@ -486,7 +487,7 @@ def read_root_file_from_path(root_path, event_number_int):
 
     LST_time = int(np.round(gps_to_lst(gps_time[2])[0]))
 
-    print("Trigger Time @ LST Time (hours)", LST_time, flush = True)
+    logger.info(f"Trigger Time @ LST Time (hours) {LST_time}")
 
     return event_num, du_ids_all, gps_time, du_nanoseconds, LST_time, trace_1, trace_2, trace_3
 
@@ -501,7 +502,7 @@ def _synthesize_gps_times(root_path, event_number, n_du):
     """
     base = parse_sim_base_time(root_path)
     if base is None:
-        print(f"[WARN] 无法从路径解析 CoREAS 基准时间, gps_time 置零: {root_path}", flush = True)
+        logger.warning(f"[WARN] 无法从路径解析 CoREAS 基准时间, gps_time 置零: {root_path}")
         return np.zeros(3 * n_du, dtype = int)
     date_int, hhmmss_int, epoch = base
     row = [int(date_int), int(hhmmss_int), int(epoch) + int(event_number)]
@@ -615,7 +616,7 @@ def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanosec
     with open(temp_causal_file, 'w') as tf: tf.write(line_to_write + '\n')
 
     
-    print("Executing strict causality cleaning via graph optimization...", flush = True) # 调用引用的图论清理函数（设定最少容忍 4 个探测器）
+    logger.info("Executing strict causality cleaning via graph optimization...") # 调用引用的图论清理函数（设定最少容忍 4 个探测器）
     
     matching_times = optimized_read_matching_times_graph(
         file_path = temp_causal_file, 
@@ -627,7 +628,7 @@ def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanosec
     
     if len(matching_times) == 0: # 分析返回列表，应用掩码
         
-        print(f"Event {event_num} failed strict causality check completely. Skipping.", flush = True)
+        logger.warning(f"Event {event_num} failed strict causality check completely. Skipping.")
         
         return None
 
@@ -638,7 +639,7 @@ def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanosec
         du_target = int(du_id_str)
         match = np.where((du_ids_all == du_target) & (du_nanoseconds == ns_target))[0] # 在原始数组中寻找同时匹配 du_id 和 nanosecond 的行
         if len(match) > 0: indices.append(match[0])  # 取第一个匹配（理论上应该只有一个）
-        else: print(f"[WARN] 未找到匹配 (DU={du_target}, ns={ns_target})，跳过", flush=True)
+        else: logger.warning(f"[WARN] 未找到匹配 (DU={du_target}, ns={ns_target})，跳过")
 
     indices = np.array(indices)
     
@@ -650,7 +651,7 @@ def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanosec
     
     n_triggered = len(triggered_du_ids)
     
-    print(f"Passed strict causality check: {n_triggered} DUs retained: {triggered_du_ids}", flush=True)
+    logger.info(f"Passed strict causality check: {n_triggered} DUs retained: {triggered_du_ids}")
 
     #---------------------------------------------------------------------------
 
@@ -834,8 +835,8 @@ def rotate_xy_ports(arr, angle_deg, axis = -1):
 if os.path.exists(DU_ROTATION_FILE):
     DU_ROTATION_ANGLES = read_du_rotation_angles(DU_ROTATION_FILE)
 else:
-    print(f"[WARN] 未找到 DU 转角表 {DU_ROTATION_FILE}, 跳过端口转角修正。"
-          f"如需启用, 请将其放入 {_PARAM_DIR}/ 或用环境变量 RECON_DU_ROTATION_FILE 指定。", flush = True)
+    logger.warning(f"[WARN] 未找到 DU 转角表 {DU_ROTATION_FILE}, 跳过端口转角修正。"
+          f"如需启用, 请将其放入 {_PARAM_DIR}/ 或用环境变量 RECON_DU_ROTATION_FILE 指定。")
     DU_ROTATION_ANGLES = {}
 
 #--------------------------------------------------------------------------
@@ -875,8 +876,8 @@ def calculate_energy_fluence_and_error(Et_rec, Ep_rec, E_inv, freqs_real_MHz, N_
     
     Fluence_frequency = parseval_factor * np.sum(np.abs(Et_rec) ** 2 + np.abs(Ep_rec) ** 2) * transform_factor
 
-    print(f"Reconstructed E-field Fluence frequency = {Fluence_frequency:.3e} eV/m^2, time {Fluence:.3e} eV/m^2, relative error = {(Fluence_frequency / Fluence - 1.0):.3f}", flush=True)
-    print(f"Reconstructed E-field Fluence = {Fluence:.3e} eV/m^2 ± {Fluence_sigma:.3e} eV/m^2", flush=True)
+    logger.info(f"Reconstructed E-field Fluence frequency = {Fluence_frequency:.3e} eV/m^2, time {Fluence:.3e} eV/m^2, relative error = {(Fluence_frequency / Fluence - 1.0):.3f}")
+    logger.info(f"Reconstructed E-field Fluence = {Fluence:.3e} eV/m^2 ± {Fluence_sigma:.3e} eV/m^2")
     
     #----------------------------------------------------------------------
 
@@ -917,7 +918,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
     #   valid_du_ids: 给定则用 np.isin 直接筛天线, 替换内部 causality_filter 图优化筛选;
     #   theta / phi : 给定则直接采用该平面波方向, 跳过 PWF 网格搜索。
 
-    print("Starting E-field reconstruction using PWF from", root_path, ", event: ", int(event_number_int), flush = True)
+    logger.info(f"Starting E-field reconstruction using PWF from {root_path} , event:  {int(event_number_int)}")
 
     filename = os.path.splitext(os.path.basename(root_path))[0] + f"_event_{int(event_number_int)}" # 得到文件名和事件编号
 
@@ -948,9 +949,9 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
         trace_3_filtered = trace_3[causal_mask]
         DU_positions_rotated = DU_positions_rotated[causal_mask]
         n_triggered = len(triggered_du_ids)
-        print(f"[PWM] 使用外部 valid_du_ids 筛选天线: {n_triggered} DUs retained: {triggered_du_ids}", flush = True)
+        logger.info(f"[PWM] 使用外部 valid_du_ids 筛选天线: {n_triggered} DUs retained: {triggered_du_ids}")
         if n_triggered < 4:
-            print(f"Event {event_num} has only {n_triggered} DUs after valid_du_ids filter (< 4 minimum). Skipping.", flush = True)
+            logger.warning(f"Event {event_num} has only {n_triggered} DUs after valid_du_ids filter (< 4 minimum). Skipping.")
             return -1
     else:
         causal_out = causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanoseconds, trace_1, trace_2, trace_3, \
@@ -965,7 +966,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
     if theta is not None and phi is not None:
         # 外部给定平面波方向 (PWM): 直接采用, 跳过 PWF 网格搜索。
         rec_theta_plane, rec_phi_plane, chi2Plane = theta, phi, np.inf
-        print(f"[PWM] 使用外部平面波方向: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg", flush = True)
+        logger.info(f"[PWM] 使用外部平面波方向: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg")
     else:
         rec_theta_plane, rec_phi_plane, chi2Plane = np.inf, np.inf, np.inf # 平面波前拟合 (PWF) 寻找最佳角度
 
@@ -978,7 +979,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
         rec_theta_plane, rec_phi_plane = 180 - rec_theta_plane, rec_phi_plane + 180
         if rec_phi_plane > 360: rec_phi_plane = rec_phi_plane - 360
 
-        print(f"Best PWF fit: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg, chi2/dof = {chi2Plane:.2e}", flush = True)
+        logger.info(f"Best PWF fit: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg, chi2/dof = {chi2Plane:.2e}")
 
     #---------------------------------------------------------------------------
 
@@ -1504,7 +1505,7 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
         # 外部给定 Xmax 源点 (来自 candidates YAML 的 SWM 结果): 直接采用, 跳过 SWF 网格搜索。
         rec_x_xmax, rec_y_xmax, rec_z_xmax = float(x_xmax_external), float(y_xmax_external), float(z_xmax_external)
         chi2Sph = float(chi_square_external) if chi_square_external is not None else 0.0
-        print(f"[SWM] 使用外部 Xmax 源点: ({rec_x_xmax}, {rec_y_xmax}, {rec_z_xmax}), chi2 = {chi2Sph}", flush = True)
+        logger.info(f"[SWM] 使用外部 Xmax 源点: ({rec_x_xmax}, {rec_y_xmax}, {rec_z_xmax}), chi2 = {chi2Sph}")
     else:
         rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph = np.inf, np.inf, np.inf, np.inf
 
@@ -1574,15 +1575,15 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
 
         # rec_theta, rec_phi, rec_dw, rec_A, fmin = ADF_fit_fixdw(x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)], p[~np.isnan(p)], rec_x_xmax, rec_y_xmax, rec_z_xmax, theta0, phi0, dw0, A0, obs_altitude)
     
-        print("dw out of range, refit with fixed dw:", rec_dw, flush = True)
+        logger.info(f"dw out of range, refit with fixed dw: {rec_dw}")
     
     try: # 重新调用 ADF 类计算切伦科夫角 wc，注意这里使用了拟合得到的参数
         temp_adf = ADF(x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)], p[~np.isnan(p)], rec_x_xmax, rec_y_xmax, rec_z_xmax, obs_altitude, (p_sigma[~np.isnan(p)] if p_sigma is not None else None))
         temp_adf.chi2(rec_theta, rec_phi, rec_dw, rec_A, 0.01, 1)
         wc_adf = temp_adf.wc
-        print("Fitted wc:", np.asarray(wc_adf).reshape(-1)[0], "rec_dw:", rec_dw, flush = True)
+        logger.info(f"Fitted wc: {np.asarray(wc_adf).reshape(-1)[0]} rec_dw: {rec_dw}")
     except Exception as e:
-        print(f"Could not calculate wc for display: {e}", flush = True)
+        logger.warning(f"Could not calculate wc for display: {e}")
     
     return zenith_ini, azimuth_ini, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph / (len(x) - 3), rec_theta, rec_phi, rec_dw, rec_A, fmin / (len(p[~np.isnan(p)]) - (3 if rec_dw_err == 0 else 4)), np.asarray(wc_adf).reshape(-1)[0], rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err # wc_adf 兼容写法(标量/单元素数组都可)
 
@@ -1757,7 +1758,7 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     # 可选外部先验 (来自 candidates YAML 的 SWM 结果): x_xmax/y_xmax/z_xmax/chi_square_external
     # 给定则透传给 recons_angle, 跳过其内部 SWF 网格搜索。
 
-    print("Starting energy reconstruction using ADF from", root_path, ", event: ", int(event_number_int), flush = True)
+    logger.info(f"Starting energy reconstruction using ADF from {root_path} , event:  {int(event_number_int)}")
 
     filename = os.path.splitext(os.path.basename(root_path))[0] + f"_event_{int(event_number_int)}" # 得到文件名和事件编号
 
@@ -1806,38 +1807,38 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     recons_angle(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
 
 
-    print("Reconstructed Xmax coordinates (m) and chi2:", rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph, flush = True)
+    logger.info(f"Reconstructed Xmax coordinates (m) and chi2: {rec_x_xmax} {rec_y_xmax} {rec_z_xmax} {chi2Sph}")
 
-    print("Reconstructed shower direction (theta, phi in degrees and errors):", rec_theta_sph, rec_theta_err, rec_phi_sph, rec_phi_err, flush = True)
+    logger.info(f"Reconstructed shower direction (theta, phi in degrees and errors): {rec_theta_sph} {rec_theta_err} {rec_phi_sph} {rec_phi_err}")
 
-    print("Reconstructed ADF parameters (A, wc, dw, fmin/DOF):", rec_A, rec_wc, rec_dw, fmin, flush = True)
+    logger.info(f"Reconstructed ADF parameters (A, wc, dw, fmin/DOF): {rec_A} {rec_wc} {rec_dw} {fmin}")
 
-    print("Reconstructed ADF parameter errors (A_err, wc_err, dw_err):", rec_A_err, 0, rec_dw_err, flush = True)
+    logger.info(f"Reconstructed ADF parameter errors (A_err, wc_err, dw_err): {rec_A_err} 0 {rec_dw_err}")
 
     #-------------------------------------------------------------------------------------------------
 
     height = helper.get_local_altitude([rec_x_xmax, rec_y_xmax, rec_z_xmax + 1280]) # 计算重建的 Xmax 坐标对应的海拔高度
-    print("Local altitude at reconstructed Xmax (m):", height, flush = True)
+    logger.info(f"Local altitude at reconstructed Xmax (m): {height}")
 
     #-------------------------------------------------------------------------------------------------
 
     rho = atm.get_density(height, model = 1) * 1e-3 # 使用重建的 Xmax 高度计算大气密度
-    print("Reconstructed Xmax altitude:", height, "rho at reconstructed Xmax (g/cm^3):", rho, flush = True)
+    logger.info(f"Reconstructed Xmax altitude: {height} rho at reconstructed Xmax (g/cm^3): {rho}")
 
     #-------------------------------------------------------------------------------------------------
 
     shower_axis = helper.spherical_to_cartesian(np.deg2rad(rec_theta_sph), np.deg2rad(rec_phi_sph))
-    print("Shower axis unit vector:", shower_axis, flush = True)
+    logger.info(f"Shower axis unit vector: {shower_axis}")
 
             
     alpha = np.arccos(np.dot(shower_axis, magnetic_field_vector) / (np.linalg.norm(shower_axis) * np.linalg.norm(magnetic_field_vector)))
-    print("alpha:", alpha * 180 / np.pi, flush = True)
+    logger.info(f"alpha: {alpha * 180 / np.pi}")
 
     #-------------------------------------------------------------------------------------------------
 
     corex, corey, corez, dXmax = find_core(rec_x_xmax, rec_y_xmax, rec_z_xmax, rec_theta_sph, rec_phi_sph, obs_altitude)
     shower_core = np.array([corex, corey, corez])
-    print("Shower core:", shower_core, "dXmax:", dXmax, flush = True)
+    logger.info(f"Shower core: {shower_core} dXmax: {dXmax}")
 
 
     #-------------------------------------------------------------------------------------------------
@@ -2012,10 +2013,10 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     angle_meas, angle_expected = angle_meas % 180, angle_expected % 180 # 将角度折叠到 [0, 180) 范围内，因为偏振方向具有 180 度周期性
 
     delta_angle = np.minimum(np.abs(angle_meas - angle_expected), 180 - np.abs(angle_meas - angle_expected)) # 计算测量和期望偏振角之间的最小差值，考虑到周期性
-    print("Difference (degrees):", np.abs(delta_angle), flush=True)
+    logger.info(f"Difference (degrees): {np.abs(delta_angle)}")
 
     mean_delta_angle, median_delta_angle = np.mean(np.abs(delta_angle)), np.median(np.abs(delta_angle))
-    print("Mean difference (degrees):", mean_delta_angle, "Median difference (degrees):", median_delta_angle, flush=True)
+    logger.info(f"Mean difference (degrees): {mean_delta_angle} Median difference (degrees): {median_delta_angle}")
 
     #-------------------------------------------------------------------------------------------------
     #-------------------------------------------------------------------------------------------------
@@ -2094,9 +2095,9 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     chi2_che_err = np.array([chi2_che[4], chi2_che[5], chi2_che[6]])
 
-    print("Initial Che parameters:", f_che_pars, "with errors:", chi2_che_err, "Chi2/dof", chi2_che[3], flush = True)
+    logger.info(f"Initial Che parameters: {f_che_pars} with errors: {chi2_che_err} Chi2/dof {chi2_che[3]}")
 
-    print("Asymmetric ADF parameters:", f"{rec_A:.5e}", rec_wc, rec_dw, flush = True)
+    logger.info(f'Asymmetric ADF parameters: {f"{rec_A:.5e}"} {rec_wc} {rec_dw}')
 
     #---------------------- 计算辐射能量 ------------------------------------------------------
     #----------------------------------------------------------------------------------------
@@ -2106,10 +2107,10 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     factor = 1 # 0.5e-9 / 377 * (1e-6) ** 2 * 6.241509e18 # Unit conversion factor
 
     E_rad_GeV = e_rad_geo_fit * factor * 2 * np.pi * dXmax ** 2
-    print("Reconstructed E_rad (GeV):", E_rad_GeV / 1e9, flush = True)
+    logger.info(f"Reconstructed E_rad (GeV): {E_rad_GeV / 1e9}")
 
     correction_E_geo = density_and_alpha_correction(E_rad_GeV, rho, alpha)
-    print("Density and alpha corrected E_geo (GeV):", correction_E_geo / 1e9, flush = True)
+    logger.info(f"Density and alpha corrected E_geo (GeV): {correction_E_geo / 1e9}")
     
     #----------------------------------------------------------------------------------------
 
@@ -2135,7 +2136,7 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
         
         E_che_EeV_err = np.sqrt(dEamp[energy_list] ** 2 + dEwc[energy_list] ** 2 + dEdw[energy_list] ** 2)
 
-        print(f"Reconstructed E_em (EeV) from Cherenkov fit: {float(E_che_EeV_center[energy_list]):.2f} ± {float(E_che_EeV_err):.2f} EeV", flush = True)
+        logger.info(f"Reconstructed E_em (EeV) from Cherenkov fit: {float(E_che_EeV_center[energy_list]):.2f} ± {float(E_che_EeV_err):.2f} EeV")
 
     #----------------------------------------------------------------------------------------
     
@@ -2150,11 +2151,11 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     E_em_GeV_two = E_em_all_two * factor * dXmax ** 2
     
-    print("Reconstructed E_em (GeV) from asymmetric ADF:", E_em_GeV_two / 1e9, flush = True)
+    logger.info(f"Reconstructed E_em (GeV) from asymmetric ADF: {E_em_GeV_two / 1e9}")
 
     E_em_corrected_two = density_and_alpha_correction(E_em_GeV_two, rho, alpha)
 
-    print("Density and alpha corrected E_em (GeV) from asymmetric ADF:", E_em_corrected_two / 1e9, flush = True)
+    logger.info(f"Density and alpha corrected E_em (GeV) from asymmetric ADF: {E_em_corrected_two / 1e9}")
     
     #----------------------------------------------------------------------------------------
     
@@ -2185,13 +2186,13 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
         E_adf_EeV_err = np.sqrt(dE_A_adf[energy_list] ** 2 + dE_dw_adf[energy_list] ** 2)
 
-        print(f"Reconstructed E_em (EeV) from asymmetric ADF: {float(E_cent_adf[energy_list]):.2f} ± {float(E_adf_EeV_err):.2f} EeV", flush = True)
+        logger.info(f"Reconstructed E_em (EeV) from asymmetric ADF: {float(E_cent_adf[energy_list]):.2f} ± {float(E_adf_EeV_err):.2f} EeV")
 
     #------------------------------------------------------------------------------------------------
     #------------------------------ 绘制切伦科夫拟合结果 ------------------------------------------------
 
-    print("energy flux:", Fluence * early_late, flush = True)
-    print("energy flux error:", Fluence_sigma * early_late, flush = True)
+    logger.info(f"energy flux: {Fluence * early_late}")
+    logger.info(f"energy flux error: {Fluence_sigma * early_late}")
 
     plt.figure(figsize = (8, 6))
 
@@ -2245,8 +2246,8 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     #----------------------------------------------------------------------------------------
 
-    print("------------------------------------------------------------------------------------------------", flush = True)
-    print('\n', flush = True)
+    logger.info("------------------------------------------------------------------------------------------------")
+    logger.info("\n")
 
     #----------------------------------------------------------------------------------------
 
@@ -2265,8 +2266,8 @@ if __name__ == '__main__':
         efield_recons_from_efield_PWF(_demo_root, _demo_event)
         energy_restruction(_demo_root, _demo_event)
     else:
-        print("未设置 RECON_ROOT, 跳过内置示例。"
+        logger.info("未设置 RECON_ROOT, 跳过内置示例。"
               "调用 efield_recons_from_efield_PWF(root_path, event_number, det_pos_path=None) "
-              "与 energy_restruction(root_path, event_number, det_pos_path=None) 即可。", flush = True)
+              "与 energy_restruction(root_path, event_number, det_pos_path=None) 即可。")
 
 #--------------------------------------------------------------------------
