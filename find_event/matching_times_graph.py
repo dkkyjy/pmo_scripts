@@ -65,7 +65,10 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
         logger.debug(f"———— 处理事件 {key} ————")
         for det_id, value in matches.items():
             logger.debug(f"det_id: {det_id}, value: {value}")
-            for time_ns in value:
+            # ``time`` is ``{du: t}`` (scalar) from readroot; tolerate a legacy
+            # single-element list payload as well.
+            time_values = value if isinstance(value, (list, tuple)) else [value]
+            for time_ns in time_values:
                 logger.debug(f"time_ns: {time_ns}")
                 nodes.append((str(det_id), time_ns, node_id))
                 node_info[node_id] = (str(det_id), time_ns)

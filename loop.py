@@ -666,13 +666,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--skip-matching",
-        action="store_true",
-        help="pass --skip-matching through to main.py",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "pass --skip-matching through to main.py (skips the causality "
+            "matching stage). Default: on for --reader coreas, off for "
+            "--reader trigger. Override with --skip-matching/--no-skip-matching."
+        ),
     )
     ap.add_argument(
         "--skip-fingerprint",
-        action="store_true",
-        help="pass --skip-fingerprint through to main.py",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "pass --skip-fingerprint through to main.py (skips the "
+            "time-difference fingerprint stage). Default: on for --reader "
+            "coreas, off for --reader trigger. Override with "
+            "--skip-fingerprint/--no-skip-fingerprint."
+        ),
     )
     ap.add_argument(
         "--force-recompute",
@@ -689,6 +700,16 @@ def parse_cli_args() -> argparse.Namespace:
 
     if args.jobs < 1:
         ap.error("--jobs must be >= 1")
+
+    # Default the causality-matching and fingerprint stages from the reader
+    # layout: CoREAS simulation events are all signal, so both stages are
+    # skipped by default; real trigger data keeps them enabled. An explicit
+    # --skip-matching/--no-skip-matching (or the fingerprint equivalent)
+    # always wins.
+    if args.skip_matching is None:
+        args.skip_matching = args.reader == "coreas"
+    if args.skip_fingerprint is None:
+        args.skip_fingerprint = args.reader == "coreas"
 
     return args
 
