@@ -63,17 +63,12 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
         du_triggers = defaultdict(list)
         node_id = 0
         logger.debug(f"———— 处理事件 {key} ————")
-        for det_id, value in matches.items():
-            logger.debug(f"det_id: {det_id}, value: {value}")
-            # ``time`` is ``{du: t}`` (scalar) from readroot; tolerate a legacy
-            # single-element list payload as well.
-            time_values = value if isinstance(value, (list, tuple)) else [value]
-            for time_ns in time_values:
-                logger.debug(f"time_ns: {time_ns}")
-                nodes.append((str(det_id), time_ns, node_id))
-                node_info[node_id] = (str(det_id), time_ns)
-                du_triggers[str(det_id)].append((time_ns, node_id))
-                node_id += 1
+        for det_id, time_ns in matches.items():
+            logger.debug(f"det_id: {det_id}, time_ns: {time_ns}")
+            nodes.append((str(det_id), time_ns, node_id))
+            node_info[node_id] = (str(det_id), time_ns)
+            du_triggers[str(det_id)].append((time_ns, node_id))
+            node_id += 1
 
         logger.debug(f"📊 节点解析统计: 总构建节点数: {len(nodes)}, 触发的探测器数: {len(du_triggers)}, 各探测器触发数: { {k:len(v) for k,v in du_triggers.items()} }")
         if len(du_triggers) < min_detectors:

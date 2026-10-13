@@ -119,10 +119,9 @@ def build_time_map_and_du_ids(
 ) -> Tuple[Dict[str, int], List[str]]:
     """Build DU->time map and ordered DU id list from event samples.
 
-    The returned ``time_map`` maps each DU id (as a string) to a single
-    trigger time in nanoseconds, i.e. ``{du: t}``. When a DU appears more
-    than once in one event the earliest trigger is kept, matching the
-    downstream matching/fingerprint/swm stages which expect a scalar.
+    The returned ``time_map`` maps each DU id (as a string) to its trigger
+    time in nanoseconds, i.e. ``{du: t}``. A DU fires at most once per
+    event, so each id appears exactly once and the mapping is one-to-one.
     """
     time_map: Dict[str, int] = {}
     list_du_id: List[str] = []
@@ -130,9 +129,7 @@ def build_time_map_and_du_ids(
     for du_id, du_ns in zip(du_ids, du_nanoseconds):
         du_id_str = str(du_id)
         list_du_id.append(du_id_str)
-        ns = int(du_ns)
-        if du_id_str not in time_map or ns < time_map[du_id_str]:
-            time_map[du_id_str] = ns
+        time_map[du_id_str] = int(du_ns)
 
     return time_map, list_du_id
 
