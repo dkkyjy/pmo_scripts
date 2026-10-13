@@ -1,0 +1,9 @@
+numpy
+scipy
+matplotlib
+scienceplots
+loguru
+uproot
+pyyaml
+pytest
+pytest-cov
