@@ -92,7 +92,7 @@ python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 \
 | `--with-signal` | 关 | 用 `read_trace` 读取波形幅值，并让 `main.py` 处理信号 |
 | `--left` / `--right` | `0` / `512` | `read_trace` 的采样区间 |
 | `--channel` | `XY` | 匹配文件通道后缀：`F`/`X`/`Y`/`Z`/`XY` |
-| `--det-pos` | `None` | 探测器坐标文件（省略时用 `main.py` 内默认 `_gp65_rtksort_2002_DU7.txt`） |
+| `--det-pos` | 随 `--reader` 推导 | 探测器坐标文件：coreas 默认 `du_coords_CoreasDC2.txt`，trigger 默认 `_gp65_rtksort_2002_DU7.txt`（`main.py` 内默认） |
 | `--skip-matching` / `--no-skip-matching` | 见下 | 跳过因果律匹配阶段 |
 | `--skip-fingerprint` / `--no-skip-fingerprint` | 见下 | 跳过指纹过滤阶段 |
 | `--force-recompute` | 关 | 忽略已有 `_matched`/`_PWM`/`_SWM` 缓存并重算 |
@@ -103,6 +103,11 @@ python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 \
 
 > 说明：这两个阶段是面向真实触发数据设计的——因果律匹配用于剔除偶然符合，
 > 指纹过滤用于剔除固定重复源。CoREAS 模拟数据无此类噪声，默认跳过可省去开销。
+
+`--det-pos` 默认值同样随 `--reader` 推导：**coreas 默认 `du_coords_CoreasDC2.txt`**、
+**trigger 默认 `_gp65_rtksort_2002_DU7.txt`**（后者为 `main.py` 的默认）。
+CoREAS 的 DU 编号从 0 开始、阵列布局与真实阵列不同，用错坐标会导致
+`missing detector position for DU xxx` 并跳过事件。显式传入 `--det-pos` 可覆盖该默认。
 
 ### 2. 单文件分步执行
 

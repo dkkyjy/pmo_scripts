@@ -46,6 +46,11 @@ except Exception:
 # ``sim_..._<YYYYMMDD>_<HHMMSS>_...``.
 _SIM_DIR_DATE_PATTERN = re.compile(r"_(\d{8})_")
 
+# CoREAS/Dunhuang simulations number their DUs from 0 and use a different
+# detector layout than the real trigger array, so they need their own
+# coordinate file when ``--det-pos`` is not given explicitly.
+DEFAULT_COREAS_DET_POS = "du_coords_CoreasDC2.txt"
+
 
 @dataclass(frozen=True)
 class TaskSpec:
@@ -605,8 +610,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="det_pos",
         default=None,
         help=(
-            "detector position file passed through to main.py; defaults to "
-            "_gp65_rtksort_2002_DU7.txt inside main.py when omitted"
+            "detector position file passed through to main.py. Defaults to "
+            "du_coords_CoreasDC2.txt for --reader coreas, or "
+            "_gp65_rtksort_2002_DU7.txt (main.py's own default) for "
+            "--reader trigger when omitted"
         ),
     )
     ap.add_argument(
@@ -710,6 +717,13 @@ def parse_cli_args() -> argparse.Namespace:
         args.skip_matching = args.reader == "coreas"
     if args.skip_fingerprint is None:
         args.skip_fingerprint = args.reader == "coreas"
+
+    # Default the detector-position file from the reader layout: CoREAS
+    # simulations number their DUs from 0, so they need the simulation
+    # coordinate file rather than main.py's real-array default. An explicit
+    # --det-pos always wins.
+    if args.det_pos is None and args.reader == "coreas":
+        args.det_pos = DEFAULT_COREAS_DET_POS
 
     return args
 
