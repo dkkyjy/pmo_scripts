@@ -62,7 +62,7 @@ counterpart exists (e.g. ``prim_type`` -> ``primary_type``,
     truth:
         primary_type: [str, ...]   # prim_type
         energy_primary: float      # prim_energy
-        zenith: float              # shower_zenith
+        zenith: float              # shower_zenith, folded to 0-90 (see below)
         azimuth: float             # shower_azimuth + 180 (arrival direction)
         magnetic_field: [x,y,z]
         xmax_grams: float
@@ -314,11 +314,19 @@ def read_starshape_file(
         # (away from the source), whereas the CoREAS truth ``azimuth`` and the
         # PWM/SWM exported arrival direction (detector -> source) share the
         # opposite convention, differing by 180 deg. Rotate it so the exported
-        # truth azimuth matches the reconstruction convention. ``zenith`` needs
-        # no flip: the arrival/propagation directions only differ in their
-        # horizontal components.
+        # truth azimuth matches the reconstruction convention.
         if truth.get("azimuth") is not None:
             truth["azimuth"] = (float(truth["azimuth"]) + 180.0) % 360.0
+
+        # ``shower_zenith`` may exceed 90 deg (up-going showers; the Mazongshan
+        # StarShape set spans ~106-137 deg). Fold it into 0-90 via
+        # ``180 - zenith`` so the exported truth zenith follows the same
+        # hemispheric convention as the reconstruction outputs.
+        if truth.get("zenith") is not None:
+            zenith_value = float(truth["zenith"])
+            if zenith_value > 90.0:
+                zenith_value = 180.0 - zenith_value
+            truth["zenith"] = zenith_value
 
         # Event-level SimEfield config scalars (``field_sim`` omitted).
         efield_config: Dict[str, Any] = {}
