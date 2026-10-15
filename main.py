@@ -55,6 +55,38 @@ def _load_event_metadata_map(matching_file):
     return metadata
 
 
+def _load_det_pos_by_event(matching_file):
+    """Load per-event detector coordinates embedded in a matching YAML file.
+
+    StarShape files carry no static detector-coordinate file: each event embeds
+    its own ``det_pos`` mapping. Returns ``{event_key: {det_id(int): np.array}}``
+    when at least one event has an embedded ``det_pos``, otherwise ``None`` so
+    callers fall back to the static ``det_pos_file`` layout.
+    """
+    if not os.path.exists(matching_file):
+        return None
+
+    with open(matching_file, "r") as f:
+        data = yaml.load(f, Loader=yaml.FullLoader)
+
+    if not isinstance(data, dict):
+        return None
+
+    by_event = {}
+    for key, payload in data.items():
+        if not isinstance(payload, dict):
+            continue
+        det_pos = payload.get("det_pos", None)
+        if not isinstance(det_pos, dict) or not det_pos:
+            continue
+        by_event[key] = {
+            int(det_id): np.asarray(position, dtype=float)
+            for det_id, position in det_pos.items()
+        }
+
+    return by_event or None
+
+
 # =========================
 # Command line argument parsing (modular entry)
 # =========================
@@ -640,6 +672,7 @@ def run_pwm_stage(
     state,
     fig_prefix,
     fingerprint_computed,
+    detector_positions_by_event=None,
 ):
     """Ensure PWM-stage data is available in memory and cache."""
     pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
@@ -724,6 +757,7 @@ def run_pwm_stage(
         directions, zeniths, azimuths, chi_squares = fe_pwm.plane_wave_model(
             state["times"],
             detector_positions,
+            detector_positions_by_event=detector_positions_by_event,
         )
 
         results = {}
@@ -788,6 +822,7 @@ def run_swm_stage(
     state,
     fig_prefix,
     pwm_computed,
+    detector_positions_by_event=None,
 ):
     """Ensure SWM-stage data is available in memory and cache."""
     swm_fitted_file = matching_file.replace(".yaml", "_SWM.yaml")
@@ -864,6 +899,7 @@ def run_swm_stage(
             state["times"],
             detector_positions,
             seed_directions,
+            detector_positions_by_event=detector_positions_by_event,
         )
 
         results = {}
@@ -928,14 +964,33 @@ def main(
     # Configure loguru to replace the root logging configuration
     logger.info(f"Start processing: {matching_file}")
 
-    if not os.path.exists(det_pos_file):
-        logger.error(f"Detector position file does not exist: {det_pos_file}")
-        return 2
+    # StarShape files embed per-event detector coordinates in the matching YAML
+    # instead of relying on a static coordinate file; load them first so that a
+    # missing det_pos_file can be tolerated for that layout.
+    detector_positions_by_event = _load_det_pos_by_event(matching_file)
+    if detector_positions_by_event is not None:
+        logger.info(
+            "Loaded per-event detector coordinates from {} for {} events",
+            matching_file,
+            len(detector_positions_by_event),
+        )
 
-    try:
-        detector_positions = load_data_from_file(det_pos_file)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.error(f"Failed to load detector position file {det_pos_file}: {exc}")
+    if os.path.exists(det_pos_file):
+        try:
+            detector_positions = load_data_from_file(det_pos_file)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error(f"Failed to load detector position file {det_pos_file}: {exc}")
+            return 2
+    elif detector_positions_by_event is not None:
+        # No static file, but every event carries its own layout: seed an empty
+        # fallback map (used only if an event is missing from the by-event map).
+        logger.info(
+            "Detector position file {} not found; using per-event coordinates only.",
+            det_pos_file,
+        )
+        detector_positions = {}
+    else:
+        logger.error(f"Detector position file does not exist: {det_pos_file}")
         return 2
     metadata = _load_event_metadata_map(matching_file)
 
@@ -1005,6 +1060,7 @@ def main(
         state,
         fig_prefix,
         fingerprint_computed,
+        detector_positions_by_event=detector_positions_by_event,
     )
     logger.info('Finished PWM stage')
     
@@ -1018,6 +1074,7 @@ def main(
         state,
         fig_prefix,
         pwm_computed,
+        detector_positions_by_event=detector_positions_by_event,
     )
     logger.info('Finished SWM stage')
 

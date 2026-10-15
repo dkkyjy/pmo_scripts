@@ -276,7 +276,10 @@ def _fit_event_direction(positions, time_values, c_value):
     objective_with_jac = _make_objective_with_jac(diff_pos, diff_time, c_value)
     objective_only = lambda params: objective_with_jac(params)[0]
 
-    bounds = [(0, 95), (-180, 180)]
+    # Theta may exceed 90 deg: for up-going geometry (e.g. StarShape, shower
+    # zenith > 90 deg) the propagation direction points below the horizontal, so
+    # the bound must admit the full range rather than clamp at 95 deg.
+    bounds = [(0, 180), (-180, 180)]
     best_result = None
     min_error = float("inf")
 
@@ -340,17 +343,31 @@ def _fit_event_direction(positions, time_values, c_value):
     return best_result
 
 
-def plane_wave_model(matching_times, detector_positions):
-    """Fit each event with the gradient-based plane-wave model using the main pipeline contract."""
+def plane_wave_model(matching_times, detector_positions, detector_positions_by_event=None):
+    """Fit each event with the gradient-based plane-wave model using the main pipeline contract.
+
+    ``detector_positions`` is the shared ``{det_id: [x, y, z]}`` map used for
+    static layouts (trigger/CoREAS). When the antenna layout changes event to
+    event (e.g. StarShape), pass ``detector_positions_by_event`` as
+    ``{event_key: {det_id: [x, y, z]}}``; each event is then fitted with its own
+    coordinates while ``detector_positions`` acts as a fallback.
+    """
 
     directions = {}
     zeniths = {}
     azimuths = {}
     chi_squares = {}
 
+    global_positions = detector_positions
+
     for event_index, (event_key, times) in enumerate(matching_times.items(), start=1):
         if event_index % 1000 == 0:
             logger.info(f"PWM EventNo{event_index}/{len(matching_times)}")
+
+        if detector_positions_by_event is not None:
+            detector_positions = detector_positions_by_event.get(event_key, global_positions)
+        else:
+            detector_positions = global_positions
 
         try:
             matches, _det_ids, positions, time_values = _normalize_matches(times, detector_positions)

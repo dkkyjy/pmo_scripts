@@ -399,7 +399,12 @@ def plot_reconstructed_positions_SWM(datetimes, directions, chi_squares, save_na
     # Bottom right: Chi-square distribution (log scale)
     ax6 = fig.add_subplot(236)
     if len(chi_squares) > 1:
-        bins = np.logspace(np.log10(min(chi_squares) + 0.01), np.log10(max(chi_squares)), 100)
+        lo = min(chi_squares) + 0.01
+        hi = max(chi_squares)
+        if lo >= hi:
+            lo = max(min(chi_squares), 1e-6) / 10.0
+            hi = max(chi_squares)
+        bins = np.logspace(np.log10(lo), np.log10(hi), 100)
     else:
         bins = np.array([chi_squares[0], chi_squares[0] + 1e-6])
     ax6.hist(chi_squares, bins=bins, histtype='step', linewidth=2, color='black')

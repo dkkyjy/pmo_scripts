@@ -51,6 +51,10 @@ _SIM_DIR_DATE_PATTERN = re.compile(r"_(\d{8})_")
 # coordinate file when ``--det-pos`` is not given explicitly.
 DEFAULT_COREAS_DET_POS = "du_coords_CoreasDC2.txt"
 
+# StarShape files embed no wall-clock date and are processed one file at a time,
+# so their outputs all land under this fixed date sub-directory.
+STARSHAPE_OUT_DATE = "starshape"
+
 
 @dataclass(frozen=True)
 class TaskSpec:
@@ -71,6 +75,7 @@ class TaskSpec:
     force_recompute: bool
     det_pos: str
     reader: str
+    max_events: int = 0
 
 
 TaskResult = Tuple[str, int]
@@ -247,6 +252,7 @@ def make_tasks_for_file_paths(
             force_recompute=args.force_recompute,
             det_pos=args.det_pos,
             reader=args.reader,
+            max_events=args.max_events,
         )
         for file_path in file_path_list
     ]
@@ -260,6 +266,8 @@ def build_tasks(
     """Build all worker tasks for the date range."""
     if args.reader == "coreas":
         return _build_simulation_tasks(start, end, args)
+    if args.reader == "starshape":
+        return _build_starshape_tasks(args)
 
     tasks: list[TaskSpec] = []
     for date in times_between(start, end):
@@ -310,6 +318,26 @@ def _build_simulation_tasks(
     return tasks
 
 
+def _build_starshape_tasks(args: argparse.Namespace) -> list[TaskSpec]:
+    """Build a single task for one StarShape file.
+
+    StarShape simulations embed no wall-clock date, so the positional start/end
+    datetimes are ignored and ``--base-path`` points directly at one ROOT file.
+    All outputs land under the fixed :data:`STARSHAPE_OUT_DATE` sub-directory.
+    """
+    file_path = args.base_path
+    if not os.path.isfile(file_path):
+        logger.error(f"StarShape --base-path must be a single ROOT file: {file_path}")
+        return []
+
+    out_date_dir = Path(args.out_dir_base) / STARSHAPE_OUT_DATE
+    if not out_date_dir.exists():
+        out_date_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created output directory: {out_date_dir}")
+
+    return make_tasks_for_file_paths([file_path], STARSHAPE_OUT_DATE, args)
+
+
 def execute_tasks(tasks: list[TaskSpec], jobs: int) -> list[TaskResult]:
     """Execute tasks sequentially or in multiprocessing mode."""
     if jobs <= 1:
@@ -319,17 +347,52 @@ def execute_tasks(tasks: list[TaskSpec], jobs: int) -> list[TaskResult]:
         return pool.map(process_date, tasks)
 
 
-def make_readheader_command(file_path: str, date: str, out_dir_base: str) -> list[str]:
-    """Construct the command for read_header with file_path, date, out_dir_base parameters."""
+def make_readheader_command(
+    file_path: str,
+    date: str,
+    out_dir_base: str,
+    reader: str = "trigger",
+    max_events: int = 0,
+    with_signal: bool = False,
+    left: int = 0,
+    right: int = 512,
+    channel: str = "XY",
+) -> list[str]:
+    """Construct the read command with file_path, date, out_dir_base parameters.
+
+    ``reader`` dispatches to the matching reader: ``"starshape"`` ->
+    ``readroot/read_starshape.py``, ``"coreas"`` -> ``readroot/read_coreas.py``,
+    otherwise ``readroot/read_header.py``. The simulation readers accept the same
+    ``--max-events`` / ``--with-signal`` options; the trigger reader ignores them.
+    """
+    if reader == "starshape":
+        script = "readroot/read_starshape.py"
+    elif reader == "coreas":
+        script = "readroot/read_coreas.py"
+    else:
+        script = "readroot/read_header.py"
     cmd = [
         sys.executable,  # use current python interpreter
-        "readroot/read_header.py",
+        script,
         file_path,
         "--date",
         date,
         "--out_dir_base",
         out_dir_base,
     ]
+    if reader in ("starshape", "coreas"):
+        if max_events > 0:
+            cmd += ["--max-events", str(max_events)]
+        if with_signal:
+            cmd += [
+                "--with-signal",
+                "--left",
+                str(left),
+                "--right",
+                str(right),
+                "--channel",
+                channel,
+            ]
     return cmd
 
 
@@ -492,12 +555,16 @@ def process_date(task: TaskSpec) -> TaskResult:
     skip_fingerprint = task.skip_fingerprint
     force_recompute = task.force_recompute
     det_pos = task.det_pos
+    reader = task.reader
 
     # Log/read command
     if skip_read:
         logger.info(f"Skipping read_header for {file_path}")
     else:
-        if with_signal:
+        # Trigger data with --with-signal reads traces through read_trace.py and
+        # then main.py; the simulation readers (coreas/starshape) fold the signal
+        # block into their own single command instead.
+        if with_signal and reader == "trigger":
             readtrace_cmd = make_readtrace_command(
                 file_path, date, out_dir_base, left, right, channel
             )
@@ -523,7 +590,17 @@ def process_date(task: TaskSpec) -> TaskResult:
                     )
                     return (file_path, 2)
         else:
-            readheader_cmd = make_readheader_command(file_path, date, out_dir_base)
+            readheader_cmd = make_readheader_command(
+                file_path,
+                date,
+                out_dir_base,
+                reader,
+                task.max_events,
+                with_signal,
+                left,
+                right,
+                channel,
+            )
             logger.info(f"{' '.join(readheader_cmd)}")
 
             if do_run:
@@ -597,12 +674,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--reader",
-        choices=["trigger", "coreas"],
+        choices=["trigger", "coreas", "starshape"],
         default="trigger",
         help=(
             "input layout: 'trigger' scans base-path/date for real Trigger*.root "
             "files (default); 'coreas' scans base-path recursively for CoREAS "
-            "simulation adc_*.root files"
+            "simulation adc_*.root files; 'starshape' treats --base-path as a "
+            "single StarShape ROOT file and ignores the date arguments"
         ),
     )
     ap.add_argument(
@@ -697,6 +775,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="pass --force-recompute through to main.py",
     )
+    ap.add_argument(
+        "--max-events",
+        dest="max_events",
+        type=int,
+        default=0,
+        help=(
+            "forward --max-events to the simulation readers (--reader "
+            "coreas/starshape) to only read the first N events (0 = all)"
+        ),
+    )
     return ap
 
 
@@ -709,14 +797,15 @@ def parse_cli_args() -> argparse.Namespace:
         ap.error("--jobs must be >= 1")
 
     # Default the causality-matching and fingerprint stages from the reader
-    # layout: CoREAS simulation events are all signal, so both stages are
-    # skipped by default; real trigger data keeps them enabled. An explicit
+    # layout: CoREAS/StarShape simulation events are all signal, so both stages
+    # are skipped by default; real trigger data keeps them enabled. An explicit
     # --skip-matching/--no-skip-matching (or the fingerprint equivalent)
     # always wins.
+    simulation_reader = args.reader in ("coreas", "starshape")
     if args.skip_matching is None:
-        args.skip_matching = args.reader == "coreas"
+        args.skip_matching = simulation_reader
     if args.skip_fingerprint is None:
-        args.skip_fingerprint = args.reader == "coreas"
+        args.skip_fingerprint = simulation_reader
 
     # Default the detector-position file from the reader layout: CoREAS
     # simulations number their DUs from 0, so they need the simulation

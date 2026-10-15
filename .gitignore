@@ -12,6 +12,9 @@ __pycache__/
 .github/
 .codebuddy
 
+# Agent runtime working directory
+.reasonix/
+
 # Output files
 *.png
 *.pdf

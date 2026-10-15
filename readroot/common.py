@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import yaml
 
 RunNumberList = List[int]
@@ -27,6 +28,37 @@ DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 TEVENTADC_TREE = "teventadc"
 TADC_TREE = "tadc"
 
+# StarShape (ZHAireS) simulations use a collection layout instead: the shower
+# scalars live in ``SimuCollection``, the per-antenna field samples in
+# ``EfieldCollection`` and the per-antenna arrival times/amplitudes in
+# ``SignalCollection``. All three carry one entry per simulated event.
+STARSHAPE_TREE = "starshape"
+SIMU_COLLECTION_TREE = "SimuCollection"
+EFIELD_COLLECTION_TREE = "EfieldCollection"
+SIGNAL_COLLECTION_TREE = "SignalCollection"
+
+# CoREAS/Dunhuang simulation files spread one event over several per-event
+# trees, all sharing the same ``<lo>-<hi>`` event range in their file names:
+#
+# * ``adc_<lo>-<hi>_L1_<k>.root``        -> ``tadc``        (trigger inputs)
+# * ``shower_<lo>-<hi>_L0_<k>.root``     -> ``tshower``     (shower truth)
+# * ``showersim_<lo>-<hi>_L0_<k>.root``  -> ``tshowersim``  (shower-sim truth)
+#
+# Two run-level trees (one entry per run) live alongside:
+#
+# * ``run_<n>_L<L>_<k>.root``            -> ``trun``           (DU layout / site)
+# * ``runefieldsim_<n>_L<L>_<k>.root``   -> ``trunefieldsim``  (efield config)
+SHOWER_TREE = "tshower"
+SHOWERSIM_TREE = "tshowersim"
+RUN_TREE = "trun"
+RUNEFIELDSIM_TREE = "trunefieldsim"
+
+# ``adc_106900-106999_L1_0000.root`` -> the ``106900-106999`` event range.
+_EVENT_INTERVAL_PATTERN = re.compile(r"_(\d+)-(\d+)_")
+
+# CoREAS per-event companion files, paired to an ``adc_*`` file by event range.
+_COREAS_INTERVAL_COMPANIONS = {"shower_": "shower", "showersim_": "showersim"}
+
 # ``sim_Dunhuang_YYYYMMDD_HHMMSS_...`` embed the shower reference time in the
 # directory name; used to synthesise a monotonic GPS time axis for simulation.
 _SIM_TIME_PATTERN = re.compile(r"(\d{8})_(\d{6})")
@@ -35,9 +67,10 @@ _SIM_TIME_PATTERN = re.compile(r"(\d{8})_(\d{6})")
 def find_event_tree_key(keys: List[str], file_name: str) -> Tuple[str, str]:
     """Return ``(key, tree_kind)`` for the first recognised event tree.
 
-    Prefers ``teventadc`` (real trigger data) and falls back to ``tadc``
-    (CoREAS/Dunhuang simulation). ``tree_kind`` is one of ``"teventadc"`` or
-    ``"tadc"`` so callers can branch on the concrete schema.
+    Prefers ``teventadc`` (real trigger data), then ``tadc`` (CoREAS/Dunhuang
+    simulation), then ``SimuCollection`` (StarShape/ZHAireS simulation).
+    ``tree_kind`` is one of ``"teventadc"``, ``"tadc"`` or ``"starshape"`` so
+    callers can branch on the concrete schema.
     """
     for key in keys:
         if TEVENTADC_TREE in str(key):
@@ -45,8 +78,12 @@ def find_event_tree_key(keys: List[str], file_name: str) -> Tuple[str, str]:
     for key in keys:
         if TADC_TREE in str(key):
             return key, TADC_TREE
+    for key in keys:
+        if SIMU_COLLECTION_TREE in str(key):
+            return key, STARSHAPE_TREE
     raise KeyError(
-        f"neither {TEVENTADC_TREE} nor {TADC_TREE} TTree found in file: {file_name}"
+        f"neither {TEVENTADC_TREE}, {TADC_TREE} nor {SIMU_COLLECTION_TREE} "
+        f"TTree found in file: {file_name}"
     )
 
 
@@ -144,3 +181,93 @@ def write_yaml(file_path: str, data: YamlData) -> None:
     """Write one dictionary payload to a YAML file."""
     with open(file_path, "w") as file_obj:
         yaml.dump(data, file_obj)
+
+
+# --------------------------------------------------------------------------- #
+# Shared coercion helpers (used by both the StarShape and CoREAS readers)
+# --------------------------------------------------------------------------- #
+def as_vector(value) -> List[float]:
+    """Coerce one uproot scalar/array cell into a plain ``[x, y, z]`` list."""
+    return [float(c) for c in np.asarray(value, dtype=float).reshape(-1)]
+
+
+def as_str_list(value) -> List[str]:
+    """Coerce one uproot cell into a plain list of strings.
+
+    Handles both a bare string cell and a ``STLVector`` of strings (e.g.
+    ``prim_type`` -> ``["2212"]``, ``refractivity_model`` -> ``["..."]``).
+    """
+    if isinstance(value, str):
+        return [value]
+    try:
+        return [str(v) for v in value]
+    except TypeError:
+        return [str(value)]
+
+
+def as_float(value) -> float:
+    """Coerce one uproot cell into a float (first element for size-1 cells)."""
+    return float(np.asarray(value, dtype=float).reshape(-1)[0])
+
+
+def build_yaml(payloads: List[EventPayload], base_name: str) -> YamlData:
+    """Key per-event payloads by ``event_number`` and stamp the source file."""
+    data: YamlData = {}
+    for payload in payloads:
+        payload["file"] = base_name
+        data[str(payload["event_number"])] = payload
+    return data
+
+
+def find_tree_key(root_file, tree_name: str) -> Optional[str]:
+    """Return the uproot key whose tree name equals ``tree_name`` (sans cycle).
+
+    uproot exposes trees as ``<name>;N``; iterate the keys rather than
+    hard-coding the cycle number. Returns ``None`` when absent.
+    """
+    for key in root_file.keys():
+        if str(key).split(";")[0] == tree_name:
+            return key
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# CoREAS multi-file layout helpers
+# --------------------------------------------------------------------------- #
+def parse_event_interval(file_path: str) -> Optional[Tuple[int, int]]:
+    """Parse the ``<lo>-<hi>`` event range from a CoREAS file name.
+
+    ``adc_106900-106999_L1_0000.root`` -> ``(106900, 106999)``; returns
+    ``None`` when the file name carries no such range.
+    """
+    match = _EVENT_INTERVAL_PATTERN.search(os.path.basename(str(file_path)))
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def find_coreas_companion(adc_path: str, prefix: str) -> Optional[str]:
+    """Find a CoREAS companion file next to ``adc_path`` sharing its layout.
+
+    ``prefix`` is one of ``"shower_"`` / ``"showersim_"`` (matched by the same
+    ``<lo>-<hi>`` event range) or ``"run_"`` / ``"runefieldsim_"`` (run-level;
+    matched by prefix only, since they carry a run index instead of a range).
+    Returns the first match (sorted for determinism) or ``None``.
+    """
+    directory = os.path.dirname(str(adc_path))
+    if not os.path.isdir(directory):
+        return None
+    interval = parse_event_interval(adc_path)
+    interval_tag = f"_{interval[0]}-{interval[1]}_" if interval else None
+
+    matches: List[str] = []
+    for name in os.listdir(directory):
+        if not name.endswith(".root") or not name.startswith(prefix):
+            continue
+        if interval_tag is not None and prefix in _COREAS_INTERVAL_COMPANIONS:
+            if interval_tag not in name:
+                continue
+        matches.append(os.path.join(directory, name))
+    matches.sort()
+    return matches[0] if matches else None
+

@@ -625,17 +625,30 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
     reduced_total_err = total_error/(len(times) - 4)
     return reduced_total_err
 
-def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM'):  # pragma: no cover
-    """球面波重建模型"""
+def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM', detector_positions_by_event=None):  # pragma: no cover
+    """球面波重建模型
+
+    ``detector_positions`` 为静态布局（trigger/CoREAS）下共享的
+    ``{det_id: [x, y, z]}``；当阵列布局逐事件变化（如 StarShape）时，可通过
+    ``detector_positions_by_event``（``{event_key: {det_id: [x, y, z]}}``）为每个
+    事件提供其专属坐标，``detector_positions`` 作为回退。
+    """
     results = {}
     chi_squares = {}
     all_matches = {}  # 存储每个事件最终的DU列表
     cmap = plt.cm.viridis
-    
+
+    global_positions = detector_positions
+
     for i, (event_key, times) in enumerate(matching_times.items()): 
         if i % 1000 == 0:
             logger.info(f"SWM EventNo{i}/{len(matching_times)}")
         if len(times) < 5: continue
+
+        if detector_positions_by_event is not None:
+            detector_positions = detector_positions_by_event.get(event_key, global_positions)
+        else:
+            detector_positions = global_positions
         
         # 统一键类型：matching_times 内层键可能来自 YAML 反序列化为 str，
         # 而 detector_positions 使用 int 键；在事件入口规范为 int，
