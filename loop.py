@@ -49,7 +49,7 @@ _SIM_DIR_DATE_PATTERN = re.compile(r"_(\d{8})_")
 # CoREAS/Dunhuang simulations number their DUs from 0 and use a different
 # detector layout than the real trigger array, so they need their own
 # coordinate file when ``--det-pos`` is not given explicitly.
-DEFAULT_COREAS_DET_POS = "du_coords_CoreasDC2.txt"
+DEFAULT_COREAS_DET_POS = "position/du_coords_CoreasDC2.txt"
 
 # StarShape files embed no wall-clock date and are processed one file at a time,
 # so their outputs all land under this fixed date sub-directory.
@@ -723,7 +723,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "detector position file passed through to main.py. Defaults to "
-            "du_coords_CoreasDC2.txt for --reader coreas, or "
+            "position/du_coords_CoreasDC2.txt for --reader coreas, or "
             "position/_gp65_rtksort_DU7_1029.txt (main.py's own default) for "
             "--reader trigger when omitted"
         ),

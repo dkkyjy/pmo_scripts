@@ -35,11 +35,11 @@ TTree 类型由 `readroot/common.py` 的 `find_event_tree_key` 自动识别，�
 │   ├── estimation.py / plotting.py / utils.py  # 估计、绘图与通用工具
 │   └── ...
 ├── du_pair_theoretical.py      # 由坐标文件生成/加载 DU 对理论时间差
-├── position/                   # 探测器坐标文件（trigger 布局）
+├── position/                   # 探测器坐标文件
 │   ├── _gp65_rtksort_DU7_1029.txt  # trigger 默认探测器坐标（main.py 内默认）
 │   ├── _gp65_rtksort_2002_DU7.txt  # trigger 备用坐标
-│   └── _gp65_rtksort.txt
-├── du_coords_CoreasDC2.txt             # CoREAS DC2 坐标（逗号分隔）
+│   ├── _gp65_rtksort.txt
+│   └── du_coords_CoreasDC2.txt     # CoREAS DC2 坐标（逗号分隔）
 ├── _offset_byairplane_wyb_complete.txt # 坐标/时间偏移参考
 ├── 2025-10-28_beacon_25Hz_offset.txt   # beacon 偏移参考（time_offset.py 依赖）
 └── requirements.txt
@@ -95,7 +95,7 @@ python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 \
 | `--with-signal` | 关 | 用 `read_trace` 读取波形幅值，并让 `main.py` 处理信号 |
 | `--left` / `--right` | `0` / `512` | `read_trace` 的采样区间 |
 | `--channel` | `XY` | 匹配文件通道后缀：`F`/`X`/`Y`/`Z`/`XY` |
-| `--det-pos` | 随 `--reader` 推导 | 探测器坐标文件：coreas 默认 `du_coords_CoreasDC2.txt`，trigger 默认 `position/_gp65_rtksort_DU7_1029.txt`（`main.py` 内默认） |
+| `--det-pos` | 随 `--reader` 推导 | 探测器坐标文件：coreas 默认 `position/du_coords_CoreasDC2.txt`，trigger 默认 `position/_gp65_rtksort_DU7_1029.txt`（`main.py` 内默认） |
 | `--skip-matching` / `--no-skip-matching` | 见下 | 跳过因果律匹配阶段 |
 | `--skip-fingerprint` / `--no-skip-fingerprint` | 见下 | 跳过指纹过滤阶段 |
 | `--force-recompute` | 关 | 忽略已有 `_matched`/`_PWM`/`_SWM` 缓存并重算 |
@@ -107,7 +107,7 @@ python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 \
 > 说明：这两个阶段是面向真实触发数据设计的——因果律匹配用于剔除偶然符合，
 > 指纹过滤用于剔除固定重复源。CoREAS 模拟数据无此类噪声，默认跳过可省去开销。
 
-`--det-pos` 默认值同样随 `--reader` 推导：**coreas 默认 `du_coords_CoreasDC2.txt`**、
+`--det-pos` 默认值同样随 `--reader` 推导：**coreas 默认 `position/du_coords_CoreasDC2.txt`**、
 **trigger 默认 `position/_gp65_rtksort_DU7_1029.txt`**（后者为 `main.py` 的默认）。
 CoREAS 的 DU 编号从 0 开始、阵列布局与真实阵列不同，用错坐标会导致
 `missing detector position for DU xxx` 并跳过事件。显式传入 `--det-pos` 可覆盖该默认。
@@ -187,7 +187,7 @@ ID x y z
 1029  -546.161  -1027.024 12.317
 ```
 
-`du_coords_CoreasDC2.txt` 为逗号分隔版本（CoREAS DC2 布局）。
+`position/du_coords_CoreasDC2.txt` 为逗号分隔版本（CoREAS DC2 布局）。
 
 ## 参考
 

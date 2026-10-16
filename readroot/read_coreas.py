@@ -38,7 +38,7 @@ Output schema (one YAML file per input ROOT file, keyed by ``event_number``)::
         signal: {du_id: int}       # det_id -> trace max (--with-signal only)
 
 ``det_pos`` is built from the run tree's ``du_xyz`` (indexed by ``du_id``); it is
-identical to the static ``du_coords_CoreasDC2.txt`` layout, but carrying it
+identical to the static ``position/du_coords_CoreasDC2.txt`` layout, but carrying it
 per-event lets main.py use one code path for both simulation readers. Unlike
 StarShape, the ``efield`` block is never emitted (``tefield.p2p`` is empty in the
 sample data) and ``signal`` is derived from the ``tadc.trace_ch`` waveforms, so
