@@ -375,9 +375,9 @@ def plane_wave_model(matching_times, detector_positions, detector_positions_by_e
             logger.warning(f"Skipping PWM event {event_key} during normalization: {exc}")
             continue
 
-        if len(matches) < 3:
+        if len(matches) < 4:
             logger.warning(
-                f"Skipping PWM event {event_key}: requires at least 3 detectors, got {len(matches)}"
+                f"Skipping PWM event {event_key}: requires at least 3 or more than 5 detectors, got {len(matches)}"
             )
             continue
 

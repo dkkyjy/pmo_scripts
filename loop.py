@@ -75,7 +75,12 @@ class TaskSpec:
     force_recompute: bool
     det_pos: str
     reader: str
+    min_detectors: int
     max_events: int = 0
+    skip_footprint: bool = False
+    skip_ringcut: bool = False
+    skip_offset: bool = False
+    offset_csv: str | None = None
 
 
 TaskResult = Tuple[str, int]
@@ -252,7 +257,12 @@ def make_tasks_for_file_paths(
             force_recompute=args.force_recompute,
             det_pos=args.det_pos,
             reader=args.reader,
+            min_detectors=args.min_detectors,
             max_events=args.max_events,
+            skip_footprint=args.skip_footprint,
+            skip_ringcut=args.skip_ringcut,
+            skip_offset=args.skip_offset,
+            offset_csv=args.offset_csv,
         )
         for file_path in file_path_list
     ]
@@ -428,6 +438,11 @@ def make_main_command(
     skip_fingerprint: bool = False,
     force_recompute: bool = False,
     det_pos: str | None = None,
+    min_detectors: int = 6,
+    skip_footprint: bool = False,
+    skip_ringcut: bool = False,
+    skip_offset: bool = False,
+    offset_csv: str | None = None,
 ) -> list[str]:
     """Construct the command for: python main.py Reco_Dir/yyyy/mm/dd/Trigger_xxx.yaml yyyy-mm-dd --out-dir-base"""
 
@@ -459,6 +474,15 @@ def make_main_command(
         cmd.append("--skip-fingerprint")
     if force_recompute:
         cmd.append("--force-recompute")
+    if skip_footprint:
+        cmd.append("--skip-footprint")
+    if skip_ringcut:
+        cmd.append("--skip-ringcut")
+    if skip_offset:
+        cmd.append("--skip-offset")
+    if offset_csv:
+        cmd.extend(["--offset-csv", str(offset_csv)])
+    cmd.extend(["--min-detectors", str(min_detectors)])
     return cmd
 
 
@@ -556,6 +580,11 @@ def process_date(task: TaskSpec) -> TaskResult:
     force_recompute = task.force_recompute
     det_pos = task.det_pos
     reader = task.reader
+    min_detectors = task.min_detectors
+    skip_footprint = task.skip_footprint
+    skip_ringcut = task.skip_ringcut
+    skip_offset = task.skip_offset
+    offset_csv = task.offset_csv
 
     # Log/read command
     if skip_read:
@@ -636,6 +665,11 @@ def process_date(task: TaskSpec) -> TaskResult:
             skip_fingerprint,
             force_recompute,
             det_pos,
+            min_detectors=min_detectors,
+            skip_footprint=skip_footprint,
+            skip_ringcut=skip_ringcut,
+            skip_offset=skip_offset,
+            offset_csv=offset_csv,
         )
         logger.info(f"{' '.join(main_cmd)}")
 
@@ -784,6 +818,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "forward --max-events to the simulation readers (--reader "
             "coreas/starshape) to only read the first N events (0 = all)"
         ),
+    )
+    ap.add_argument(
+        "--min-detectors",
+        type=int,
+        default=6,
+        help="Minimum number of detectors for matching stage, passed to main.py (default: 6).",
+    )
+    ap.add_argument(
+        "--skip-footprint",
+        action="store_true",
+        help="pass --skip-footprint through to main.py (customized footprint filter, enabled by default)",
+    )
+    ap.add_argument(
+        "--skip-ringcut",
+        action="store_true",
+        help="pass --skip-ringcut through to main.py (customized d_max ring cut, enabled by default)",
+    )
+    ap.add_argument(
+        "--skip-offset",
+        action="store_true",
+        help="pass --skip-offset through to main.py (time/position offset calibration, enabled by default)",
+    )
+    ap.add_argument(
+        "--offset-csv",
+        default=None,
+        help="pass --offset-csv through to main.py (offset calibration CSV path)",
     )
     return ap
 
