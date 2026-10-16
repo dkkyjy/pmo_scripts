@@ -1,6 +1,5 @@
 import numpy as np
 from scipy.optimize import minimize
-import os
 from datetime import datetime, timedelta
 from scipy import linalg
 from logger_config import logger
@@ -17,7 +16,6 @@ except ImportError:
 GPS_UTC_OFFSET = 18
 c = 299792458.0/1e9/1.000259
 np.set_printoptions(precision=3)
-DEFAULT_TIME_OFFSET_FILE = "_offset_byairplane_wyb_complete.txt"
 
 # 球面波源距 rho 的拟合下/上界（米）。上界原为 2e5，会在极倾斜几何下
 # 截断真实远源（实测收敛到 ~2.6e5 m）；放宽到 1e6 后不再撞上限且 chi2 不恶化。
@@ -231,29 +229,6 @@ def gps_to_utc(gps_time):
     gps_epoch = datetime(1970, 1, 1)
     utc_time = gps_epoch + timedelta(seconds=(gps_time - GPS_UTC_OFFSET + 8*3600))
     return utc_time
-
-def load_time_data(file_path=DEFAULT_TIME_OFFSET_FILE):
-    """从文件加载时间偏移数据并返回字典。"""
-    data_dict = {}
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            parts = line.strip().split('\t')
-            if len(parts) == 2:
-                id_val = int(parts[0])
-                data_dict[id_val] = {
-                    'mean': float(parts[1])
-                    #'mean': float(parts[1]),
-                    #'dispersion': float(parts[2])
-                }
-    return data_dict
-
-
-def get_time_data(file_path=DEFAULT_TIME_OFFSET_FILE):
-    """按需读取时间偏移数据，缺文件时安全回退为空字典。"""
-    if not os.path.exists(file_path):
-        logger.warning(f"Optional SWM offset file not found: {file_path}; continuing without offsets.")
-        return {}
-    return load_time_data(file_path)
 
 def estimate_initial_direction_robust(positions, t_s, c=299792458.0):
     """

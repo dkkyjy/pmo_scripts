@@ -40,8 +40,6 @@ TTree 类型由 `readroot/common.py` 的 `find_event_tree_key` 自动识别，�
 │   ├── _gp65_rtksort_2002_DU7.txt  # trigger 备用坐标
 │   ├── _gp65_rtksort.txt
 │   └── du_coords_CoreasDC2.txt     # CoREAS DC2 坐标（逗号分隔）
-├── _offset_byairplane_wyb_complete.txt # 坐标/时间偏移参考
-├── 2025-10-28_beacon_25Hz_offset.txt   # beacon 偏移参考（time_offset.py 依赖）
 └── requirements.txt
 ```
 
