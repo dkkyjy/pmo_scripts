@@ -1172,6 +1172,7 @@ def main(
         state,
         fig_prefix,
         fingerprint_computed,
+        detector_positions_by_event=detector_positions_by_event,
     )
     logger.info('Finished PWM stage')
     
