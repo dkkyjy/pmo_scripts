@@ -9,7 +9,7 @@ filter_by_shower_footprint 与 _analyze_zenith_dispersion.py 的 ring cut），
 - 可用 --skip-footprint / --skip-ringcut 分别关闭；
 - 仅过滤内存中的 state，不新增缓存文件后缀，不改动既有 YAML 约定；
 - 亦支持独立运行：
-    python -m find_event.shower_footprint_filter Trigger_x_PWM.yaml --det-pos _gp65_rtksort.txt
+    python -m find_event.shower_footprint_filter Trigger_x_PWM.yaml --det-pos position/_gp65_rtksort.txt
 
 判据 1（filter_by_shower_footprint，宇宙线 shower footprint 几何，optimized 版）：
   触发 DU 沿入射方位角方向应拉长（observed_ratio > min_observed_ratio），
@@ -406,7 +406,7 @@ def _standalone_main(argv=None):
         description="Standalone customized cuts on a *_PWM.yaml file"
     )
     parser.add_argument("pwm_file", help="Path to *_PWM.yaml produced by main.py")
-    parser.add_argument("--det-pos", default="_gp65_rtksort_2002_DU7.txt")
+    parser.add_argument("--det-pos", default="position/_gp65_rtksort_2002_DU7.txt")
     parser.add_argument("--skip-footprint", action="store_true")
     parser.add_argument("--skip-ringcut", action="store_true")
     args = parser.parse_args(argv)

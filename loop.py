@@ -724,7 +724,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "detector position file passed through to main.py. Defaults to "
             "du_coords_CoreasDC2.txt for --reader coreas, or "
-            "_gp65_rtksort_2002_DU7.txt (main.py's own default) for "
+            "position/_gp65_rtksort_DU7_1029.txt (main.py's own default) for "
             "--reader trigger when omitted"
         ),
     )

@@ -108,7 +108,7 @@ def parse_args(argv):
     parser.add_argument(
         "--det-pos",
         help="Detector position file (optional), if not specified, use the default path in the script",
-        default="_gp65_rtksort_DU7_1029.txt",
+        default="position/_gp65_rtksort_DU7_1029.txt",
     )
     parser.add_argument(
         "--with-signal",
