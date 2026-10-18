@@ -107,7 +107,7 @@ python loop.py --reader starshape \
 | --- | --- | --- |
 | `start` `end` | 无（`trigger` 必填） | 时间范围，格式 `YYYY-MM-DDThh:mm:ss`；仅 `trigger` 使用，coreas/starshape 忽略 |
 | `--reader` | `trigger` | 输入布局：`trigger` / `coreas` / `starshape` |
-| `--base-path` | `/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD` | trigger：含 `base-path/<date>/Trigger*.root` 的目录；coreas：递归扫描 `adc_*.root` 的目录；starshape：递归扫描 `*stshp*.root` 的目录，或单个 `*stshp*.root` 文件 |
+| `--base-path` | `/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD` | trigger：含 `base-path/<date>/Trigger*.root` 的目录；coreas：递归扫描 `adc_*.root` 的目录；starshape：递归扫描 `*[sS]tshp*.root`（大小写不敏感，兼容 `Stshp_...` / `..._stshp_...`）的目录，或单个 `*[sS]tshp*.root` 文件 |
 | `--out-dir-base` | `../Reco_Dir` | 输出根目录（trigger 按 `yyyy/mm/dd` 组织；coreas/starshape 分别固定落在 `coreas/`、`starshape/`） |
 | `--run` | 关 | 实际执行，否则仅打印 |
 | `--jobs` | `1` | 并行 worker 数 |
@@ -122,9 +122,9 @@ python loop.py --reader starshape \
 | `--skip-fingerprint` / `--no-skip-fingerprint` | 见下 | 跳过指纹过滤阶段 |
 | `--force-recompute` | 关 | 忽略已有 `_matched`/`_PWM`/`_SWM` 缓存并重算 |
 | `--max-events` | `0` | 转发给 coreas/starshape reader，只读前 N 个事件（0=全部） |
-| `--min-detectors` | `6` | 匹配阶段最少探测器数，转发给 `main.py` |
-| `--skip-footprint` | 关 | 跳过定制化 footprint 形状筛选（默认启用） |
-| `--skip-ringcut` | 关 | 跳过定制化 d_max ring cut（默认启用） |
+| `--min-detectors` | `5` | 匹配阶段最少探测器数，转发给 `main.py` |
+| `--skip-footprint` | coreas/starshape 下默认关 | 跳过定制化 footprint 形状筛选（trigger 默认启用；sim 默认跳过，见下文差异说明） |
+| `--skip-ringcut` | coreas/starshape 下默认关 | 跳过定制化 d_max ring cut（trigger 默认启用；sim 默认跳过，见下文差异说明） |
 | `--skip-offset` | 关 | 跳过时间/位置标定（默认启用） |
 | `--offset-csv` | `./calibration/jul24_locked_xyz_additive_utc.csv` | 标定 CSV 路径 |
 
@@ -187,11 +187,35 @@ python main.py ../Reco_Dir/2025/01/01/Trigger_xxx.yaml \
 | `--force-recompute` | 关 | 忽略缓存重算 |
 | `--skip-matching` | 关 | 跳过匹配阶段，直接使用已有 `_matched.yaml` 缓存 |
 | `--skip-fingerprint` | 关 | 跳过指纹阶段，直接加载源 YAML |
-| `--min-detectors` | `5` | 匹配阶段最少探测器数（`loop.py` 默认转发 `6`） |
+| `--min-detectors` | `5` | 匹配阶段最少探测器数 |
 | `--skip-footprint` | 关 | 跳过 PWM→SWM 之间的 footprint 形状筛选 |
 | `--skip-ringcut` | 关 | 跳过 PWM→SWM 之间的 d_max ring cut |
 | `--skip-offset` | 关 | 跳过时间/位置标定 |
 | `--offset-csv` | `./calibration/jul24_locked_xyz_additive_utc.csv` | 标定 CSV 路径 |
+
+## 三者（trigger / coreas / starshape）刻意差异
+
+三类输入共享 `loop.py` 的同一套 read→`main.py`→合并 PDF 流程，但以下差异是**刻意设计**，
+并非缺陷：
+
+| 行为 | trigger | coreas / starshape |
+| --- | --- | --- |
+| `start` / `end` 位置参数 | **必填**（缺则报错退出） | 可选并忽略（模拟数据无 wall-clock 日期） |
+| `--base-path` 含义 | 只作**日期前缀**，实际文件由 `base-path/<yyyy>/<mm>/<dd>/Trigger*.root` + 日期筛选决定 | **完全限定**分析文件集合：coreas 递归 `adc_*.root`；starshape 递归 `*[sS]tshp*.root` 或单文件 |
+| 输出目录 | `--out-dir-base` 下按 `yyyy/mm/dd` 分目录 | 固定子目录 `coreas/`、`starshape/` |
+| read 命令 | `read_header.py`；`--with-signal` 时改 `read_trace.py`（两条独立命令） | `read_coreas.py` / `read_starshape.py` |
+| `--left` / `--right` | 透传（`read_trace` 采样窗口） | coreas 透传（其 ADC 树型有窗口概念）；**starshape 不透传**（无窗口概念） |
+| `--skip-matching` / `--skip-fingerprint` | 默认 **False**（真实数据需做匹配/指纹） | 默认 **True**（模拟事件全视为信号） |
+| `--skip-footprint` / `--skip-ringcut` | 默认 **False**（启用定制化 cut） | 默认 **True**（跳过；见下） |
+| `--det-pos` | 不传则用 `main.py` 默认阵列文件 | 不传（坐标逐事件内嵌于 matching YAML，`main.py` 优先用逐事件坐标） |
+| 时间/位置标定 | 默认启用 | 自动跳过（无真实 `gps_time`） |
+
+**关于 sim 默认跳过 footprint/ringcut**：`main.py` 的定制化 footprint/ringcut 只读取
+**静态** `--det-pos` 文件，不会使用 coreas/starshape 的逐事件坐标。sim 既不设
+`--det-pos`，若启用 cut 就会拿 `main.py` 默认阵列文件比较、把**所有**模拟事件丢弃
+（实测触发 `n_du < 4`）。因此 sim 默认跳过这两个 cut。注意
+`--skip-footprint`/`--skip-ringcut` 是 `store_true`，**当前无 CLI 开关为 sim 重新启用**
+cut；即便显式给 `--det-pos` 也不会重新启用。
 
 ## 时间/位置标定
 

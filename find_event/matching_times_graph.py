@@ -29,7 +29,7 @@ def check_causality_strict(t1, t2, dist, c_ns=C_LIGHT_NS):
     return is_safe, ratio
 
 
-def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, min_detectors=4, speed_of_light_tolerance=1.05, force_recompute=False):
+def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, min_detectors=5, speed_of_light_tolerance=1.05, force_recompute=False):
     """
     步骤1: 因果律清洗
     返回格式: (times, signals, du_ids), 与 matching_times.py 一致

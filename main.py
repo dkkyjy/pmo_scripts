@@ -141,7 +141,7 @@ def parse_args(argv):
         dest="min_detectors",
         type=int,
         default=5,
-        help="Minimum number of detectors required in matching stage (default: 6).",
+        help="Minimum number of detectors required in matching stage (default: 5).",
     )
     parser.add_argument(
         "--skip-footprint",
@@ -480,7 +480,7 @@ def run_matching_stage(
     with_signal,
     force_recompute,
     state,
-    min_detectors=6,
+    min_detectors=5,
 ):
     """Ensure matching-stage data is available in memory and cache."""
     matched_file = matching_file.replace(".yaml", "_matched.yaml")

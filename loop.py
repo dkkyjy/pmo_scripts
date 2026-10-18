@@ -295,7 +295,9 @@ def _get_starshape_file_list(base_path: str) -> list[str]:
     ``base_path`` may be either:
 
     * a single StarShape ROOT file, processed as-is; or
-    * a directory, scanned recursively for ``*stshp*.root`` files.
+    * a directory, scanned recursively for ``*[sS]tshp*.root`` files (the
+      match is case-insensitive on the ``tshp`` stem, so both the common
+      ``Stshp_...`` and ``..._stshp_...`` namings are picked up).
 
     StarShape simulations embed no wall-clock date, so no date filtering is
     applied; the selected files fully define the analysis set.
@@ -305,11 +307,11 @@ def _get_starshape_file_list(base_path: str) -> list[str]:
 
     if os.path.isdir(base_path):
         candidates = glob.glob(
-            os.path.join(base_path, "**", "*stshp*.root"), recursive=True
+            os.path.join(base_path, "**", "*[sS]tshp*.root"), recursive=True
         )
         candidates.sort()
         if not candidates:
-            logger.warning(f"No *stshp*.root files found under: {base_path}")
+            logger.warning(f"No *[sS]tshp*.root files found under: {base_path}")
         else:
             logger.info(f"Found {len(candidates)} StarShape files in {base_path}")
         return candidates
@@ -325,7 +327,7 @@ def _build_starshape_tasks(args: argparse.Namespace) -> list[TaskSpec]:
 
     StarShape simulations embed no wall-clock date, so the positional start/end
     datetimes are ignored. ``--base-path`` may point at a single ROOT file or a
-    directory (scanned recursively for ``*stshp*.root``). All outputs land under
+    directory (scanned recursively for ``*[sS]tshp*.root``). All outputs land under
     the fixed :data:`STARSHAPE_OUT_DATE` sub-directory.
     """
     file_path_list = _get_starshape_file_list(args.base_path)
@@ -429,7 +431,7 @@ def make_main_command(
     skip_fingerprint: bool = False,
     force_recompute: bool = False,
     det_pos: str | None = None,
-    min_detectors: int = 6,
+    min_detectors: int = 5,
     skip_footprint: bool = False,
     skip_ringcut: bool = False,
     skip_offset: bool = False,
@@ -836,18 +838,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--min-detectors",
         type=int,
-        default=6,
-        help="Minimum number of detectors for matching stage, passed to main.py (default: 6).",
+        default=5,
+        help="Minimum number of detectors for matching stage, passed to main.py (default: 5).",
     )
     ap.add_argument(
         "--skip-footprint",
         action="store_true",
-        help="pass --skip-footprint through to main.py (customized footprint filter, enabled by default)",
+        help="pass --skip-footprint through to main.py (customized footprint filter, enabled by default; coreas/starshape skip it by default)",
     )
     ap.add_argument(
         "--skip-ringcut",
         action="store_true",
-        help="pass --skip-ringcut through to main.py (customized d_max ring cut, enabled by default)",
+        help="pass --skip-ringcut through to main.py (customized d_max ring cut, enabled by default; coreas/starshape skip it by default)",
     )
     ap.add_argument(
         "--skip-offset",
@@ -885,6 +887,18 @@ def parse_cli_args() -> argparse.Namespace:
     # their matching YAML, so ``main.py`` prefers those coordinates over any
     # static file. Leave ``--det-pos`` unset for both (main.py's own default is
     # only a fallback); an explicit --det-pos always wins.
+    #
+    # However, the customized footprint/ring cuts in ``main.py`` only consult
+    # the *static* ``--det-pos`` file, never the per-event coordinates. With
+    # ``--det-pos`` unset those cuts would compare against main.py's default
+    # array layout and drop every simulation event. Default both cuts OFF for
+    # sims; trigger data keeps them enabled. Note ``--skip-footprint`` and
+    # ``--skip-ringcut`` are ``store_true`` only, so there is currently no CLI
+    # switch to re-enable the cuts for sims (an explicit --det-pos still does
+    # not re-enable them).
+    if simulation_reader:
+        args.skip_footprint = True
+        args.skip_ringcut = True
     return args
 
 

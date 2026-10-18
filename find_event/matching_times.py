@@ -6,7 +6,7 @@ import yaml
 c_val = 299792458.0/1e9/1.000259
 
     
-def optimized_read_matching_times(matching_file, detector_positions, min_detectors=4, speed_of_light_tolerance=1.01):
+def optimized_read_matching_times(matching_file, detector_positions, min_detectors=5, speed_of_light_tolerance=1.01):
     """
     Optimized matching time reading function:
     1. Eliminate duplicate triggers from the same DU (keep earliest time).
@@ -16,7 +16,7 @@ def optimized_read_matching_times(matching_file, detector_positions, min_detecto
     Parameters:
         matching_file: Data file path
         detector_positions: Dictionary in format {detector_id: (x, y, z)}
-        min_detectors: Minimum number of valid detectors (default 4)
+        min_detectors: Minimum number of valid detectors (default 5)
         speed_of_light_tolerance: Speed of light validation tolerance (default 1.01, i.e., 1%)
     """
     matching_times = {}
@@ -93,7 +93,7 @@ def optimized_read_matching_times(matching_file, detector_positions, min_detecto
                 continue
     return matching_times, matching_signals, matching_du_ids
 
-def optimized_read_matching_times_with_signal(file_path, detector_positions, min_detectors=4, speed_of_light_tolerance=1.01):
+def optimized_read_matching_times_with_signal(file_path, detector_positions, min_detectors=5, speed_of_light_tolerance=1.01):
     """
     Optimized reading function specifically for the following format:
     GPS time:{'time': {detector ID: time,...}, 'signal': {detector ID: signal strength,...}}
