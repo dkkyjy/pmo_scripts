@@ -14,7 +14,8 @@
 | `starshape` | 目录（递归扫描 `*stshp*.root`）或单个 `*stshp*.root` 文件 | 三个 collection | StarShape（ZHAireS）模拟，无 `gps_time`/`du_id`/`du_nanoseconds`，逐事件内嵌 `det_pos` |
 
 > `coreas` / `starshape` **仅由 `--base-path` 限定分析文件**，不需要日期参数
-> （即使传了也会被忽略）。`trigger` 仍需 `start`/`end` 日期范围。
+> （即使传了也会被忽略），输出分别固定落在 `coreas/`、`starshape/` 子目录
+> （不按日期分目录）。`trigger` 仍需 `start`/`end` 日期范围。
 
 trigger 的 TTree 类型由 `readroot/common.py` 的 `find_event_tree_key` 自动识别；
 `coreas` / `starshape` 由各自的专用 reader（`readroot/read_coreas.py`、
@@ -107,7 +108,7 @@ python loop.py --reader starshape \
 | `start` `end` | 无（`trigger` 必填） | 时间范围，格式 `YYYY-MM-DDThh:mm:ss`；仅 `trigger` 使用，coreas/starshape 忽略 |
 | `--reader` | `trigger` | 输入布局：`trigger` / `coreas` / `starshape` |
 | `--base-path` | `/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD` | trigger：含 `base-path/<date>/Trigger*.root` 的目录；coreas：递归扫描 `adc_*.root` 的目录；starshape：递归扫描 `*stshp*.root` 的目录，或单个 `*stshp*.root` 文件 |
-| `--out-dir-base` | `../Reco_Dir` | 输出根目录（trigger/coreas 按 `yyyy/mm/dd` 组织；starshape 固定落在 `starshape/`） |
+| `--out-dir-base` | `../Reco_Dir` | 输出根目录（trigger 按 `yyyy/mm/dd` 组织；coreas/starshape 分别固定落在 `coreas/`、`starshape/`） |
 | `--run` | 关 | 实际执行，否则仅打印 |
 | `--jobs` | `1` | 并行 worker 数 |
 | `--limit` | `0` | 限制处理文件数（0=全部） |

@@ -25,7 +25,6 @@ import datetime
 import glob
 import multiprocessing
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -42,10 +41,6 @@ except Exception:
     PIL_AVAILABLE = False
 
 
-# Simulation (CoREAS/Dunhuang) run directories embed the date as
-# ``sim_..._<YYYYMMDD>_<HHMMSS>_...``.
-_SIM_DIR_DATE_PATTERN = re.compile(r"_(\d{8})_")
-
 # CoREAS/Dunhuang simulations number their DUs from 0 and use a different
 # detector layout than the real trigger array, so they need their own
 # coordinate file when ``--det-pos`` is not given explicitly.
@@ -54,6 +49,10 @@ DEFAULT_COREAS_DET_POS = "position/du_coords_CoreasDC2.txt"
 # StarShape files embed no wall-clock date and are processed one file at a time,
 # so their outputs all land under this fixed date sub-directory.
 STARSHAPE_OUT_DATE = "starshape"
+
+# CoREAS simulation files are likewise selected from ``--base-path`` alone (no
+# date filtering) and grouped under this fixed output sub-directory.
+COREAS_OUT_DATE = "coreas"
 
 
 @dataclass(frozen=True)
@@ -113,23 +112,6 @@ def times_between(
     while cur < end:
         yield cur
         cur += one
-
-
-def _sim_file_date(full_path: str) -> int | None:
-    """Return the ``YYYYMMDD`` date embedded in a CoREAS run directory name.
-
-    Simulation files are laid out as ``<base>/<sim_..._YYYYMMDD_HHMMSS_...>/
-    adc_*.root`` (no date sub-directory), so the date is recovered from the
-    parent directory instead of the file name.
-    """
-    parent = os.path.basename(os.path.dirname(full_path))
-    match = _SIM_DIR_DATE_PATTERN.search(parent)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
 
 
 def _real_file_date(full_path: str) -> int | None:
@@ -294,33 +276,22 @@ def build_tasks(
 
 
 def _build_simulation_tasks(args: argparse.Namespace) -> list[TaskSpec]:
-    """Build tasks for CoREAS simulation files, grouped by run-directory date.
+    """Build tasks for CoREAS simulation files selected from ``--base-path``.
 
-    Files are selected from ``--base-path`` alone (no date-range filtering); the
-    output date sub-directory is still derived from each run directory's date so
-    results stay grouped by day.
+    CoREAS files are selected from ``--base-path`` alone (no date filtering), so
+    the positional start/end datetimes are ignored. All outputs land under the
+    fixed :data:`COREAS_OUT_DATE` sub-directory, mirroring StarShape.
     """
-    file_path_list = get_file_list(
-        0, 0, "", args.base_path, args.reader
-    )
+    file_path_list = get_file_list(0, 0, "", args.base_path, args.reader)
+    if not file_path_list:
+        return []
 
-    tasks: list[TaskSpec] = []
-    seen_dates: set[str] = set()
-    for file_path in file_path_list:
-        file_date = _sim_file_date(file_path)
-        if file_date is None:
-            continue
-        date_str = datetime.datetime.strptime(str(file_date), "%Y%m%d").strftime(
-            "%Y/%m/%d"
-        )
-        if date_str not in seen_dates:
-            seen_dates.add(date_str)
-            out_date_dir = Path(args.out_dir_base) / date_str
-            if not out_date_dir.exists():
-                out_date_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Created output directory: {out_date_dir}")
-        tasks.extend(make_tasks_for_file_paths([file_path], date_str, args))
-    return tasks
+    out_date_dir = Path(args.out_dir_base) / COREAS_OUT_DATE
+    if not out_date_dir.exists():
+        out_date_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created output directory: {out_date_dir}")
+
+    return make_tasks_for_file_paths(file_path_list, COREAS_OUT_DATE, args)
 
 
 def _get_starshape_file_list(base_path: str) -> list[str]:
