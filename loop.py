@@ -41,11 +41,6 @@ except Exception:
     PIL_AVAILABLE = False
 
 
-# CoREAS/Dunhuang simulations number their DUs from 0 and use a different
-# detector layout than the real trigger array, so they need their own
-# coordinate file when ``--det-pos`` is not given explicitly.
-DEFAULT_COREAS_DET_POS = "position/du_coords_CoreasDC2.txt"
-
 # StarShape files embed no wall-clock date and are processed one file at a time,
 # so their outputs all land under this fixed date sub-directory.
 STARSHAPE_OUT_DATE = "starshape"
@@ -369,8 +364,10 @@ def make_readheader_command(
 
     ``reader`` dispatches to the matching reader: ``"starshape"`` ->
     ``readroot/read_starshape.py``, ``"coreas"`` -> ``readroot/read_coreas.py``,
-    otherwise ``readroot/read_header.py``. The simulation readers accept the same
-    ``--max-events`` / ``--with-signal`` options; the trigger reader ignores them.
+    otherwise ``readroot/read_header.py``. The simulation readers both accept
+    ``--max-events`` / ``--with-signal``; only the CoREAS reader windows traces
+    with ``--left``/``--right`` (StarShape reads peak-to-peak amplitudes, which
+    have no trace window), while the trigger reader ignores all of these.
     """
     if reader == "starshape":
         script = "readroot/read_starshape.py"
@@ -391,15 +388,12 @@ def make_readheader_command(
         if max_events > 0:
             cmd += ["--max-events", str(max_events)]
         if with_signal:
-            cmd += [
-                "--with-signal",
-                "--left",
-                str(left),
-                "--right",
-                str(right),
-                "--channel",
-                channel,
-            ]
+            cmd.append("--with-signal")
+            # CoREAS traces are windowed with --left/--right; StarShape reads
+            # peak-to-peak amplitudes and its reader defines no such options.
+            if reader == "coreas":
+                cmd += ["--left", str(left), "--right", str(right)]
+            cmd += ["--channel", channel]
     return cmd
 
 
@@ -742,10 +736,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="det_pos",
         default=None,
         help=(
-            "detector position file passed through to main.py. Defaults to "
-            "position/du_coords_CoreasDC2.txt for --reader coreas, or "
-            "position/_gp65_rtksort_DU7_1029.txt (main.py's own default) for "
-            "--reader trigger when omitted"
+            "detector position file passed through to main.py. When omitted, "
+            "main.py falls back to its own default "
+            "(position/_gp65_rtksort_DU7_1029.txt); coreas/starshape ignore this "
+            "because their per-event det_pos is embedded in the matching YAML"
         ),
     )
     ap.add_argument(
@@ -887,13 +881,10 @@ def parse_cli_args() -> argparse.Namespace:
     if args.skip_fingerprint is None:
         args.skip_fingerprint = simulation_reader
 
-    # Default the detector-position file from the reader layout: CoREAS
-    # simulations number their DUs from 0, so they need the simulation
-    # coordinate file rather than main.py's real-array default. An explicit
-    # --det-pos always wins.
-    if args.det_pos is None and args.reader == "coreas":
-        args.det_pos = DEFAULT_COREAS_DET_POS
-
+    # The simulation readers (coreas/starshape) embed per-event ``det_pos`` in
+    # their matching YAML, so ``main.py`` prefers those coordinates over any
+    # static file. Leave ``--det-pos`` unset for both (main.py's own default is
+    # only a fallback); an explicit --det-pos always wins.
     return args
 
 

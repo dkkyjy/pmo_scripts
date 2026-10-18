@@ -115,9 +115,9 @@ python loop.py --reader starshape \
 | `--skip-read` | 关 | 跳过 read 阶段 |
 | `--only-read` | 关 | 只跑 read 阶段，不跑 `main.py` |
 | `--with-signal` | 关 | 读取波形/幅值，并让 `main.py` 处理信号 |
-| `--left` / `--right` | `0` / `512` | `read_trace` 的采样区间 |
+| `--left` / `--right` | `0` / `512` | `read_trace`（trigger）与 coreas reader 的采样窗口区间；starshape 无窗口概念，不透传 |
 | `--channel` | `XY` | 匹配文件通道后缀：`F`/`X`/`Y`/`Z`/`XY` |
-| `--det-pos` | 随 `--reader` 推导 | 探测器坐标文件：coreas 默认 `position/du_coords_CoreasDC2.txt`，trigger 默认 `position/_gp65_rtksort_DU7_1029.txt`（`main.py` 内默认） |
+| `--det-pos` | 省略（`main.py` 内默认 `position/_gp65_rtksort_DU7_1029.txt`） | 探测器坐标文件；coreas/starshape 忽略此项（布局逐事件内嵌于 matching YAML），trigger 不传时用 `main.py` 默认 |
 | `--skip-matching` / `--no-skip-matching` | 见下 | 跳过因果律匹配阶段 |
 | `--skip-fingerprint` / `--no-skip-fingerprint` | 见下 | 跳过指纹过滤阶段 |
 | `--force-recompute` | 关 | 忽略已有 `_matched`/`_PWM`/`_SWM` 缓存并重算 |
@@ -135,11 +135,10 @@ python loop.py --reader starshape \
 > 说明：这两个阶段是面向真实触发数据设计的——因果律匹配用于剔除偶然符合，
 > 指纹过滤用于剔除固定重复源。CoREAS/StarShape 模拟数据无此类噪声，默认跳过可省去开销。
 
-`--det-pos` 默认值同样随 `--reader` 推导：**coreas 默认 `position/du_coords_CoreasDC2.txt`**、
-**trigger 默认 `position/_gp65_rtksort_DU7_1029.txt`**（后者为 `main.py` 的默认）。
-CoREAS 的 DU 编号从 0 开始、阵列布局与真实阵列不同，用错坐标会导致
-`missing detector position for DU xxx` 并跳过事件。显式传入 `--det-pos` 可覆盖该默认。
-（coreas / starshape 的布局逐事件内嵌于 matching YAML，`main.py` 会优先使用逐事件坐标。）
+`--det-pos` 默认不传：`loop.py` 不再按 `--reader` 推导坐标文件，省略时
+`main.py` 回退到自身默认 `position/_gp65_rtksort_DU7_1029.txt`。
+**coreas / starshape 的布局逐事件内嵌于 matching YAML，`main.py` 会优先使用逐事件坐标**，
+故静态 `--det-pos` 只对 trigger 布局有意义；显式传入 `--det-pos` 总是优先生效。
 
 ### 2. 单文件分步执行
 
