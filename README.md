@@ -7,11 +7,14 @@
 
 按数据来源分三种输入布局（由 `loop.py --reader` 选择）：
 
-| reader | 输入文件 | TTree / 布局 | 说明 |
+| reader | 输入（`--base-path`） | TTree / 布局 | 说明 |
 | --- | --- | --- | --- |
-| `trigger`（默认） | `base-path/<date>/Trigger*.root` | `teventadc` | 真实触发数据，含 `gps_time`、`trace_0..3`（F/X/Y/Z） |
-| `coreas` | 递归扫描 `base-path/**/adc_*.root` | `tadc` | CoREAS/Dunhuang 模拟，`trace_ch` 形状 `(n_du, 3, n_time)`（X/Y/Z），无 `gps_time`，逐事件内嵌 `det_pos` |
-| `starshape` | `base-path` 直接指向单个 `*_stshp_*Events.root` | 三个 collection | StarShape（ZHAireS）模拟，无 `gps_time`/`du_id`/`du_nanoseconds`，逐事件内嵌 `det_pos` |
+| `trigger`（默认） | 目录 `base-path/<date>/Trigger*.root` | `teventadc` | 真实触发数据，含 `gps_time`、`trace_0..3`（F/X/Y/Z）；需给 `start`/`end` 日期范围 |
+| `coreas` | 目录，递归扫描 `**/adc_*.root` | `tadc` | CoREAS/Dunhuang 模拟，`trace_ch` 形状 `(n_du, 3, n_time)`（X/Y/Z），无 `gps_time`，逐事件内嵌 `det_pos` |
+| `starshape` | 目录（递归扫描 `*stshp*.root`）或单个 `*stshp*.root` 文件 | 三个 collection | StarShape（ZHAireS）模拟，无 `gps_time`/`du_id`/`du_nanoseconds`，逐事件内嵌 `det_pos` |
+
+> `coreas` / `starshape` **仅由 `--base-path` 限定分析文件**，不需要日期参数
+> （即使传了也会被忽略）。`trigger` 仍需 `start`/`end` 日期范围。
 
 trigger 的 TTree 类型由 `readroot/common.py` 的 `find_event_tree_key` 自动识别；
 `coreas` / `starshape` 由各自的专用 reader（`readroot/read_coreas.py`、
@@ -73,20 +76,18 @@ pip install -r requirements.txt
 默认只打印将要执行的命令，加 `--run` 才会真正执行：
 
 ```bash
-# 只预览命令
+# 只预览命令（trigger：需给日期范围）
 python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59
 
 # 真正执行（trigger 数据）
 python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 --run --jobs 4
 
-# 处理 CoREAS 模拟数据
-python loop.py 2025-01-01T00:00:00 2025-01-01T23:59:59 \
-    --reader coreas --base-path /path/to/sim \
+# 处理 CoREAS 模拟数据（无需日期，--base-path 指向目录）
+python loop.py --reader coreas --base-path /path/to/sim \
     --out-dir-base ../Reco_Dir --run
 
-# 处理 StarShape 模拟数据（--base-path 指向单个 ROOT 文件，忽略时间范围）
-python loop.py 2025-01-01T00:00:00 2025-01-01T00:00:00 \
-    --reader starshape \
+# 处理 StarShape 模拟数据（无需日期；--base-path 可为目录或单个 ROOT 文件）
+python loop.py --reader starshape \
     --base-path /path/to/Proton_EeV_Mazongshan_stshp_2100Events.root \
     --out-dir-base ../Reco_StarShape --max-events 10 --run
 ```
@@ -103,9 +104,9 @@ python loop.py 2025-01-01T00:00:00 2025-01-01T00:00:00 \
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `start` `end` | 必填 | 时间范围，格式 `YYYY-MM-DDThh:mm:ss`（starshape 忽略） |
+| `start` `end` | 无（`trigger` 必填） | 时间范围，格式 `YYYY-MM-DDThh:mm:ss`；仅 `trigger` 使用，coreas/starshape 忽略 |
 | `--reader` | `trigger` | 输入布局：`trigger` / `coreas` / `starshape` |
-| `--base-path` | `/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD` | 输入根目录；starshape 时为单个 ROOT 文件 |
+| `--base-path` | `/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD` | trigger：含 `base-path/<date>/Trigger*.root` 的目录；coreas：递归扫描 `adc_*.root` 的目录；starshape：递归扫描 `*stshp*.root` 的目录，或单个 `*stshp*.root` 文件 |
 | `--out-dir-base` | `../Reco_Dir` | 输出根目录（trigger/coreas 按 `yyyy/mm/dd` 组织；starshape 固定落在 `starshape/`） |
 | `--run` | 关 | 实际执行，否则仅打印 |
 | `--jobs` | `1` | 并行 worker 数 |

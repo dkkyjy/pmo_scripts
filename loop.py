@@ -154,7 +154,7 @@ def get_file_list(
     file's date from its run directory.
     """
     if reader == "coreas":
-        return _get_simulation_file_list(file_start, file_end, base_path)
+        return _get_simulation_file_list(base_path)
 
     path = os.path.join(base_path, date)
     logger.info(f"Searching directory: {path}")
@@ -182,21 +182,16 @@ def get_file_list(
     return selected
 
 
-def _get_simulation_file_list(
-    file_start: int, file_end: int, base_path: str
-) -> list[str]:
-    """Recursively find CoREAS ``adc_*.root`` files within the date range."""
+def _get_simulation_file_list(base_path: str) -> list[str]:
+    """Recursively find all CoREAS ``adc_*.root`` files under ``base_path``.
+
+    File selection is driven solely by ``--base-path`` (no date filtering):
+    every ``adc_*.root`` found beneath it is processed.
+    """
     logger.info(f"Searching simulation files under: {base_path}")
-    logger.info(f"File from {file_start} to {file_end}")
     if not os.path.isdir(base_path):
         logger.warning(f"Base path does not exist: {base_path}")
         return []
-
-    # ``file_start``/``file_end`` are 14-digit ``YYYYMMDDHHMMSS`` bounds, but
-    # simulation files only carry an 8-digit ``YYYYMMDD`` run date; reduce the
-    # bounds to day granularity before comparing.
-    date_start = int(file_start) // 1_000_000
-    date_end = int(file_end) // 1_000_000
 
     candidates: list[str] = []
     for full in glob.glob(os.path.join(base_path, "**", "adc_*.root"), recursive=True):
@@ -206,13 +201,10 @@ def _get_simulation_file_list(
     selected: list[str] = []
     seen_files: set[str] = set()
     for f in candidates:
-        file_date = _sim_file_date(f)
-        if file_date is None:
-            continue
-        if date_start <= file_date <= date_end and f not in seen_files:
+        if f not in seen_files:
             selected.append(f)
             seen_files.add(f)
-    logger.info(f"Found {len(selected)} matching simulation files in {base_path}")
+    logger.info(f"Found {len(selected)} simulation files in {base_path}")
     return selected
 
 
@@ -269,13 +261,17 @@ def make_tasks_for_file_paths(
 
 
 def build_tasks(
-    start: datetime.datetime,
-    end: datetime.datetime,
+    start: datetime.datetime | None,
+    end: datetime.datetime | None,
     args: argparse.Namespace,
 ) -> list[TaskSpec]:
-    """Build all worker tasks for the date range."""
+    """Build all worker tasks.
+
+    ``start``/``end`` are only used by the trigger reader; coreas/starshape
+    select files from ``--base-path`` and ignore them (may be ``None``).
+    """
     if args.reader == "coreas":
-        return _build_simulation_tasks(start, end, args)
+        return _build_simulation_tasks(args)
     if args.reader == "starshape":
         return _build_starshape_tasks(args)
 
@@ -297,16 +293,15 @@ def build_tasks(
     return tasks
 
 
-def _build_simulation_tasks(
-    start: datetime.datetime,
-    end: datetime.datetime,
-    args: argparse.Namespace,
-) -> list[TaskSpec]:
-    """Build tasks for CoREAS simulation files, grouped by run-directory date."""
-    file_start = int(start.strftime("%Y%m%d%H%M%S"))
-    file_end = int(end.strftime("%Y%m%d%H%M%S"))
+def _build_simulation_tasks(args: argparse.Namespace) -> list[TaskSpec]:
+    """Build tasks for CoREAS simulation files, grouped by run-directory date.
+
+    Files are selected from ``--base-path`` alone (no date-range filtering); the
+    output date sub-directory is still derived from each run directory's date so
+    results stay grouped by day.
+    """
     file_path_list = get_file_list(
-        file_start, file_end, "", args.base_path, args.reader
+        0, 0, "", args.base_path, args.reader
     )
 
     tasks: list[TaskSpec] = []
@@ -328,16 +323,47 @@ def _build_simulation_tasks(
     return tasks
 
 
+def _get_starshape_file_list(base_path: str) -> list[str]:
+    """Resolve StarShape input files from ``--base-path``.
+
+    ``base_path`` may be either:
+
+    * a single StarShape ROOT file, processed as-is; or
+    * a directory, scanned recursively for ``*stshp*.root`` files.
+
+    StarShape simulations embed no wall-clock date, so no date filtering is
+    applied; the selected files fully define the analysis set.
+    """
+    if os.path.isfile(base_path):
+        return [base_path]
+
+    if os.path.isdir(base_path):
+        candidates = glob.glob(
+            os.path.join(base_path, "**", "*stshp*.root"), recursive=True
+        )
+        candidates.sort()
+        if not candidates:
+            logger.warning(f"No *stshp*.root files found under: {base_path}")
+        else:
+            logger.info(f"Found {len(candidates)} StarShape files in {base_path}")
+        return candidates
+
+    logger.error(
+        f"StarShape --base-path must be a ROOT file or directory: {base_path}"
+    )
+    return []
+
+
 def _build_starshape_tasks(args: argparse.Namespace) -> list[TaskSpec]:
-    """Build a single task for one StarShape file.
+    """Build tasks for StarShape files selected from ``--base-path``.
 
     StarShape simulations embed no wall-clock date, so the positional start/end
-    datetimes are ignored and ``--base-path`` points directly at one ROOT file.
-    All outputs land under the fixed :data:`STARSHAPE_OUT_DATE` sub-directory.
+    datetimes are ignored. ``--base-path`` may point at a single ROOT file or a
+    directory (scanned recursively for ``*stshp*.root``). All outputs land under
+    the fixed :data:`STARSHAPE_OUT_DATE` sub-directory.
     """
-    file_path = args.base_path
-    if not os.path.isfile(file_path):
-        logger.error(f"StarShape --base-path must be a single ROOT file: {file_path}")
+    file_path_list = _get_starshape_file_list(args.base_path)
+    if not file_path_list:
         return []
 
     out_date_dir = Path(args.out_dir_base) / STARSHAPE_OUT_DATE
@@ -345,7 +371,7 @@ def _build_starshape_tasks(args: argparse.Namespace) -> list[TaskSpec]:
         out_date_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created output directory: {out_date_dir}")
 
-    return make_tasks_for_file_paths([file_path], STARSHAPE_OUT_DATE, args)
+    return make_tasks_for_file_paths(file_path_list, STARSHAPE_OUT_DATE, args)
 
 
 def execute_tasks(tasks: list[TaskSpec], jobs: int) -> list[TaskResult]:
@@ -699,12 +725,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Run read_header and find_events over dates"
     )
-    ap.add_argument("start", help="start time YYYY-MM-DDThh:mm:ss")
-    ap.add_argument("end", help="end time YYYY-MM-DDThh:mm:ss")
+    ap.add_argument(
+        "start",
+        nargs="?",
+        default=None,
+        help=(
+            "start time YYYY-MM-DDThh:mm:ss (required for --reader trigger; "
+            "ignored for coreas/starshape, which select files from --base-path alone)"
+        ),
+    )
+    ap.add_argument(
+        "end",
+        nargs="?",
+        default=None,
+        help=(
+            "end time YYYY-MM-DDThh:mm:ss (required for --reader trigger; "
+            "ignored for coreas/starshape)"
+        ),
+    )
     ap.add_argument(
         "--base-path",
         default="/mnt/sdb2/users/m/mapx/DunhuangData/ROOTFile/TD",
-        help="value for --base-path passed to script",
+        help=(
+            "input path passed to the reader. trigger: base directory holding "
+            "base-path/<date>/Trigger*.root; coreas: directory scanned "
+            "recursively for CoREAS adc_*.root files; starshape: a directory "
+            "scanned recursively for *stshp*.root files, or a single such ROOT file"
+        ),
     )
     ap.add_argument(
         "--reader",
@@ -712,9 +759,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="trigger",
         help=(
             "input layout: 'trigger' scans base-path/date for real Trigger*.root "
-            "files (default); 'coreas' scans base-path recursively for CoREAS "
-            "simulation adc_*.root files; 'starshape' treats --base-path as a "
-            "single StarShape ROOT file and ignores the date arguments"
+            "files (default, requires start/end); 'coreas' scans base-path "
+            "recursively for CoREAS simulation adc_*.root files; 'starshape' "
+            "scans a directory for *stshp*.root or processes a single such ROOT "
+            "file. coreas/starshape ignore the date arguments and select files "
+            "from --base-path alone"
         ),
     )
     ap.add_argument(
@@ -886,7 +935,9 @@ def apply_task_limit(tasks: list[TaskSpec], limit: int) -> list[TaskSpec]:
 
 
 def summarize_results(
-    results: list[TaskResult], start: datetime.datetime, end: datetime.datetime
+    results: list[TaskResult],
+    start: datetime.datetime | None = None,
+    end: datetime.datetime | None = None,
 ) -> int:
     """Aggregate worker results and compute final process exit code."""
     count = len(results)
@@ -896,9 +947,12 @@ def summarize_results(
             logger.error(f"Task for {ds} returned non-zero exit {code}")
             exit_code = 2
 
-    logger.info(
-        f"Processed {count} files from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}"
-    )
+    if start is not None and end is not None:
+        logger.info(
+            f"Processed {count} files from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}"
+        )
+    else:
+        logger.info(f"Processed {count} files")
     return exit_code
 
 
@@ -906,17 +960,32 @@ def main() -> int:
     """Run the loop CLI workflow and return a process exit code."""
     args = parse_cli_args()
 
-    start = parse_datetime(args.start)
-    end = parse_datetime(args.end)
-    logger.info(
-        f"Processing from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}"
-    )
-    if start > end:
-        build_arg_parser().error("start must be <= end")
-
-    file_start = int(start.strftime("%Y%m%d%H%M%S"))
-    file_end = int(end.strftime("%Y%m%d%H%M%S"))
-    logger.info(f"File range: {file_start} to {file_end}")
+    # trigger selects files by date range, so start/end are required there;
+    # coreas/starshape select files from --base-path alone and ignore the dates.
+    if args.reader == "trigger":
+        if args.start is None or args.end is None:
+            build_arg_parser().error(
+                "start and end are required for --reader trigger"
+            )
+        start = parse_datetime(args.start)
+        end = parse_datetime(args.end)
+        if start > end:
+            build_arg_parser().error("start must be <= end")
+        logger.info(
+            f"Processing from {start.strftime('%Y-%m-%dT%H:%M:%S')} to {end.strftime('%Y-%m-%dT%H:%M:%S')}"
+        )
+        file_start = int(start.strftime("%Y%m%d%H%M%S"))
+        file_end = int(end.strftime("%Y%m%d%H%M%S"))
+        logger.info(f"File range: {file_start} to {file_end}")
+    else:
+        # Dates are optional/ignored for simulation readers; parse them only if
+        # the user supplied them (kept for logging when present).
+        start = parse_datetime(args.start) if args.start else None
+        end = parse_datetime(args.end) if args.end else None
+        logger.info(
+            f"reader={args.reader}: selecting files from --base-path alone "
+            "(date arguments ignored)"
+        )
 
     # Validate that base path exists
     if not os.path.exists(args.base_path):
