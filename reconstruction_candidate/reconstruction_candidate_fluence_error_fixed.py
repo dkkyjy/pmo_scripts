@@ -19,6 +19,12 @@ import scienceplots
 
 plt.rcParams.update({"text.usetex": False})
 plt.style.use(['science', 'grid', 'no-latex'])
+# ── 快速模式: RECON_SKIP_PLOTS=1 时把所有 savefig 置空 (Agg 后端延迟渲染,
+#    PNG 光栅化 + 编码 + ceph 写盘是单事件主要耗时来源; 统计只需 summary/
+#    shower_output.txt, 不需要诊断图)。未设该环境变量时行为不变。──
+if os.environ.get('RECON_SKIP_PLOTS'):
+    plt.savefig = lambda *a, **k: None
+
 
 
 from scipy.stats import chi2, norm
@@ -446,12 +452,15 @@ def PWF_fit(x, y, z, ant_t, theta0, phi0):
     m.errordef = 1
     m.tol = 1e-5
     m.migrad() # 执行最小化
+    m.hesse()  # 计算海森矩阵 (误差估计)
 
     theta = m.values["theta"]
     phi = m.values["phi"]
     fval = m.fval
     
-    return theta, phi, fval / (len(x) - 2)
+    theta_err = m.errors["theta"]
+    phi_err = m.errors["phi"]
+    return theta, phi, fval / (len(x) - 2), theta_err, phi_err
 
 #--------------------------------------------------------------------------
 
@@ -560,8 +569,10 @@ def _load_du_position_for_input(root_path, det_pos_path = None):
 
 #--------------------------------------------------------------------------
 
-def read_xyz_coordinates(file_path, du_ids_all):
-
+def read_xyz_coordinates(file_path, du_ids_all, rotate=True):
+    # rotate=True : 对坐标施加 GRAND 站点布局旋转 (真实 trigger / teventadc 生产表需要)。
+    # rotate=False: 直接使用坐标表原文 (CoREAS / starshape 的 du_coords.txt 已在重建所用
+    #               坐标系中, 与 pmo 生成 PWM/SWM yaml 及 shower tshower 真值保持一致)。
     DU_position = _read_du_position_table(file_path) # 加载 DU 位置数据, 包含 DU ID 和坐标信息 (兼容空格/逗号分隔)
 
     DU_rotation_matrix = np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
@@ -570,7 +581,10 @@ def read_xyz_coordinates(file_path, du_ids_all):
 
     DU_all_positions = np.stack((DU_all_x_positions, DU_all_y_positions, DU_all_z_positions), axis = 1) # 所有 DU 的位置矩阵 (M x 3)
 
-    DU_all_positions_rotated = np.dot(DU_rotation_matrix, DU_all_positions.T).T # 所有 DU 的位置矩阵经过旋转后的版本 (M x 3)
+    if rotate:
+        DU_all_positions_rotated = np.dot(DU_rotation_matrix, DU_all_positions.T).T # 所有 DU 的位置矩阵经过旋转后的版本 (M x 3)
+    else:
+        DU_all_positions_rotated = DU_all_positions # CoREAS/starshape: 坐标表原文即为重建坐标系, 不旋转
 
     #--------------------------------------------------------------------------
 
@@ -585,7 +599,11 @@ def read_xyz_coordinates(file_path, du_ids_all):
     x_position, y_position, z_position = np.array(x_position), np.array(y_position), np.array(z_position)
 
     DU_positions = np.stack((x_position, y_position, z_position), axis = 1) # 触发的 DU 的位置矩阵 (N x 3)
-    DU_positions_rotated = np.dot(DU_rotation_matrix, DU_positions.T).T # 旋转坐标系以适应 GRAND 的站点布局
+
+    if rotate:
+        DU_positions_rotated = np.dot(DU_rotation_matrix, DU_positions.T).T # 旋转坐标系以适应 GRAND 的站点布局
+    else:
+        DU_positions_rotated = DU_positions # CoREAS/starshape: 坐标表原文即为重建坐标系, 不旋转
 
     #--------------------------------------------------------------------------
 
@@ -913,10 +931,12 @@ def re_calculate_Voc_from_reconstruction(LST_time, N_time, freqs_band, freqs_rea
 
 #--------------------------------------------------------------------------
 
-def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = None, valid_du_ids = None, theta = None, phi = None): # 基于平面波前拟合 (PWF) 的电场重建
-    # 可选外部先验 (来自 candidates YAML 的 PWM 结果):
+def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = None, valid_du_ids = None, theta = None, phi = None, prior_times = None): # 基于平面波前拟合 (PWF) 的电场重建
+    # 可选外部先验 (来自 matched_PWM.yaml 的 PWM 结果):
     #   valid_du_ids: 给定则用 np.isin 直接筛天线, 替换内部 causality_filter 图优化筛选;
-    #   theta / phi : 给定则直接采用该平面波方向, 跳过 PWF 网格搜索。
+    #   prior_times : 给定则用 yaml 的到达时间 (du_id -> ns) 替换 ROOT 的 du_nanoseconds;
+    #   theta / phi : yaml 的 zenith / azimuth (deg)。换算为 PWF 内部坐标作单一初值,
+    #                 仍执行一次 PWF_fit (不跑网格搜索)。
 
     logger.info(f"Starting E-field reconstruction using PWF from {root_path} , event:  {int(event_number_int)}")
 
@@ -933,17 +953,37 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
     #---------------------------------------------------------------------------
     
     # 依输入 tree 类型选择 DU 坐标表: teventadc -> 生产表; tadc (CoREAS) -> du_coords.txt。
-    _, du_pos_path = _load_du_position_for_input(root_path, det_pos_path)
-    x_position, y_position, z_position, DU_positions_rotated, DU_all_positions_rotated = read_xyz_coordinates(du_pos_path, du_ids_all)
+    # 旋转策略: 仅真实 trigger (teventadc) 需施加 GRAND 布局旋转; CoREAS/starshape (tadc) 不旋转。
+    tree_kind, du_pos_path = _load_du_position_for_input(root_path, det_pos_path)
+    x_position, y_position, z_position, DU_positions_rotated, DU_all_positions_rotated = read_xyz_coordinates(du_pos_path, du_ids_all, rotate = (tree_kind == 'teventadc'))
 
     #---------------------------------------------------------------------------
     #---------------------------------------------------------------------------
     
     if valid_du_ids is not None:
         # 外部给定 DU 子集 (PWM): 直接 np.isin 筛选, 替换内部 causality_filter 图优化。
+        # prior_times 非空时, 用 yaml 的到达时间 (du_id -> ns) 替换 ROOT 的 du_nanoseconds。
+        du_ns_lookup = None
+        if prior_times is not None:
+            du_ns_lookup = {}
+            for k, v in prior_times.items():
+                if isinstance(v, (list, tuple)):
+                    v = v[0] if len(v) else None
+                if v is not None:
+                    du_ns_lookup[int(k)] = float(v)
         causal_mask = np.isin(du_ids_all, np.asarray(valid_du_ids))
         triggered_du_ids        = du_ids_all[causal_mask]
-        du_nanoseconds_filtered = du_nanoseconds[causal_mask]
+        if du_ns_lookup is not None:
+            missing = [int(d) for d in triggered_du_ids if int(d) not in du_ns_lookup]
+            if missing:
+                logger.warning(f"[PWM] yaml prior_times 缺少 {len(missing)} 个 DU 的时间, 回退到 ROOT: {missing}")
+            du_nanoseconds_filtered = np.array([
+                du_ns_lookup[int(d)] if int(d) in du_ns_lookup else du_nanoseconds[i]
+                for i, d in enumerate(du_ids_all) if causal_mask[i]
+            ])
+            logger.info(f"[PWM] 使用 yaml 先验到达时间替换 ROOT du_nanoseconds ({len(triggered_du_ids)} DUs)")
+        else:
+            du_nanoseconds_filtered = du_nanoseconds[causal_mask]
         trace_1_filtered = trace_1[causal_mask]
         trace_2_filtered = trace_2[causal_mask]
         trace_3_filtered = trace_3[causal_mask]
@@ -964,17 +1004,28 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
     #---------------------------------------------------------------------------
 
     if theta is not None and phi is not None:
-        # 外部给定平面波方向 (PWM): 直接采用, 跳过 PWF 网格搜索。
-        rec_theta_plane, rec_phi_plane, chi2Plane = theta, phi, np.inf
-        logger.info(f"[PWM] 使用外部平面波方向: theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg")
+        # yaml 的 zenith / azimuth 换算为 PWF 内部坐标 (θ, φ) 作单一初值,
+        # 仍执行一次 PWF_fit (不再跑 6x6 网格搜索)。
+        # 换算 (对固定版输出侧 rec_theta=180-θ_fit, rec_phi=φ_fit+180 的逆):
+        #   θ_fit0 = 180 - zenith ,  φ_fit0 = azimuth
+        theta0 = 180.0 - float(theta)
+        phi0 = float(phi) % 360.0  # 修复: CoREAS tadc 不旋转坐标, 初值不再减 90 (见 cc_coreas_analysis.md)
+        theta_fit, phi_fit, fval, theta_fit_err, phi_fit_err = PWF_fit(DU_positions_rotated[:, 0], DU_positions_rotated[:, 1], DU_positions_rotated[:, 2], du_nanoseconds_filtered * 1e-9, theta0, phi0)
+        chi2Plane = fval
+        rec_theta_plane, rec_phi_plane = 180 - theta_fit, phi_fit + 180
+        rec_theta_plane_err, rec_phi_plane_err = theta_fit_err, phi_fit_err
+        if rec_phi_plane > 360: rec_phi_plane = rec_phi_plane - 360
+        logger.info(f"[PWM] PWF 单点初值拟合 (theta0={theta0:.2f}, phi0={phi0:.2f}): theta = {rec_theta_plane:.2f} deg, phi = {rec_phi_plane:.2f} deg, chi2 = {chi2Plane:.2e}")
     else:
         rec_theta_plane, rec_phi_plane, chi2Plane = np.inf, np.inf, np.inf # 平面波前拟合 (PWF) 寻找最佳角度
+        rec_theta_plane_err, rec_phi_plane_err = np.inf, np.inf
 
         for theta0 in thetaList:
             for phi0 in phiList:
-                theta, phi, fval = PWF_fit(DU_positions_rotated[:, 0], DU_positions_rotated[:, 1], DU_positions_rotated[:, 2], du_nanoseconds_filtered * 1e-9, theta0, phi0)
+                theta, phi, fval, theta_err, phi_err = PWF_fit(DU_positions_rotated[:, 0], DU_positions_rotated[:, 1], DU_positions_rotated[:, 2], du_nanoseconds_filtered * 1e-9, theta0, phi0)
                 if fval < chi2Plane:
                     chi2Plane, rec_theta_plane, rec_phi_plane = fval, theta, phi
+                    rec_theta_plane_err, rec_phi_plane_err = theta_err, phi_err
 
         rec_theta_plane, rec_phi_plane = 180 - rec_theta_plane, rec_phi_plane + 180
         if rec_phi_plane > 360: rec_phi_plane = rec_phi_plane - 360
@@ -1008,7 +1059,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
     #---------------------------------------------------------------------------
     #---------------------------------------------------------------------------
 
-    saved_data = np.zeros([n_triggered, 16]) # 新增第16列: Fluence_sigma (物理传播误差, 见下方计算)
+    saved_data = np.zeros([n_triggered, 18]) # 16 列 + 末尾 2 列 PWF 误差 (theta_err, phi_err) # 新增第16列: Fluence_sigma (物理传播误差, 见下方计算)
     E_rec_time_all_DUs = [] # 初始化一个列表来保存每个 DU 的重建电场时域数据
 
     for i in range(n_triggered):
@@ -1146,7 +1197,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
         #-------------------------------------------------------------------------------------------
         #-------------------------------------------------------------------------------------------
 
-        saved_data[i] = [event_num, gps_time[3 * i + 2], LST_time, triggered_du_ids[i], rec_theta_plane, rec_phi_plane, chi2Plane, du_nanoseconds_filtered[i], DU_positions_rotated[i, 0], DU_positions_rotated[i, 1], DU_positions_rotated[i, 2], Fluence, Fluence_theta, Fluence_phi, Fluence_theta_phi, Fluence_sigma] # 保存 DU ID, 三通道峰值电压, 重建电场的 fluence 及其物理误差到数组中
+        saved_data[i] = [event_num, gps_time[3 * i + 2], LST_time, triggered_du_ids[i], rec_theta_plane, rec_phi_plane, chi2Plane, du_nanoseconds_filtered[i], DU_positions_rotated[i, 0], DU_positions_rotated[i, 1], DU_positions_rotated[i, 2], Fluence, Fluence_theta, Fluence_phi, Fluence_theta_phi, Fluence_sigma, rec_theta_plane_err, rec_phi_plane_err] # 保存 DU ID, 三通道峰值电压, 重建电场的 fluence 及其物理误差到数组中
 
         E_rec_time_all_DUs.append(E_rec_time.copy()) # 将每个触发 DU 的重建电场时域波形保存到列表中, 供后续分析使用
 
@@ -1296,7 +1347,10 @@ def SWF_fit(x, y, z, ant_t, x0, y0, z0):
     ys = m.values["ys"]
     zs = m.values["zs"]
     fval = m.fval
-    return xs, ys, zs, fval
+    xs_err = m.errors["xs"]
+    ys_err = m.errors["ys"]
+    zs_err = m.errors["zs"]
+    return xs, ys, zs, fval, xs_err, ys_err, zs_err
 
 #--------------------------------------------------------------------------
 
@@ -1502,22 +1556,30 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
         tuple: 重建结果 (初始角度, 平面波chi2, 重建Xmax坐标, 球面波chi2, 重建角度, dw, A, 最小chi2)。
     """
     if x_xmax_external is not None and y_xmax_external is not None and z_xmax_external is not None:
-        # 外部给定 Xmax 源点 (来自 candidates YAML 的 SWM 结果): 直接采用, 跳过 SWF 网格搜索。
-        rec_x_xmax, rec_y_xmax, rec_z_xmax = float(x_xmax_external), float(y_xmax_external), float(z_xmax_external)
-        chi2Sph = float(chi_square_external) if chi_square_external is not None else 0.0
-        logger.info(f"[SWM] 使用外部 Xmax 源点: ({rec_x_xmax}, {rec_y_xmax}, {rec_z_xmax}), chi2 = {chi2Sph}")
+        # 外部给定 Xmax 源点 (来自 candidates YAML 的 SWM 结果): 用作 SWF_fit 的单一初值,
+        # 仅执行一次拟合 (不跑 4x4x4 网格)。SWM 源点与内部天线坐标同为重建坐标系(未旋转),
+        # 故无需坐标变换。chi_square_external 仅作日志参考, 真值改用精炼后的 fval。
+        x0, y0, z0 = float(x_xmax_external), float(y_xmax_external), float(z_xmax_external)
+        chi2_external_ref = float(chi_square_external) if chi_square_external is not None else np.nan
+        rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph, rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = SWF_fit(x, y, z, t, x0, y0, z0)
+        logger.info(f"[SWM] SWF 单点初值拟合 (x0={x0:.1f}, y0={y0:.1f}, z0={z0:.1f}, chi2_ext={chi2_external_ref}): "
+                    f"({rec_x_xmax:.1f}, {rec_y_xmax:.1f}, {rec_z_xmax:.1f}), chi2 = {chi2Sph:.2e}")
     else:
         rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph = np.inf, np.inf, np.inf, np.inf
+        rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = np.inf, np.inf, np.inf
 
         for x0 in xList: # 网格搜索最佳 Xmax 位置 (SWF 拟合)
             for y0 in yList:
                 for z0 in zList:
-                    x_xmax, y_xmax, z_xmax, fval = SWF_fit(x, y, z, t, x0, y0, z0)
+                    x_xmax, y_xmax, z_xmax, fval, x_err, y_err, z_err = SWF_fit(x, y, z, t, x0, y0, z0)
                     if fval < chi2Sph:
                         chi2Sph = fval
                         rec_x_xmax = x_xmax
                         rec_y_xmax = y_xmax
                         rec_z_xmax = z_xmax
+                        rec_x_xmax_err = x_err
+                        rec_y_xmax_err = y_err
+                        rec_z_xmax_err = z_err
                     
     zenith_ini, azimuth_ini, chi2Plane  = init_input
     rec_dw, rec_A, rec_theta, rec_phi, fmin = np.inf, np.inf, np.inf, np.inf, np.inf
@@ -1585,7 +1647,7 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
     except Exception as e:
         logger.warning(f"Could not calculate wc for display: {e}")
     
-    return zenith_ini, azimuth_ini, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph / (len(x) - 3), rec_theta, rec_phi, rec_dw, rec_A, fmin / (len(p[~np.isnan(p)]) - (3 if rec_dw_err == 0 else 4)), np.asarray(wc_adf).reshape(-1)[0], rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err # wc_adf 兼容写法(标量/单元素数组都可)
+    return zenith_ini, azimuth_ini, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph / (len(x) - 3), rec_theta, rec_phi, rec_dw, rec_A, fmin / (len(p[~np.isnan(p)]) - (3 if rec_dw_err == 0 else 4)), np.asarray(wc_adf).reshape(-1)[0], rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err # wc_adf 兼容写法(标量/单元素数组都可)
 
 #--------------------------------------------------------------------------
 
@@ -1766,9 +1828,9 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     #-------------------------------------------------------------------------------------------------
 
-    # 全部 DU 的旋转坐标 (绘图背景点): 按输入 tree 类型选定坐标表后读取。
-    _, du_pos_path = _load_du_position_for_input(root_path, det_pos_path)
-    DU_all_positions_rotated = read_xyz_coordinates(du_pos_path, [])[4]
+    # 全部 DU 的坐标 (绘图背景点): 按输入 tree 类型选定坐标表后读取; 旋转策略同 efield 阶段。
+    tree_kind, du_pos_path = _load_du_position_for_input(root_path, det_pos_path)
+    DU_all_positions_rotated = read_xyz_coordinates(du_pos_path, [], rotate = (tree_kind == 'teventadc'))[4]
 
     #-------------------------------------------------------------------------------------------------
 
@@ -1803,7 +1865,8 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     rec_theta_plane, rec_phi_plane, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, \
     chi2Sph, rec_theta_sph, rec_phi_sph, rec_dw, rec_A, fmin, rec_wc, \
-    rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err = \
+    rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, \
+    rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = \
     recons_angle(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
 
 
@@ -2239,7 +2302,8 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
                               E_cent_adf[2], np.sqrt(dE_A_adf[2] ** 2 + dE_dw_adf[2] ** 2), \
                               E_che_EeV_center[0], np.sqrt(dEamp[0] ** 2 + dEwc[0] ** 2 + dEdw[0] ** 2), \
                               E_che_EeV_center[1], np.sqrt(dEamp[1] ** 2 + dEwc[1] ** 2 + dEdw[1] ** 2), \
-                              E_che_EeV_center[2], np.sqrt(dEamp[2] ** 2 + dEwc[2] ** 2 + dEdw[2] ** 2)
+                              E_che_EeV_center[2], np.sqrt(dEamp[2] ** 2 + dEwc[2] ** 2 + dEdw[2] ** 2), \
+                              rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err
                               ])
 
     np.savetxt(os.path.join(efield_rec_dir + filename + '/', 'shower_output.txt'), shower_output, fmt = '%.6e')

@@ -18,8 +18,9 @@
         --output summary.yaml
 
 candidates YAML 输入 (``--candidates``) 除 ``file``/``index`` 外, 还支持可选外部
-先验字段 (PWM/SWM), 给定后跳过对应内部网格搜索:
-  PWM: ``du_id`` (天线子集) / ``zenith`` / ``azimuth`` (平面波方向)
+先验字段 (PWM/SWM):
+  PWM: ``du_id`` (天线子集) / ``time`` (到达时间 du_id->ns, 替换 ROOT) /
+       ``zenith`` / ``azimuth`` (作 PWF 单点初值, 仍跑一次 PWF_fit)
   SWM: ``x`` / ``y`` / ``z`` (Xmax 源点) / ``chi_square`` (外部 chi2)
 
 ``shower_output.txt`` 列 (见 fixed 版 energy_restruction 的 shower_output):
@@ -67,7 +68,7 @@ _DATE_RE = re.compile(r"(\d{8})")  # 从文件名中提取 YYYYMMDD 日期
 class TaskSpec(NamedTuple):
     """单个重建任务的规格，替代裸元组，字段自文档化。
 
-    后 7 个字段为可选外部先验，来自 candidates YAML 的 PWM/SWM 结果；
+    后 8 个字段为可选外部先验，来自 candidates YAML 的 PWM/SWM 结果；
     为 None 时回落到内部网格搜索（与原行为一致）。
     """
     root_path: str
@@ -75,6 +76,7 @@ class TaskSpec(NamedTuple):
     det_pos_path: Optional[str] = None
     resume: bool = True
     valid_du_ids: Optional[List[int]] = None   # PWM: 天线子集
+    prior_times: Optional[dict] = None         # PWM: yaml 到达时间 du_id -> ns
     theta: Optional[float] = None              # PWM: 平面波天顶角 (deg)
     phi: Optional[float] = None                # PWM: 平面波方位角 (deg)
     x_xmax: Optional[float] = None             # SWM: Xmax 源点 x (m)
@@ -95,12 +97,17 @@ def _extract_date_from_filename(filename):
 def _build_root_path(filename, base_path):
     """根据文件名和 base_path 构造完整 root 文件路径。
 
-    若 filename 已是完整/相对带目录路径则直接返回; 否则自动拼为
-    ``base_path/YYYY/MM/DD/filename`` (日期从 filename 提取)。
+    若 filename 已是完整/相对带目录路径则直接返回; 否则优先拼为
+    ``base_path/YYYY/MM/DD/filename`` (日期从 filename 提取), 文件名中不含
+    8 位日期时回退为 ``base_path/filename`` (CoREAS 模拟文件名如
+    ``adc_0-99_L1_0000.root`` 无日期, base_path 指向具体 shard 目录即可)。
     """
     if os.path.isabs(filename) or os.path.dirname(filename):
         return filename
-    year, month, day = _extract_date_from_filename(filename)
+    try:
+        year, month, day = _extract_date_from_filename(filename)
+    except ValueError:
+        return os.path.join(base_path, filename)
     return os.path.join(base_path, year, month, day, filename)
 
 
@@ -303,10 +310,13 @@ def _load_completed_entry(root_path, event_index):
         event_num=None,
         file_path=root_path,
         event_index=event_index,
-        PWF=dict(rec_theta_plane=None, rec_phi_plane=None, chi2_per_dof=None),
-        SWF=dict(rec_x_xmax=None, rec_y_xmax=None, rec_z_xmax=None, chi2_per_dof=None),
-        ADF=dict(rec_theta_sph=None, rec_phi_sph=None, rec_A=None, rec_wc=None,
-                 rec_dw=None, chi2_per_dof=None),
+        PWF=dict(rec_theta_plane=None, rec_phi_plane=None, chi2_per_dof=None,
+                 rec_theta_plane_err=None, rec_phi_plane_err=None),
+        SWF=dict(rec_x_xmax=None, rec_y_xmax=None, rec_z_xmax=None, chi2_per_dof=None,
+                 rec_x_xmax_err=None, rec_y_xmax_err=None, rec_z_xmax_err=None),
+        ADF=dict(rec_theta_sph=None, rec_theta_err=None, rec_phi_sph=None, rec_phi_err=None,
+                 rec_A=None, rec_A_err=None, rec_wc=None, rec_dw=None, rec_dw_err=None,
+                 chi2_per_dof=None),
         antennas=dict(du_ids=[], omega_rad=[], energy_flux=[], polarization=[]),
         _status=_STATUS_RESUMED,
     )
@@ -314,6 +324,9 @@ def _load_completed_entry(root_path, event_index):
     entry['PWF']['rec_theta_plane'] = _safe(fd[0, 4])
     entry['PWF']['rec_phi_plane'] = _safe(fd[0, 5])
     entry['PWF']['chi2_per_dof'] = _safe(fd[0, 6])
+    # 末尾新增 2 列 PWF 误差 (旧文件无此列 -> None)
+    entry['PWF']['rec_theta_plane_err'] = _safe(fd[0, 16]) if fd.shape[1] > 16 else None
+    entry['PWF']['rec_phi_plane_err'] = _safe(fd[0, 17]) if fd.shape[1] > 17 else None
     entry['antennas']['du_ids'] = _safe_int_list(fd[:, 3].astype(int))
 
     # 从落盘文件复现三个派生字段 (omega_rad / energy_flux / polarization)
@@ -327,12 +340,20 @@ def _load_completed_entry(root_path, event_index):
     entry['SWF']['rec_y_xmax'] = _safe(so[1])
     entry['SWF']['rec_z_xmax'] = _safe(so[2])
     entry['SWF']['chi2_per_dof'] = _safe(so[3])
+    # 末尾新增 3 列 SWF 误差 (旧文件无此列 -> None)
+    entry['SWF']['rec_x_xmax_err'] = _safe(so[15]) if so.size > 15 else None
+    entry['SWF']['rec_y_xmax_err'] = _safe(so[16]) if so.size > 16 else None
+    entry['SWF']['rec_z_xmax_err'] = _safe(so[17]) if so.size > 17 else None
 
     entry['ADF']['rec_theta_sph'] = _safe(so[4])
+    entry['ADF']['rec_theta_err'] = _safe(so[5])
     entry['ADF']['rec_phi_sph'] = _safe(so[6])
+    entry['ADF']['rec_phi_err'] = _safe(so[7])
     entry['ADF']['rec_A'] = _safe(so[8])
+    entry['ADF']['rec_A_err'] = _safe(so[9])
     entry['ADF']['rec_wc'] = _safe(so[10])
     entry['ADF']['rec_dw'] = _safe(so[12])
+    entry['ADF']['rec_dw_err'] = _safe(so[13])
     entry['ADF']['chi2_per_dof'] = _safe(so[14])
     return entry
 
@@ -347,8 +368,9 @@ def load_tasks_from_candidates_yaml(candidate_yaml_path, base_path):
     """从 candidates.yaml 中提取 TaskSpec 任务列表。
 
     除 ``file`` / ``index`` 外, 还读取可选先验字段 (PWM/SWM):
-    ``du_id`` / ``zenith`` / ``azimuth`` / ``x`` / ``y`` / ``z`` / ``chi_square``。
-    缺失时对应先验为 None, 行为与旧版一致 (内部网格搜索)。
+    ``du_id`` / ``time`` / ``zenith`` / ``azimuth`` / ``x`` / ``y`` / ``z`` / ``chi_square``。
+    ``time`` (du_id -> ns) 用于替换 ROOT 的 du_nanoseconds; ``zenith`` / ``azimuth``
+    换算为 PWF 内部坐标作单一初值。缺失时对应先验为 None, 行为与旧版一致。
     """
     tasks = []
     with open(candidate_yaml_path, 'r') as f:
@@ -363,6 +385,7 @@ def load_tasks_from_candidates_yaml(candidate_yaml_path, base_path):
         file_path = payload.get("file")
         event_index = payload.get("index")
         du_ids = payload.get("du_id")
+        times = payload.get("time")
         if file_path is None or event_index is None:
             logger.warning(
                 f"Missing file or index in candidate: key={event_key} "
@@ -374,6 +397,7 @@ def load_tasks_from_candidates_yaml(candidate_yaml_path, base_path):
             root_path=full_path,
             event_index=int(event_index),
             valid_du_ids=[int(d) for d in du_ids] if isinstance(du_ids, list) and du_ids else None,
+            prior_times=dict(times) if isinstance(times, dict) and times else None,
             theta=_optional_float(payload, "zenith"),
             phi=_optional_float(payload, "azimuth"),
             x_xmax=_optional_float(payload, "x"),
@@ -458,13 +482,16 @@ def reconstruct_one(args):
         event_index=event_index,
         PWF=dict(
             rec_theta_plane=None, rec_phi_plane=None, chi2_per_dof=None,
+            rec_theta_plane_err=None, rec_phi_plane_err=None,
         ),
         SWF=dict(
             rec_x_xmax=None, rec_y_xmax=None, rec_z_xmax=None, chi2_per_dof=None,
+            rec_x_xmax_err=None, rec_y_xmax_err=None, rec_z_xmax_err=None,
         ),
         ADF=dict(
-            rec_theta_sph=None, rec_phi_sph=None,
-            rec_A=None, rec_wc=None, rec_dw=None, chi2_per_dof=None,
+            rec_theta_sph=None, rec_theta_err=None, rec_phi_sph=None, rec_phi_err=None,
+            rec_A=None, rec_A_err=None, rec_wc=None, rec_dw=None, rec_dw_err=None,
+            chi2_per_dof=None,
         ),
         antennas=dict(
             du_ids=[], omega_rad=[], energy_flux=[],
@@ -475,7 +502,8 @@ def reconstruct_one(args):
     # ── 步骤 1：电场重建 ──────────────────────────────────────────────────────
     try:
         efield_recons_from_efield_PWF(root_path, event_index, det_pos_path,
-                                      spec.valid_du_ids, spec.theta, spec.phi)
+                                      spec.valid_du_ids, spec.theta, spec.phi,
+                                      spec.prior_times)
 
         fd = _read_efield_txt(root_path, event_index)
 
@@ -483,6 +511,9 @@ def reconstruct_one(args):
         entry['PWF']['rec_theta_plane'] = _safe(fd[0, 4])
         entry['PWF']['rec_phi_plane']   = _safe(fd[0, 5])
         entry['PWF']['chi2_per_dof']    = _safe(fd[0, 6])
+        # 末尾新增 2 列 PWF 误差 (旧文件无此列 -> None)
+        entry['PWF']['rec_theta_plane_err'] = _safe(fd[0, 16]) if fd.shape[1] > 16 else None
+        entry['PWF']['rec_phi_plane_err'] = _safe(fd[0, 17]) if fd.shape[1] > 17 else None
         entry['antennas']['du_ids']         = _safe_int_list(fd[:, 3].astype(int))
         entry['antennas']['energy_flux']    = _safe_list(fd[:, 11])
 
@@ -507,12 +538,20 @@ def reconstruct_one(args):
         entry['SWF']['rec_y_xmax']    = _safe(so[1])
         entry['SWF']['rec_z_xmax']    = _safe(so[2])
         entry['SWF']['chi2_per_dof']  = _safe(so[3])
+        # 末尾新增 3 列 SWF 误差 (旧文件无此列 -> None)
+        entry['SWF']['rec_x_xmax_err'] = _safe(so[15]) if so.size > 15 else None
+        entry['SWF']['rec_y_xmax_err'] = _safe(so[16]) if so.size > 16 else None
+        entry['SWF']['rec_z_xmax_err'] = _safe(so[17]) if so.size > 17 else None
 
         entry['ADF']['rec_theta_sph'] = _safe(so[4])
+        entry['ADF']['rec_theta_err'] = _safe(so[5])
         entry['ADF']['rec_phi_sph']   = _safe(so[6])
+        entry['ADF']['rec_phi_err'] = _safe(so[7])
         entry['ADF']['rec_A']         = _safe(so[8])
+        entry['ADF']['rec_A_err'] = _safe(so[9])
         entry['ADF']['rec_wc']        = _safe(so[10])
         entry['ADF']['rec_dw']        = _safe(so[12])
+        entry['ADF']['rec_dw_err'] = _safe(so[13])
         entry['ADF']['chi2_per_dof']  = _safe(so[14])
 
         # w / energy_flux_adf / delta_angle 均由 energy_restruction 直接返回,
