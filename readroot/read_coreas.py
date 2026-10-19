@@ -49,6 +49,11 @@ Usage::
 
     python readroot/read_coreas.py <adc_file> --date <YYYY/MM/DD> \\
         --out_dir_base <dir> [--max-events N] [--with-signal --channel XY]
+        [--max-radius R]
+
+``--max-radius R`` keeps only detectors whose horizontal radius
+``sqrt(x^2 + y^2)`` from the array geometric origin is ``<= R`` metres; it is a
+no-op for ``R <= 0`` and any event left with no detector is dropped entirely.
 """
 
 from __future__ import annotations
@@ -206,6 +211,11 @@ def _build_det_pos(du_ids: List[int], du_xyz) -> Dict[str, List[float]]:
     return positions
 
 
+def _horizontal_radius(xyz) -> float:
+    """Horizontal radius ``sqrt(x^2 + y^2)`` of a ``[x, y, z]`` position."""
+    return float(np.hypot(float(xyz[0]), float(xyz[1])))
+
+
 def read_coreas_file(
     file_path: str,
     max_events: int = 0,
@@ -213,6 +223,7 @@ def read_coreas_file(
     left: int = 0,
     right: int = 512,
     channel: str = "XY",
+    max_radius: float = 0.0,
 ) -> Tuple[List[dict], str]:
     """Read one CoREAS ``adc_*`` file (plus companions) into per-event payloads.
 
@@ -357,8 +368,24 @@ def read_coreas_file(
             continue
 
         event_number = int(event_number_list[index])
+        event_ns = du_nanosecond_list[index]
+
+        if max_radius > 0.0 and det_pos_static:
+            # Keep only DUs within the horizontal-radius cut. An event left
+            # empty is dropped entirely (per the agreed semantics).
+            kept = [
+                (int(du), ns)
+                for du, ns in zip(du_ids, event_ns)
+                if str(int(du)) in det_pos_static
+                and _horizontal_radius(det_pos_static[str(int(du))]) <= max_radius
+            ]
+            if not kept:
+                continue
+            du_ids = [du for du, _ in kept]
+            event_ns = [ns for _, ns in kept]
+
         time_map, list_du_id = build_time_map_and_du_ids(
-            du_ids, du_nanosecond_list[index]
+            du_ids, event_ns
         )
 
         det_pos = {
@@ -397,7 +424,14 @@ def read_coreas_file(
             "efield_config": efield_config,
         }
         if with_signal:
-            payload["signal"] = signal_maps[index]
+            signal_map = signal_maps[index]
+            if max_radius > 0.0 and det_pos_static:
+                signal_map = {
+                    du: val
+                    for du, val in signal_map.items()
+                    if du in time_map
+                }
+            payload["signal"] = signal_map
 
         payloads.append(payload)
 
@@ -454,6 +488,16 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         default="XY",
         help="Channel to fold the trace into for the signal block",
     )
+    parser.add_argument(
+        "--max-radius",
+        dest="max_radius",
+        type=float,
+        default=0.0,
+        help=(
+            "Keep only DUs whose horizontal radius sqrt(x^2+y^2) <= R metres "
+            "(0 = no cut). Events left empty are dropped."
+        ),
+    )
     return parser.parse_args(argv[1:])
 
 
@@ -473,6 +517,7 @@ def process_root_file(
     left: int = 0,
     right: int = 512,
     channel: str = "XY",
+    max_radius: float = 0.0,
 ) -> bool:
     """Read one CoREAS ROOT file and write one YAML output file."""
     try:
@@ -487,6 +532,7 @@ def process_root_file(
             left=left,
             right=right,
             channel=channel,
+            max_radius=max_radius,
         )
         data = build_yaml(payloads, base_name)
         logger.info(f"Processed events: {len(data)}")
@@ -514,6 +560,7 @@ def main(argv: List[str]) -> int:
         left=args.left,
         right=args.right,
         channel=args.channel,
+        max_radius=args.max_radius,
     )
     return 0 if success else 2
 

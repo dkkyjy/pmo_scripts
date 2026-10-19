@@ -122,6 +122,7 @@ python loop.py --reader starshape \
 | `--skip-fingerprint` / `--no-skip-fingerprint` | 见下 | 跳过指纹过滤阶段 |
 | `--force-recompute` | 关 | 忽略已有 `_matched`/`_PWM`/`_SWM` 缓存并重算 |
 | `--max-events` | `0` | 转发给 coreas/starshape reader，只读前 N 个事件（0=全部） |
+| `--max-radius` | `0` | **仅 `--reader coreas` 生效**：按水平半径 `sqrt(x²+y²) ≤ R`（米，几何原点）只保留中心致密阵列的 DU，取空的事件整条丢弃；`0`=不裁剪。starshape/trigger 显式传入时静默忽略 |
 | `--min-detectors` | `5` | 匹配阶段最少探测器数，转发给 `main.py` |
 | `--skip-footprint` | coreas/starshape 下默认关 | 跳过定制化 footprint 形状筛选（trigger 默认启用；sim 默认跳过，见下文差异说明） |
 | `--skip-ringcut` | coreas/starshape 下默认关 | 跳过定制化 d_max ring cut（trigger 默认启用；sim 默认跳过，见下文差异说明） |

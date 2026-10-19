@@ -71,6 +71,7 @@ class TaskSpec:
     reader: str
     min_detectors: int
     max_events: int = 0
+    max_radius: float = 0.0
     skip_footprint: bool = False
     skip_ringcut: bool = False
     skip_offset: bool = False
@@ -228,6 +229,7 @@ def make_tasks_for_file_paths(
             reader=args.reader,
             min_detectors=args.min_detectors,
             max_events=args.max_events,
+            max_radius=args.max_radius,
             skip_footprint=args.skip_footprint,
             skip_ringcut=args.skip_ringcut,
             skip_offset=args.skip_offset,
@@ -361,6 +363,7 @@ def make_readheader_command(
     left: int = 0,
     right: int = 512,
     channel: str = "XY",
+    max_radius: float = 0.0,
 ) -> list[str]:
     """Construct the read command with file_path, date, out_dir_base parameters.
 
@@ -389,6 +392,10 @@ def make_readheader_command(
     if reader in ("starshape", "coreas"):
         if max_events > 0:
             cmd += ["--max-events", str(max_events)]
+        # --max-radius only applies to the CoREAS reader (central dense array);
+        # other readers silently ignore it (see README).
+        if reader == "coreas" and max_radius > 0:
+            cmd += ["--max-radius", str(max_radius)]
         if with_signal:
             cmd.append("--with-signal")
             # CoREAS traces are windowed with --left/--right; StarShape reads
@@ -622,6 +629,7 @@ def process_date(task: TaskSpec) -> TaskResult:
                 left,
                 right,
                 channel,
+                task.max_radius,
             )
             logger.info(f"{' '.join(readheader_cmd)}")
 
@@ -833,6 +841,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "forward --max-events to the simulation readers (--reader "
             "coreas/starshape) to only read the first N events (0 = all)"
+        ),
+    )
+    ap.add_argument(
+        "--max-radius",
+        dest="max_radius",
+        type=float,
+        default=0.0,
+        help=(
+            "only honoured by --reader coreas: keep only DUs within the "
+            "horizontal radius sqrt(x^2+y^2) <= R metres of the array "
+            "geometric origin, dropping events left empty (0 = no cut)"
         ),
     )
     ap.add_argument(
