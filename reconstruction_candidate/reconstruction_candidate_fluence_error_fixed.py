@@ -1007,9 +1007,11 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
         # yaml 的 zenith / azimuth 换算为 PWF 内部坐标 (θ, φ) 作单一初值,
         # 仍执行一次 PWF_fit (不再跑 6x6 网格搜索)。
         # 换算 (对固定版输出侧 rec_theta=180-θ_fit, rec_phi=φ_fit+180 的逆):
-        #   θ_fit0 = 180 - zenith ,  φ_fit0 = azimuth
+        #   θ_fit0 = 180 - zenith ,  φ_fit0 = azimuth - 180
+        # 注意 φ 必须减 180: 漏掉时 (曾为 `phi % 360`) PWF 会被引向 φ_fit≈0 的退化解,
+        # 实测 60 例中 33 例χ² 比网格搜索劣化 1e4~1e5 倍; 补上后 58/60 与网格最优一致。
         theta0 = 180.0 - float(theta)
-        phi0 = float(phi) % 360.0  # 修复: CoREAS tadc 不旋转坐标, 初值不再减 90 (见 cc_coreas_analysis.md)
+        phi0 = (float(phi) - 180.0) % 360.0
         theta_fit, phi_fit, fval, theta_fit_err, phi_fit_err = PWF_fit(DU_positions_rotated[:, 0], DU_positions_rotated[:, 1], DU_positions_rotated[:, 2], du_nanoseconds_filtered * 1e-9, theta0, phi0)
         chi2Plane = fval
         rec_theta_plane, rec_phi_plane = 180 - theta_fit, phi_fit + 180
