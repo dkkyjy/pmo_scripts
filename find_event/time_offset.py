@@ -92,21 +92,7 @@ def get_time_offset(id):
     return time_dif
 
 
-def load_time_data(file_path):
-    """Load all data from file and return dictionary"""
-    data_dict = {}
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            parts = line.strip().split(',')
-            if len(parts) == 3:
-                id_val = int(parts[0])
-                data_dict[id_val] = {
-                    'mean': float(parts[1]),
-                    'dispersion': float(parts[2])
-                }
-    return data_dict
-
-# Usage example
-#time_data = load_time_data('2025-06-22_offset_allruns_beacon.txt')
-time_data = load_time_data('2025-10-28_beacon_25Hz_offset.txt')
+# 时间偏移数据由上面的硬编码配置构造（不再依赖外部 beacon 偏移文件）。
+# 结构与旧 load_time_data 保持一致：{det_id: {'mean': ns}}，供 estimation.py 等使用。
+time_data = {det_id: {'mean': mean} for det_id, mean in time_offset}
 # =========================

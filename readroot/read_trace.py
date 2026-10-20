@@ -1,10 +1,21 @@
 """
 ROOT file data reading and processing module.
 
-This module reads a single ROOT file (teventadc) containing "Trigger",
-extracts du_id, gps_time, du_nanoseconds, and trace data,
-calculates the maximum ADC values (or XY combined amplitude for channel XY)
-within the interval [left:right] for the specified channel, and outputs a matching file.
+This module reads a single ROOT file, extracts du_id, gps_time, du_nanoseconds,
+and trace data, calculates the maximum ADC values (or XY combined amplitude for
+channel XY) within the interval [left:right] for the specified channel, and
+outputs a matching file.
+
+Two input schemas are supported (auto-detected via :func:`find_event_tree_key`):
+
+* real trigger data uses the ``teventadc`` tree with per-antenna
+  ``trace_0``/``trace_1``/``trace_2``/``trace_3`` branches (F/X/Y/Z) and a
+  populated ``gps_time`` vector;
+* CoREAS/Dunhuang simulation uses the ``tadc`` tree with a single nested
+  ``trace_ch`` branch of shape ``(n_du, 3, n_time)`` holding the X/Y/Z antenna
+  ports (there is no dedicated F port, so the F channel falls back to X) and an
+  empty ``gps_time`` vector, so a monotonic time axis is synthesised from the
+  run-directory reference time.
 
 Main functions:
 1. Parse command line arguments
@@ -30,10 +41,12 @@ from readroot.common import (
     DATETIME_FORMAT,
     EventPayload,
     YamlData,
+    build_synthetic_gps_times,
     build_time_map_and_du_ids,
-    find_teventadc_key,
+    find_event_tree_key,
     format_event_datetime,
     mkdir as shared_mkdir,
+    parse_sim_base_time,
     write_yaml,
 )
 
@@ -143,35 +156,88 @@ def calculate_xy_combined_max_values(
         combined_max_list.append(channel_max)
     return combined_max_list
 
-def read_file_du_time_ns(file_name: str, left: int, right: int) -> ReadTraceResult:
-    """Read fields from teventadc and compute per-channel max value lists."""
-    root_file = uproot.open(file_name)
-    key_name = find_teventadc_key(list(root_file.keys()), file_name)
-    events = root_file[key_name]
-    data = events.arrays(
-        [
-            "run_number",
-            "event_number",
-            "du_id",
-            "gps_time",
-            "du_nanoseconds",
-            "trace_0",
-            "trace_1",
-            "trace_2",
-            "trace_3",
-        ],
-        library="np",
+def _read_teventadc_traces(data):
+    """Return per-channel trace lists from a real ``teventadc`` payload.
+
+    Returns ``(trace_f, trace_x, trace_y, trace_z)`` where each is a list of
+    events, each event a list of DUs, each DU a waveform list (F/X/Y/Z ports).
+    """
+    return (
+        data["trace_0"].tolist(),
+        data["trace_1"].tolist(),
+        data["trace_2"].tolist(),
+        data["trace_3"].tolist(),
     )
+
+
+def _read_tadc_traces(data):
+    """Return per-channel trace lists from a CoREAS ``tadc`` payload.
+
+    ``trace_ch`` has shape ``(n_du, 3, n_time)`` per event holding the X/Y/Z
+    antenna ports. CoREAS has no dedicated F port, so the F channel reuses X.
+    """
+    trace_ch = data["trace_ch"].tolist()  # per event: list of (3, n_time)
+    trace_x = [[du[0] for du in event] for event in trace_ch]
+    trace_y = [[du[1] for du in event] for event in trace_ch]
+    trace_z = [[du[2] for du in event] for event in trace_ch]
+    trace_f = trace_x
+    return trace_f, trace_x, trace_y, trace_z
+
+
+def read_file_du_time_ns(file_name: str, left: int, right: int) -> ReadTraceResult:
+    """Read fields from the event tree and compute per-channel max value lists.
+
+    Supports both the real ``teventadc`` tree and the CoREAS/Dunhuang ``tadc``
+    tree (see the module docstring for the schema differences).
+    """
+    root_file = uproot.open(file_name)
+    key_name, tree_kind = find_event_tree_key(list(root_file.keys()), file_name)
+    events = root_file[key_name]
+
+    if tree_kind == "teventadc":
+        data = events.arrays(
+            [
+                "run_number",
+                "event_number",
+                "du_id",
+                "gps_time",
+                "du_nanoseconds",
+                "trace_0",
+                "trace_1",
+                "trace_2",
+                "trace_3",
+            ],
+            library="np",
+        )
+        gps_time_list = data["gps_time"].tolist()
+        trace_f_list, trace_x_list, trace_y_list, trace_z_list = _read_teventadc_traces(
+            data
+        )
+    else:  # tadc (CoREAS/Dunhuang simulation): synthesise a GPS time axis.
+        data = events.arrays(
+            [
+                "run_number",
+                "event_number",
+                "du_id",
+                "du_nanoseconds",
+                "trace_ch",
+            ],
+            library="np",
+        )
+        base_time = parse_sim_base_time(file_name)
+        if base_time is None:
+            raise ValueError(
+                f"cannot derive a reference time for simulation file: {file_name}"
+            )
+        gps_time_list = build_synthetic_gps_times(
+            base_time, data["event_number"].tolist()
+        )
+        trace_f_list, trace_x_list, trace_y_list, trace_z_list = _read_tadc_traces(data)
 
     run_number_list = data["run_number"].tolist()
     event_number_list = data["event_number"].tolist()
     du_id_list = data["du_id"].tolist()
-    gps_time_list = data["gps_time"].tolist()
     du_nanosecond_list = data["du_nanoseconds"].tolist()
-    trace_f_list = data["trace_0"].tolist()
-    trace_x_list = data["trace_1"].tolist()
-    trace_y_list = data["trace_2"].tolist()
-    trace_z_list = data["trace_3"].tolist()
 
     ftrace_adc_maxvalue_list = calculate_trace_max_values(trace_f_list, left, right)
     xtrace_adc_maxvalue_list = calculate_trace_max_values(trace_x_list, left, right)
@@ -208,13 +274,18 @@ def build_event_payload(
     index: int,
     file_path: str,
 ) -> EventPayload:
-    """Build one event payload with multi-trigger DU list values."""
+    """Build one event payload with per-DU amplitude values.
+
+    Both ``time`` and ``signal`` are one-to-one maps keyed by DU id, i.e.
+    ``{du: value}``: a DU fires at most once per event, so ``signal`` mirrors
+    the scalar shape of ``time``.
+    """
     time_map, list_du_id = build_time_map_and_du_ids(du_ids, du_nanoseconds)
-    signal_map: Dict[str, List[int]] = {}
+    signal_map: Dict[str, int] = {}
 
     for item_index, du_id_str in enumerate(list_du_id):
         max_value = trace_adc_maxvalue[item_index] if item_index < len(trace_adc_maxvalue) else 10
-        signal_map.setdefault(du_id_str, []).append(int(max_value))
+        signal_map[du_id_str] = int(max_value)
 
     gps_time = gps_times[2]
     datetime_str = format_event_datetime(gps_times)

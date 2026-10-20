@@ -1,6 +1,5 @@
 import numpy as np
 from scipy.optimize import minimize
-import os
 from datetime import datetime, timedelta
 from scipy import linalg
 from logger_config import logger
@@ -17,7 +16,6 @@ except ImportError:
 GPS_UTC_OFFSET = 18
 c = 299792458.0/1e9/1.000259
 np.set_printoptions(precision=3)
-DEFAULT_TIME_OFFSET_FILE = "_offset_byairplane_wyb_complete.txt"
 
 # 球面波源距 rho 的拟合下/上界（米）。上界原为 2e5，会在极倾斜几何下
 # 截断真实远源（实测收敛到 ~2.6e5 m）；放宽到 1e6 后不再撞上限且 chi2 不恶化。
@@ -237,29 +235,6 @@ def gps_to_utc(gps_time):
     gps_epoch = datetime(1970, 1, 1)
     utc_time = gps_epoch + timedelta(seconds=(gps_time - GPS_UTC_OFFSET + 8*3600))
     return utc_time
-
-def load_time_data(file_path=DEFAULT_TIME_OFFSET_FILE):
-    """从文件加载时间偏移数据并返回字典。"""
-    data_dict = {}
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            parts = line.strip().split('\t')
-            if len(parts) == 2:
-                id_val = int(parts[0])
-                data_dict[id_val] = {
-                    'mean': float(parts[1])
-                    #'mean': float(parts[1]),
-                    #'dispersion': float(parts[2])
-                }
-    return data_dict
-
-
-def get_time_data(file_path=DEFAULT_TIME_OFFSET_FILE):
-    """按需读取时间偏移数据，缺文件时安全回退为空字典。"""
-    if not os.path.exists(file_path):
-        logger.warning(f"Optional SWM offset file not found: {file_path}; continuing without offsets.")
-        return {}
-    return load_time_data(file_path)
 
 def estimate_initial_direction_robust(positions, t_s, c=299792458.0):
     """
@@ -517,7 +492,6 @@ def calculate_spherical_chi_square(matches, detector_positions, source_position,
     reduced_total_err = total_error/(len(times) - 4)
     return reduced_total_err
 
-
 def _build_src_vector(rho, theta, phi):
     """根据球坐标构建源位置向量。"""
     return rho * np.array([
@@ -576,23 +550,40 @@ def _verify_multiple_removed_dus(removed_du_ids, src, t0, t_mean_ns, detector_po
     return all_confirmed, max_sigma, max_residual
 
 
-def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM', prune_du1=True, prune_du2=True):  # pragma: no cover
+def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM', detector_positions_by_event=None, prune_du1=True, prune_du2=True):  # pragma: no cover
     """球面波重建模型
-    
+
+    ``detector_positions`` 为静态布局（trigger/CoREAS）下共享的
+    ``{det_id: [x, y, z]}``；当阵列布局逐事件变化（如 StarShape）时，可通过
+    ``detector_positions_by_event``（``{event_key: {det_id: [x, y, z]}}``）为每个
+    事件提供其专属坐标，``detector_positions`` 作为回退。
+
     Parameters
     ----------
-    prune_du : bool, optional
-        是否启用高卡方 DU 剔除优化循环，默认 True。
-        设为 False 可跳过剔除步骤直接使用初始拟合结果。
+    prune_du1, prune_du2 : bool, optional
+        是否启用高卡方 DU 剔除优化循环（prune_du1 针对 ≥5-DU，prune_du2 针对
+        ≥6-DU），默认 True。设为 False 可跳过剔除步骤直接使用初始拟合结果。
     """
     results = {}
     chi_squares = {}
     all_matches = {}  # 存储每个事件最终的DU列表
-    
+
+    global_positions = detector_positions
+
     for i, (event_key, times) in enumerate(matching_times.items()): 
         if i % 1000 == 0:
             logger.info(f"SWM EventNo{i}/{len(matching_times)}")
-        if len(times) < 6: continue
+        if len(times) < 5: continue
+
+        if detector_positions_by_event is not None:
+            detector_positions = detector_positions_by_event.get(event_key, global_positions)
+        else:
+            detector_positions = global_positions
+        
+        # 统一键类型：matching_times 内层键可能来自 YAML 反序列化为 str，
+        # 而 detector_positions 使用 int 键；在事件入口规范为 int，
+        # 避免内部各处 detector_positions[did] 因键类型不一致而 KeyError。
+        times = {int(k): v for k, v in times.items()}
         
         t_ns = np.array(list(times.values()))
         pos_list = np.array([detector_positions[int(det_id)] for det_id in times.keys()])
@@ -602,6 +593,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
         initial_direction = initial_directions[event_key]
         initial_t0 = t_ns[min_index] - t_mean_ns - 7.3e3/c
         current_du_ids = list(times.keys())
+        matches = list(times.items())
         index=i+1
         if(index%500 == 1 ) :
             logger.debug(
@@ -1359,7 +1351,7 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
             
             results[event_key] = src
             chi_squares[event_key] = chi2
-            all_matches[event_key] = times
+            all_matches[event_key] = {str(k): v for k, v in times.items()}
 
             epsilon = 1e-12
             zenith = np.arccos(src[2] / (np.linalg.norm(src) + epsilon ) ) * 180 / np.pi

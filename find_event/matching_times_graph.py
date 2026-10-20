@@ -29,7 +29,7 @@ def check_causality_strict(t1, t2, dist, c_ns=C_LIGHT_NS):
     return is_safe, ratio
 
 
-def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, min_detectors=4, speed_of_light_tolerance=1.05, force_recompute=False):
+def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, min_detectors=5, speed_of_light_tolerance=1.05, force_recompute=False):
     """
     步骤1: 因果律清洗
     返回格式: (times, signals, du_ids), 与 matching_times.py 一致
@@ -63,14 +63,12 @@ def optimized_read_matching_times_graph(times_dict, signals_dict, det_pos_path, 
         du_triggers = defaultdict(list)
         node_id = 0
         logger.debug(f"———— 处理事件 {key} ————")
-        for det_id, value in matches.items():
-            logger.debug(f"det_id: {det_id}, value: {value}")
-            for time_ns in value:
-                logger.debug(f"time_ns: {time_ns}")
-                nodes.append((str(det_id), time_ns, node_id))
-                node_info[node_id] = (str(det_id), time_ns)
-                du_triggers[str(det_id)].append((time_ns, node_id))
-                node_id += 1
+        for det_id, time_ns in matches.items():
+            logger.debug(f"det_id: {det_id}, time_ns: {time_ns}")
+            nodes.append((str(det_id), time_ns, node_id))
+            node_info[node_id] = (str(det_id), time_ns)
+            du_triggers[str(det_id)].append((time_ns, node_id))
+            node_id += 1
 
         logger.debug(f"📊 节点解析统计: 总构建节点数: {len(nodes)}, 触发的探测器数: {len(du_triggers)}, 各探测器触发数: { {k:len(v) for k,v in du_triggers.items()} }")
         if len(du_triggers) < min_detectors:

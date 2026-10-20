@@ -55,6 +55,38 @@ def _load_event_metadata_map(matching_file):
     return metadata
 
 
+def _load_det_pos_by_event(matching_file):
+    """Load per-event detector coordinates embedded in a matching YAML file.
+
+    StarShape files carry no static detector-coordinate file: each event embeds
+    its own ``det_pos`` mapping. Returns ``{event_key: {det_id(int): np.array}}``
+    when at least one event has an embedded ``det_pos``, otherwise ``None`` so
+    callers fall back to the static ``det_pos_file`` layout.
+    """
+    if not os.path.exists(matching_file):
+        return None
+
+    with open(matching_file, "r") as f:
+        data = yaml.load(f, Loader=yaml.FullLoader)
+
+    if not isinstance(data, dict):
+        return None
+
+    by_event = {}
+    for key, payload in data.items():
+        if not isinstance(payload, dict):
+            continue
+        det_pos = payload.get("det_pos", None)
+        if not isinstance(det_pos, dict) or not det_pos:
+            continue
+        by_event[key] = {
+            int(det_id): np.asarray(position, dtype=float)
+            for det_id, position in det_pos.items()
+        }
+
+    return by_event or None
+
+
 # =========================
 # Command line argument parsing (modular entry)
 # =========================
@@ -76,7 +108,7 @@ def parse_args(argv):
     parser.add_argument(
         "--det-pos",
         help="Detector position file (optional), if not specified, use the default path in the script",
-        default="_gp65_rtksort_2002_DU7.txt",
+        default="position/_gp65_rtksort_DU7_1029.txt",
     )
     parser.add_argument(
         "--with-signal",
@@ -108,8 +140,35 @@ def parse_args(argv):
         "--min-detectors",
         dest="min_detectors",
         type=int,
-        default=6,
-        help="Minimum number of detectors required in matching stage (default: 6).",
+        default=5,
+        help="Minimum number of detectors required in matching stage (default: 5).",
+    )
+    parser.add_argument(
+        "--skip-footprint",
+        dest="skip_footprint",
+        default=False,
+        action="store_true",
+        help="Skip the customized shower-footprint shape filter between PWM and SWM (enabled by default).",
+    )
+    parser.add_argument(
+        "--skip-ringcut",
+        dest="skip_ringcut",
+        default=False,
+        action="store_true",
+        help="Skip the customized d_max ring cut between PWM and SWM (enabled by default).",
+    )
+    parser.add_argument(
+        "--skip-offset",
+        dest="skip_offset",
+        default=False,
+        action="store_true",
+        help="Skip the time/position offset calibration from the calibration CSV (enabled by default).",
+    )
+    parser.add_argument(
+        "--offset-csv",
+        dest="offset_csv",
+        default=None,
+        help="Path to the offset calibration CSV (default: ./calibration/jul24_locked_xyz_additive_utc.csv).",
     )
     return parser.parse_args(argv[1:])
 
@@ -421,7 +480,7 @@ def run_matching_stage(
     with_signal,
     force_recompute,
     state,
-    min_detectors=6,
+    min_detectors=5,
 ):
     """Ensure matching-stage data is available in memory and cache."""
     matched_file = matching_file.replace(".yaml", "_matched.yaml")
@@ -648,6 +707,7 @@ def run_pwm_stage(
     state,
     fig_prefix,
     fingerprint_computed,
+    detector_positions_by_event=None,
 ):
     """Ensure PWM-stage data is available in memory and cache."""
     pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
@@ -732,6 +792,7 @@ def run_pwm_stage(
         directions, zeniths, azimuths, chi_squares = fe_pwm.plane_wave_model(
             state["times"],
             detector_positions,
+            detector_positions_by_event=detector_positions_by_event,
         )
 
         results = {}
@@ -796,6 +857,8 @@ def run_swm_stage(
     state,
     fig_prefix,
     pwm_computed,
+    detector_positions_by_event=None,
+    extra_cache_inputs=None,
 ):
     """Ensure SWM-stage data is available in memory and cache."""
     swm_fitted_file = matching_file.replace(".yaml", "_SWM.yaml")
@@ -806,6 +869,7 @@ def run_swm_stage(
             "matching_file": _build_file_signature(matching_file),
             "det_pos_file": _build_file_signature(det_pos_file),
             "with_signal": bool(with_signal),
+            **(extra_cache_inputs or {}),
         },
     )
 
@@ -872,6 +936,7 @@ def run_swm_stage(
             state["times"],
             detector_positions,
             seed_directions,
+            detector_positions_by_event=detector_positions_by_event,
             prune_du1=True,
             prune_du2=False,
         )
@@ -927,6 +992,10 @@ def main(
     force_recompute=False,
     skip_matching=False,
     skip_fingerprint=False,
+    skip_footprint=False,
+    skip_ringcut=False,
+    skip_offset=False,
+    offset_csv=None,
 ):
     """
     Main workflow:
@@ -938,14 +1007,48 @@ def main(
     # Configure loguru to replace the root logging configuration
     logger.info(f"Start processing: {matching_file}")
 
-    if not os.path.exists(det_pos_file):
-        logger.error(f"Detector position file does not exist: {det_pos_file}")
-        return 2
+    # 数据形态判别：trigger 数据的坐标来自静态 det_pos 文件，其 gps_time 是真实
+    # 时间码，需施加时间/位置标定；coreas/starshape 的坐标逐事件内嵌于 matching
+    # YAML 的 ``det_pos``，gps_time 为合成值，不做标定（--skip-offset 亦可跳过）。
+    detector_positions_by_event = _load_det_pos_by_event(matching_file)
+    is_trigger_layout = detector_positions_by_event is None
 
-    try:
-        detector_positions = load_data_from_file(det_pos_file)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.error(f"Failed to load detector position file {det_pos_file}: {exc}")
+    if is_trigger_layout:
+        if skip_offset:
+            logger.info("Offset calibration skipped (--skip-offset)")
+        else:
+            # Step 0: 时间/探测器位置标定（trigger 数据默认启用；--skip-offset 跳过）
+            # 独立子程序见 time_position_offset.py：按每个事例的 gps_time 选最接近的
+            # 标定时间窗，正向修正 DU 触发时间(整数 ns)与探测器坐标；产出新的 YAML
+            # 与 det-pos 文件（其文件签名自动使既有缓存失效，无需改动任何现有函数）。
+            from time_position_offset import apply_calibration, DEFAULT_OFFSET_CSV
+            matching_file, det_pos_file, _offset_stats = apply_calibration(
+                matching_file, det_pos_file, offset_csv or DEFAULT_OFFSET_CSV)
+            logger.info(f"Calibrated inputs: matching_file={matching_file}, det_pos_file={det_pos_file}")
+    else:
+        logger.info(
+            "Loaded per-event detector coordinates from {} for {} events "
+            "(simulation layout: offset calibration not applied)",
+            matching_file,
+            len(detector_positions_by_event),
+        )
+
+    if os.path.exists(det_pos_file):
+        try:
+            detector_positions = load_data_from_file(det_pos_file)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error(f"Failed to load detector position file {det_pos_file}: {exc}")
+            return 2
+    elif detector_positions_by_event is not None:
+        # No static file, but every event carries its own layout: seed an empty
+        # fallback map (used only if an event is missing from the by-event map).
+        logger.info(
+            "Detector position file {} not found; using per-event coordinates only.",
+            det_pos_file,
+        )
+        detector_positions = {}
+    else:
+        logger.error(f"Detector position file does not exist: {det_pos_file}")
         return 2
     metadata = _load_event_metadata_map(matching_file)
 
@@ -1016,8 +1119,35 @@ def main(
         state,
         fig_prefix,
         fingerprint_computed,
+        detector_positions_by_event=detector_positions_by_event,
     )
     logger.info('Finished PWM stage')
+
+    # ===== 定制化筛选子程序（默认启用，可 --skip-footprint / --skip-ringcut 关闭）=====
+    # 独立子程序位于 find_event/shower_footprint_filter.py：
+    # 仅过滤内存中的 state（PWM 与 SWM 之间），不改任何现有阶段逻辑与缓存文件约定。
+    if skip_footprint and skip_ringcut:
+        logger.info("Customized cuts skipped (both --skip-footprint and --skip-ringcut)")
+        cut_meta = None
+    else:
+        from find_event.shower_footprint_filter import apply_customized_cuts
+        state = apply_customized_cuts(
+            state,
+            detector_positions,
+            fig_prefix,
+            run_footprint=not skip_footprint,
+            run_ring=not skip_ringcut,
+        )
+        # 记录判据配置到 SWM 缓存签名，避免不同判据配置间错误复用缓存
+        cut_meta = {
+            "customized_cuts": {
+                "footprint": bool(not skip_footprint),
+                "ring": bool(not skip_ringcut),
+            }
+        }
+        if not state["directions"]:
+            logger.warning("No events left after customized cuts; skipping subsequent stages.")
+            return 0
     
     logger.info('Running SWM stage with matching_file={}', matching_file)
     run_swm_stage(
@@ -1029,6 +1159,8 @@ def main(
         state,
         fig_prefix,
         pwm_computed,
+        detector_positions_by_event=detector_positions_by_event,
+        extra_cache_inputs=cut_meta,
     )
     logger.info('Finished SWM stage')
 
@@ -1042,6 +1174,7 @@ def main(
         state,
         fig_prefix,
         fingerprint_computed,
+        detector_positions_by_event=detector_positions_by_event,
     )
     logger.info('Finished PWM stage')
     
@@ -1062,5 +1195,9 @@ if __name__ == "__main__":
             force_recompute=args.force_recompute,
             skip_matching=args.skip_matching,
             skip_fingerprint=args.skip_fingerprint,
+            skip_footprint=args.skip_footprint,
+            skip_ringcut=args.skip_ringcut,
+            skip_offset=args.skip_offset,
+            offset_csv=args.offset_csv,
         )
     )
