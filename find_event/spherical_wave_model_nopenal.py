@@ -22,11 +22,14 @@ np.set_printoptions(precision=3)
 RHO_MIN = 2e3
 RHO_MAX = 1e6
 
-# UV 参数化主拟合的 theta(天顶角) 上界（度）。原为 95°，会在某些事件上
-# 产生贴边界的伪极小（见 ev63：坏解恰好停在 theta=95.000）；放宽到 105°
-# 可消除该伪解，但会为另一些事件（ev30）打开新的伪盆地。取 90° 既排除
-# theta>90 的镜像伪解区，又保留物理可达的天顶角范围。
-THETA_UV_HI = 90
+# UV 参数化主拟合的 theta(天顶角) 上界（度）。历史沿革：95° → 105° → 90° → 95°。
+# 105° 会为部分事件（ev30）打开新的伪盆地；90° 虽排除了 theta>90 的镜像区，
+# 但硬边界本身会制造贴边界伪极小 —— 合成数据实测（干净数据 168 例，θ真值临界区
+# 加密采样）有 23/168 例卡在 theta=90.000，dθ 最大 8°，χ² 最大 56.3（同一批数据
+# 在 95° 下 dθ 最大仅 1.50°、贴边界 0 例）。故回退到 95°：既有实测最优精度，
+# 又不在物理可达的天顶角上切硬墙。若需进一步压制伪极小，应加正则或多初值择优，
+# 而非收紧上界。
+THETA_UV_HI = 95
 
 
 def phi_to_uv(phi):
@@ -550,7 +553,7 @@ def _verify_multiple_removed_dus(removed_du_ids, src, t0, t_mean_ns, detector_po
     return all_confirmed, max_sigma, max_residual
 
 
-def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM', detector_positions_by_event=None, prune_du1=True, prune_du2=True):  # pragma: no cover
+def spherical_wave_model(matching_times, detector_positions, initial_directions, save_name='SWM', detector_positions_by_event=None, prune_du1=True, prune_du2=False):  # pragma: no cover
     """球面波重建模型
 
     ``detector_positions`` 为静态布局（trigger/CoREAS）下共享的
@@ -562,7 +565,10 @@ def spherical_wave_model(matching_times, detector_positions, initial_directions,
     ----------
     prune_du1, prune_du2 : bool, optional
         是否启用高卡方 DU 剔除优化循环（prune_du1 针对 ≥5-DU，prune_du2 针对
-        ≥6-DU），默认 True。设为 False 可跳过剔除步骤直接使用初始拟合结果。
+        ≥6-DU）。prune_du1 默认 True，prune_du2 默认 False —— loop-2 的
+        C(nDU, 2) 配对枚举在 DU 数多的分片上会组合爆炸（如 nDU=178 时
+        15753 对 × 初值，作业会挂起 >50 min），而 loop-1 已能修好绝大多数
+        坏 DU 事例。需要更严格的剔除时显式传 ``prune_du2=True``。
     """
     results = {}
     chi_squares = {}
