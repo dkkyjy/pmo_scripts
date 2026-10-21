@@ -22,6 +22,7 @@ from find_event import plotting as fe_plot
 from find_event import estimation as fe_est
 from find_event import matching_times_graph as fe_mt
 from find_event import plane_wave_model_gradient as fe_pwm
+from find_event import pwf_refine as fe_pwf_refine
 from find_event import spherical_wave_model_nopenal as fe_swm
 from find_event import time_difference_fingerprint as fe_tdf
 
@@ -156,6 +157,18 @@ def parse_args(argv):
         default=False,
         action="store_true",
         help="Skip the customized d_max ring cut between PWM and SWM (enabled by default).",
+    )
+    parser.add_argument(
+        "--skip-pwf-refine",
+        dest="skip_pwf_refine",
+        default=False,
+        action="store_true",
+        help=(
+            "Skip the PWF refinement of the PWM direction (enabled by default: "
+            "re-minimises the pairwise plane-wave residual from the PWM direction "
+            "after reflecting it into zenith<=90, which removes the mirrored "
+            "solutions and the residual zenith bias of the PWM optimiser)."
+        ),
     )
     parser.add_argument(
         "--skip-offset",
@@ -708,6 +721,7 @@ def run_pwm_stage(
     fig_prefix,
     fingerprint_computed,
     detector_positions_by_event=None,
+    skip_pwf_refine=False,
 ):
     """Ensure PWM-stage data is available in memory and cache."""
     pwm_fitted_file = matching_file.replace(".yaml", "_PWM.yaml")
@@ -719,6 +733,7 @@ def run_pwm_stage(
             "matching_file": _build_file_signature(matching_file),
             "det_pos_file": _build_file_signature(det_pos_file),
             "with_signal": bool(with_signal),
+            "pwf_refine": not skip_pwf_refine,
         },
     )
 
@@ -794,6 +809,17 @@ def run_pwm_stage(
             detector_positions,
             detector_positions_by_event=detector_positions_by_event,
         )
+
+        if not skip_pwf_refine:
+            directions, azimuths, zeniths, chi_squares = fe_pwf_refine.refine_directions(
+                state["times"],
+                detector_positions,
+                directions,
+                azimuths,
+                zeniths,
+                chi_squares,
+                detector_positions_by_event=detector_positions_by_event,
+            )
 
         results = {}
         for key in directions.keys():
@@ -1120,6 +1146,7 @@ def main(
         fig_prefix,
         fingerprint_computed,
         detector_positions_by_event=detector_positions_by_event,
+        skip_pwf_refine=args.skip_pwf_refine,
     )
     logger.info('Finished PWM stage')
 
@@ -1175,6 +1202,7 @@ def main(
         fig_prefix,
         fingerprint_computed,
         detector_positions_by_event=detector_positions_by_event,
+        skip_pwf_refine=args.skip_pwf_refine,
     )
     logger.info('Finished PWM stage')
     

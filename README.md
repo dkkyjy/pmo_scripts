@@ -191,6 +191,7 @@ python main.py ../Reco_Dir/2025/01/01/Trigger_xxx.yaml \
 | `--min-detectors` | `5` | 匹配阶段最少探测器数 |
 | `--skip-footprint` | 关 | 跳过 PWM→SWM 之间的 footprint 形状筛选 |
 | `--skip-ringcut` | 关 | 跳过 PWM→SWM 之间的 d_max ring cut |
+| `--skip-pwf-refine` | 关 | 跳过 PWM 方向的 PWF 精修（默认启用：把 PWM 方向反射到 `zenith≤90` 后，对同一组成对平面波残差重新最小化；消除 PWM 的镜像解（`zenith>90`）与残余天顶偏差） |
 | `--skip-offset` | 关 | 跳过时间/位置标定 |
 | `--offset-csv` | `./calibration/jul24_locked_xyz_additive_utc.csv` | 标定 CSV 路径 |
 
