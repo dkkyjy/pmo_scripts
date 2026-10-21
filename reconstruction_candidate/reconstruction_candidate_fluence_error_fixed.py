@@ -1318,7 +1318,7 @@ class SWF:
         return chi2
 
 
-def SWF_fit(x, y, z, ant_t, x0, y0, z0):
+def SWF_fit(x, y, z, ant_t, x0, y0, z0, simplex=True):
     """
     执行球面波前拟合。
     
@@ -1342,7 +1342,8 @@ def SWF_fit(x, y, z, ant_t, x0, y0, z0):
     m.fixed = (False, False, False, True) # 固定 rc
     m.errordef = 1
     m.tol = 0.0001
-    m.simplex() # 先用单纯形法粗略搜索
+    if simplex:
+        m.simplex()  # 先用单纯形法粗略搜索 (单起点已有好初值时无需)
     m.migrad()  # 再用 MIGRAD 算法精确最小化
     m.hesse()   # 计算海森矩阵 (误差估计)
     xs = m.values["xs"]
@@ -1561,9 +1562,11 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
         # 外部给定 Xmax 源点 (来自 candidates YAML 的 SWM 结果): 用作 SWF_fit 的单一初值,
         # 仅执行一次拟合 (不跑 4x4x4 网格)。SWM 源点与内部天线坐标同为重建坐标系(未旋转),
         # 故无需坐标变换。chi_square_external 仅作日志参考, 真值改用精炼后的 fval。
+        # 初值已落在全局极小附近, simplex 无用: 跳过它结果与网格相同而耗时减半
+        # (见 tools/sim_dunhuang/swf_seed_validity.md)。网格分支仍保留 simplex 作保底。
         x0, y0, z0 = float(x_xmax_external), float(y_xmax_external), float(z_xmax_external)
         chi2_external_ref = float(chi_square_external) if chi_square_external is not None else np.nan
-        rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph, rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = SWF_fit(x, y, z, t, x0, y0, z0)
+        rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph, rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = SWF_fit(x, y, z, t, x0, y0, z0, simplex=False)
         logger.info(f"[SWM] SWF 单点初值拟合 (x0={x0:.1f}, y0={y0:.1f}, z0={z0:.1f}, chi2_ext={chi2_external_ref}): "
                     f"({rec_x_xmax:.1f}, {rec_y_xmax:.1f}, {rec_z_xmax:.1f}), chi2 = {chi2Sph:.2e}")
     else:
