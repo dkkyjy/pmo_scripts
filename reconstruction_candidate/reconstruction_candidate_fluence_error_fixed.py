@@ -2324,16 +2324,120 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
 #--------------------------------------------------------------------------
 
+#--------------------------------------------------------------------------
+# ADF 角重建, 但每天线 fluence 直接取自带噪电压 (Voc) 的 ±N 样点窗 —— 跳过 E-field 反演
+#--------------------------------------------------------------------------
+def adf_angles_from_voc(root_path, event_number_int, det_pos_path = None, fluence_window = 5,
+                        x_xmax = None, y_xmax = None, z_xmax = None, chi_square_external = None):
+    """用带噪电压直接做 ADF, 不做逐天线电场反演。
+
+    与 ``efield_recons_from_efield_PWF`` + ``energy_restruction`` 的区别:
+    不跑 vad2voc 之后的 LS 电场反演, 也不写 ``Reconstruction/`` 目录。每天线 fluence 取
+
+        p = sum_{|t - t_peak| <= N} sum_ch Voc^2
+
+    其中 ``Voc`` 由 :func:`ADC_trace_to_Voc_time` 从 ADC 波形得到 (单位 uV),
+    ``t_peak`` 取该 DU 三通道绝对值之和最大的采样点 (逐天线对齐, 避免阵列上脉冲
+    到达时间差把窗口切掉)。``fluence_window = 0`` 退化为整条迹求和。
+
+    实测 (CoREAS-AN, 149 分片 / 14773 事例): 整条迹 -> ±5 样点, 角分辨率中位
+    0.549 deg -> 0.318 deg; 见 tools/sim_dunhuang/adf_adc_window.md 。
+
+    返回 dict (失败返回 None): azimuth/zenith (ADF 结果), zenith_pwf/azimuth_pwf
+    (PWF 初值), xmax (3,), dw, A, chi2, n_du, fluence。
+    """
+    window = int(fluence_window)
+    if window < 0:
+        raise ValueError("fluence_window 必须 >= 0")
+
+    event_num, du_ids_all, _gps_time, du_nanoseconds, _LST_time, trace_1, trace_2, trace_3 = \
+        read_root_file_from_path(root_path, event_number_int)
+
+    tree_kind, du_pos_path = _load_du_position_for_input(root_path, det_pos_path)
+    table = _read_du_position_table(du_pos_path)
+    pos_of = {int(row[0]): np.array([row[1], row[2], row[3]], dtype = float) for row in table}
+
+    ids = [int(d) for d in du_ids_all]
+    keep = [i for i, d in enumerate(ids) if d in pos_of]
+    if len(keep) < 4:
+        logger.warning(f"event {event_num}: 只有 {len(keep)} 个 DU 有坐标 (<4), 跳过")
+        return None
+    ids = [ids[i] for i in keep]
+    x = np.array([pos_of[d][0] for d in ids])
+    y = np.array([pos_of[d][1] for d in ids])
+    z = np.array([pos_of[d][2] for d in ids])
+    t_ns = np.asarray(du_nanoseconds, dtype = float)[keep]
+
+    # --- PWF 初值 (与 E-field 路径相同的 6x6 网格) ---
+    best = (np.inf, None, None)
+    for theta0 in np.linspace(90, 180, 6):
+        for phi0 in np.linspace(0, 360, 6):
+            try:
+                theta_fit, phi_fit, fval, _te, _pe = PWF_fit(x, y, z, t_ns * 1e-9, theta0, phi0)
+            except Exception:
+                continue
+            if fval < best[0]:
+                best = (fval, theta_fit, phi_fit)
+    if best[1] is None:
+        logger.warning(f"event {event_num}: PWF 初值拟合失败, 跳过")
+        return None
+    chi2_plane, theta_p, phi_p = best
+    zenith_ini = 180.0 - theta_p
+    azimuth_ini = (phi_p + 180.0) % 360.0
+
+    # --- 每天线 fluence: ±N 样点窗内的 Voc^2 ---
+    fluence = np.full(len(ids), np.nan)
+    for i, idx in enumerate(keep):
+        try:
+            Voc_time = ADC_trace_to_Voc_time(trace_1[idx], trace_2[idx], trace_3[idx])[0]
+        except Exception as exc:
+            logger.debug(f"event {event_num} DU {ids[i]}: Voc 计算失败 ({exc})")
+            continue
+        v = np.nan_to_num(np.asarray(Voc_time, dtype = float))
+        if window > 0:
+            peak = int(np.argmax(np.abs(v).sum(axis = 1)))
+            lo, hi = max(0, peak - window), min(len(v), peak + window + 1)
+            fluence[i] = float(np.sum(v[lo:hi, :] ** 2))
+        else:
+            fluence[i] = float(np.sum(v ** 2))
+
+    ok = np.isfinite(fluence) & (fluence > 0)
+    if ok.sum() < 4:
+        logger.warning(f"event {event_num}: 有效 fluence 的 DU 只有 {int(ok.sum())} 个 (<4), 跳过")
+        return None
+
+    obs_altitude = float(np.mean(z))
+    # 注意: recons_angle 内部的 SWF_fit 用 c[m/s] * t, 所以这里必须传**秒**
+    # (energy_restruction 也是这么做的: fluence_data[:, 7] * 1e-9)。
+    out = recons_angle(x, y, z, t_ns * 1e-9, fluence, [zenith_ini, azimuth_ini, chi2_plane],
+                       obs_altitude, None, x_xmax, y_xmax, z_xmax, chi_square_external)
+    return dict(
+        azimuth = float(out[8]), zenith = float(out[7]),
+        azimuth_pwf = azimuth_ini, zenith_pwf = zenith_ini, chi2_pwf = float(chi2_plane),
+        xmax = (float(out[3]), float(out[4]), float(out[5])),
+        dw = float(out[9]), A = float(out[10]), chi2 = float(out[11]), wc = float(out[12]),
+        n_du = int(ok.sum()), fluence_window = window, fluence = fluence[ok].tolist(),
+    )
+
+
 # 示例 / 命令行入口: 仅在直接运行本文件时执行, 避免被 import 时触发重型计算。
 # 通过环境变量 RECON_ROOT 与 RECON_EVENT 指定输入 root 文件与事件号:
 #   RECON_ROOT=/path/to/adc_*.root RECON_EVENT=0 python reconstruction_candidate_fluence_error_fixed.py
+#   RECON_ADF_VOC_WINDOW=5 同上, 但跳过电场反演、直接用在 ±5 样点窗内的 Voc^2 做 ADF
+#   (CoREAS 输入还需 RECON_COREAS_DET_POS=position/du_coords_CoreasDC2.txt)
 # 若设置了 RECON_ROOT 但未设置 RECON_EVENT, 默认事件号为 0。
 if __name__ == '__main__':
     _demo_root = os.environ.get('RECON_ROOT')
     if _demo_root:
         _demo_event = int(os.environ.get('RECON_EVENT', '0'))
-        efield_recons_from_efield_PWF(_demo_root, _demo_event)
-        energy_restruction(_demo_root, _demo_event)
+        _voc_window = os.environ.get('RECON_ADF_VOC_WINDOW')
+        if _voc_window is not None:
+            # 跳过 E-field 反演: 直接用在 ±N 样点窗内的 Voc^2 做 ADF
+            logger.info(adf_angles_from_voc(_demo_root, _demo_event,
+                                            fluence_window = int(_voc_window)))
+        else:
+            efield_recons_from_efield_PWF(_demo_root, _demo_event)
+            energy_restruction(_demo_root, _demo_event)
     else:
         logger.info("未设置 RECON_ROOT, 跳过内置示例。"
               "调用 efield_recons_from_efield_PWF(root_path, event_number, det_pos_path=None) "
