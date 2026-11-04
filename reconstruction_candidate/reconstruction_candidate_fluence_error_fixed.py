@@ -1597,7 +1597,6 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
     # A 由解析式给出 (ADF_fit_analytic), 因此不再需要 Alist 那层初值循环:
     # 3x3 theta/phi x 4 dw = 36 个起点, 实测与 A0 网格版方向一致到 1e-6 度、chi2 逐位相同 (<adf_speedup.md>)。
     p_sigma_masked = p_sigma[~np.isnan(p)] if p_sigma is not None else None
-    Alist = np.linspace(max(p), 3 * max(p), 3)   # 仅供下方 dw 越界时的 ADF_fit_fixdw 回退使用
     _xm, _ym, _zm = x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)]
     _pm = p[~np.isnan(p)]
 
@@ -1632,21 +1631,24 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
 
         fmin_fixdw = np.inf
 
-        for theta0 in thetalist: # 网格搜索最佳方向和 ADF 参数, 固定 dw
+        for theta0 in thetalist: # 网格搜索最佳方向, 固定 dw, A 解析消去
             for phi0 in philist:
-                for A0 in Alist:
-                    p_sigma_masked = p_sigma[~np.isnan(p)] if p_sigma is not None else None
-                    theta, phi, dw, A, fval, theta_err, phi_err, dw_err, A_err = ADF_fit_fixdw(x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)], p[~np.isnan(p)], rec_x_xmax, rec_y_xmax, rec_z_xmax, theta0, phi0, dw0, A0, obs_altitude, p_sigma_masked)
-                    if fval < fmin_fixdw:
-                        fmin_fixdw = fval
-                        rec_theta = theta
-                        rec_phi = phi
-                        rec_dw = dw
-                        rec_A = A
-                        rec_theta_err = theta_err
-                        rec_phi_err = phi_err
-                        rec_A_err = A_err
-                        rec_dw_err = 0 # 固定 dw 后误差设为 0
+                theta, phi, dw, A, fval = ADF_fit_analytic_fixdw(x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)], p[~np.isnan(p)], rec_x_xmax, rec_y_xmax, rec_z_xmax, theta0, phi0, dw0, obs_altitude, p_sigma_masked)
+                if fval < fmin_fixdw:
+                    fmin_fixdw = fval
+                    rec_theta = theta
+                    rec_phi = phi
+                    rec_dw = dw
+                    rec_A = A
+
+        # 固定 dw 的网格同样只给点估计: 在最佳点跑一次 ADF_fit_fixdw 取误差
+        _t, _p, _d, _a, _fv, rec_theta_err, rec_phi_err, _de, rec_A_err = ADF_fit_fixdw(
+            x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)], p[~np.isnan(p)],
+            rec_x_xmax, rec_y_xmax, rec_z_xmax, rec_theta, rec_phi, dw0, rec_A,
+            obs_altitude, p_sigma_masked)
+        if _fv <= fmin_fixdw:
+            fmin_fixdw, rec_theta, rec_phi, rec_A = _fv, _t, _p, _a
+        rec_dw_err = 0 # 固定 dw 后误差设为 0
 
         fmin = fmin_fixdw
 
@@ -2529,3 +2531,27 @@ def ADF_fit_analytic(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, obs_altitude
     fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
                                       theta, phi, dw, wc0)
     return theta, phi, dw, a_best, fval
+
+
+def ADF_fit_analytic_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, obs_altitude,
+                           ant_p_sigma = None):
+    """与 :func:`ADF_fit_fixdw` 同参, 但幅度 A 解析消去 (dw 固定)。
+
+    返回 ``(theta, phi, dw0, A, fval)`` —— dw 原样返回, 便于与 ADF_fit 的输出对齐。
+    """
+    wc0 = float(ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma).wc)
+
+    def _f(theta, phi):
+        return _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
+                                  theta, phi, dw0, wc0)[0]
+
+    m = iminuit.Minuit(_f, theta = theta0, phi = phi0)
+    m.limits = ([theta0 - 0.8, theta0 + 0.8], [phi0 - 0.8, phi0 + 0.8])
+    m.errordef = 1
+    m.tol = 1e-4
+    m.migrad()
+
+    theta, phi = float(m.values["theta"]), float(m.values["phi"])
+    fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
+                                      theta, phi, dw0, wc0)
+    return theta, phi, dw0, a_best, fval
