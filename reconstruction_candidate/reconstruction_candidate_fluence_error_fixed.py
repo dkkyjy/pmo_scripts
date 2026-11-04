@@ -1594,24 +1594,34 @@ def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_e
     thetalist = np.linspace(zenith_ini - 0.5, zenith_ini + 0.5, 3)
     philist = np.linspace(azimuth_ini - 0.5, azimuth_ini + 0.5, 3) # 这两个参数范围是否给的太窄, 真实情况应当是 0-90, 0-360 ????
     dwList = np.linspace(0.1, 4., 4)
-    Alist = np.linspace(max(p), 3 * max(p), 3)
-    
-    for theta0 in thetalist: # 网格搜索最佳方向和 ADF 参数
+    # A 由解析式给出 (ADF_fit_analytic), 因此不再需要 Alist 那层初值循环:
+    # 3x3 theta/phi x 4 dw = 36 个起点, 实测与 A0 网格版方向一致到 1e-6 度、chi2 逐位相同 (<adf_speedup.md>)。
+    p_sigma_masked = p_sigma[~np.isnan(p)] if p_sigma is not None else None
+    Alist = np.linspace(max(p), 3 * max(p), 3)   # 仅供下方 dw 越界时的 ADF_fit_fixdw 回退使用
+    _xm, _ym, _zm = x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)]
+    _pm = p[~np.isnan(p)]
+
+    for theta0 in thetalist: # 网格搜索最佳方向和 ADF 参数 (A 解析消去)
         for phi0 in philist:
             for dw0 in dwList:
-                for A0 in Alist:
-                    p_sigma_masked = p_sigma[~np.isnan(p)] if p_sigma is not None else None
-                    theta, phi, dw, A, fval, theta_err, phi_err, dw_err, A_err = ADF_fit(x[~np.isnan(p)], y[~np.isnan(p)], z[~np.isnan(p)], p[~np.isnan(p)], rec_x_xmax, rec_y_xmax, rec_z_xmax, theta0, phi0, dw0, A0, obs_altitude, p_sigma_masked)
-                    if fval < fmin:
-                        fmin = fval
-                        rec_theta = theta
-                        rec_phi = phi
-                        rec_dw = dw
-                        rec_A = A
-                        rec_theta_err = theta_err
-                        rec_phi_err = phi_err
-                        rec_dw_err = dw_err
-                        rec_A_err = A_err
+                theta, phi, dw, A, fval = ADF_fit_analytic(_xm, _ym, _zm, _pm, rec_x_xmax, rec_y_xmax, rec_z_xmax, theta0, phi0, dw0, obs_altitude, p_sigma_masked)
+                if fval < fmin:
+                    fmin = fval
+                    rec_theta = theta
+                    rec_phi = phi
+                    rec_dw = dw
+                    rec_A = A
+
+    # 网格只给点估计; 在最佳点跑一次 ADF_fit 取误差(顺便再精化一步), 保持返回签名不变。
+    if np.isfinite(rec_theta):
+        _th, _ph, _dw, _A, _fv, _te, _pe, _de, _ae = ADF_fit(
+            _xm, _ym, _zm, _pm, rec_x_xmax, rec_y_xmax, rec_z_xmax,
+            rec_theta, rec_phi, rec_dw, rec_A, obs_altitude, p_sigma_masked)
+        if _fv <= fmin:
+            fmin, rec_theta, rec_phi, rec_dw, rec_A = _fv, _th, _ph, _dw, _A
+            rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err = _te, _pe, _de, _ae
+        else:
+            rec_theta_err = rec_phi_err = rec_dw_err = rec_A_err = np.nan
 
     if rec_dw > 3.499 or rec_dw < 0.101: # 如果拟合得到的 dw 超出合理范围，使用参数化公式固定 dw 重新拟合
 
