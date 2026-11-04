@@ -2444,3 +2444,78 @@ if __name__ == '__main__':
               "与 energy_restruction(root_path, event_number, det_pos_path=None) 即可。")
 
 #--------------------------------------------------------------------------
+
+
+#--------------------------------------------------------------------------
+# ADF 拟合, 幅度 A 解析消去 (chi2 对 A 是二次型): 少一个自由参数, 少 3 倍初值
+#--------------------------------------------------------------------------
+def _adf_chi2_profiled(x, y, z, p, xs, ys, zs, obs_altitude, p_sigma,
+                       theta, phi, dw, wc0, B = 0.01):
+    """给定 (theta, phi, dw), 解析求出最优幅度 A 及对应 chi2。
+
+    模型对 A 是线性的: adf = A * g, g = f_Cerenkov*f_GeoM/early_late,
+    chi2 = sum(((p - A*g)/denom)^2) -> A* = sum(p*g/denom^2)/sum(g^2/denom^2),
+    chi2_min = sum(p^2/denom^2) - (sum(p*g/denom^2))^2 / sum(g^2/denom^2)。
+    几何与 ADF.chi2 逐行一致 (含 len(x)>50 时用 omega[argmax(p*early_late)] 更新 wc)。
+    """
+    cs = coordinatesystems.cstrafo(np.deg2rad(theta), np.deg2rad(phi), magnetic_field_vector)
+    corex, corey, corez, dXmax = find_core(xs, ys, zs, theta, phi, obs_altitude)
+    shower_core = np.array([corex, corey, corez])
+
+    pos = np.array([x, y, z]).T
+    pos_vxB = cs.transform_to_vxB_vxvxB(pos, shower_core)
+    xmax_vxB = cs.transform_to_vxB_vxvxB(np.array([[xs, ys, zs]]), shower_core)
+
+    l_ = np.sqrt((pos_vxB[:, 0] - xmax_vxB[0]) ** 2
+                 + (pos_vxB[:, 1] - xmax_vxB[1]) ** 2
+                 + (pos_vxB[:, 2] - xmax_vxB[2]) ** 2)
+    omega = np.arcsin(np.clip(np.sqrt(pos_vxB[:, 0] ** 2 + pos_vxB[:, 1] ** 2)
+                              / np.maximum(l_, 1e-10), 0.0, 1.0))
+
+    shower_axis = helper.spherical_to_cartesian(np.deg2rad(theta), np.deg2rad(phi))
+    eta = helper.get_normalized_angle(np.arctan2(pos_vxB[:, 1], pos_vxB[:, 0]))
+    alpha = np.arccos(np.dot(shower_axis, magnetic_field_vector))
+    f_GeoM = 1 + B * np.sin(alpha) ** 2 * np.cos(eta)
+
+    ant2Xmax_dis = np.sqrt((x - xs) ** 2 + (y - ys) ** 2 + (z - zs) ** 2)
+    early_late = np.square(ant2Xmax_dis / dXmax)
+
+    wc = wc0
+    if len(x) > 50:
+        wc = omega[np.argmax(p * early_late)]
+
+    f_Cerenkov = 1.0 / (1.0 + 4.0 * (((np.tan(omega) / np.tan(wc)) ** 2 - 1.0) / dw) ** 2)
+    g = f_Cerenkov * f_GeoM / early_late
+
+    denom = p_sigma if p_sigma is not None else (0.1 * p + 0.01 * np.max(p))
+    w = 1.0 / np.square(denom)
+    s_pg, s_gg, s_pp = np.sum(p * g * w), np.sum(g * g * w), np.sum(p * p * w)
+    if not np.isfinite(s_gg) or s_gg <= 0:
+        return np.inf, 0.0
+    a_best = s_pg / s_gg
+    return float(s_pp - s_pg * s_pg / s_gg), float(a_best)
+
+
+def ADF_fit_analytic(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, obs_altitude,
+                     ant_p_sigma = None):
+    """与 :func:`ADF_fit` 同参同返回, 但幅度 A 由解析式给出, 不交给 Minuit。
+
+    返回 ``(theta, phi, dw, A, fval)``; ``fval`` 是解析极小化 A 后的 chi2 (与 ADF_fit
+    的 m.fval 同口径, 未除以自由度)。起点/边界与 ADF_fit 完全一致。
+    """
+    wc0 = float(ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma).wc)
+
+    def _f(theta, phi, dw):
+        return _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
+                                  theta, phi, dw, wc0)[0]
+
+    m = iminuit.Minuit(_f, theta = theta0, phi = phi0, dw = dw0)
+    m.limits = ([theta0 - 0.8, theta0 + 0.8], [phi0 - 0.8, phi0 + 0.8], [0.01, 5])
+    m.errordef = 1
+    m.tol = 1e-4
+    m.migrad()
+
+    theta, phi, dw = float(m.values["theta"]), float(m.values["phi"]), float(m.values["dw"])
+    fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
+                                      theta, phi, dw, wc0)
+    return theta, phi, dw, a_best, fval
