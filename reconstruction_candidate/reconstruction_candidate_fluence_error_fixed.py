@@ -254,14 +254,22 @@ def e_recons_real_MHz(Voc, Lce, Vnoise):
 # GRAND 天线有效长度 (EFL) 数据文件, 默认取 parameter_files/ 下的副本, 可用
 # 环境变量 RECON_EFL_MAT 覆盖。
 REfile_grand = _resolve_data_file('RECON_EFL_MAT', 'EFL_data_3.2m_XYZ_20250313.mat')
-if not os.path.exists(REfile_grand):
-    raise FileNotFoundError(
-        f"未找到 GRAND 天线有效长度数据文件: {REfile_grand}\n"
-        f"请将其放入 {_PARAM_DIR}/ , 或用环境变量 RECON_EFL_MAT 指向实际路径。"
-    )
+_EFL_CACHE = {}
 
-mat_data = scipy.io.loadmat(REfile_grand)
-EFL_all_grand = mat_data['EFL_all']
+def _get_efl_all_grand():
+    """懒加载 GRAND 天线有效长度表。
+
+    这个 .mat 有 961 MB, loadmat 后常驻约 4 GB —— 而 ADF 用带噪电压做方向拟合时
+    完全不需要 (只有电压->电场反演才用)。改成首次调用时才加载, 并行任务可省下这笔内存。
+    """
+    if 'all' not in _EFL_CACHE:
+        if not os.path.exists(REfile_grand):
+            raise FileNotFoundError(
+                f"未找到 GRAND 天线有效长度数据文件: {REfile_grand}\n"
+                f"请将其放入 {_PARAM_DIR}/ , 或用环境变量 RECON_EFL_MAT 指向实际路径。"
+            )
+        _EFL_CACHE['all'] = scipy.io.loadmat(REfile_grand)['EFL_all']
+    return _EFL_CACHE['all']
 
 def get_lec_grand(e_theta, e_phi, N, f0):
     """
@@ -280,7 +288,7 @@ def get_lec_grand(e_theta, e_phi, N, f0):
     """
 
     # 插值获取辐射方向图数据
-    e_radiation = inter(EFL_all_grand, e_theta, e_phi)
+    e_radiation = inter(_get_efl_all_grand(), e_theta, e_phi)
     Lce = np.zeros((N, 3, 3), dtype = complex)
     
     # 展开复数系数
@@ -343,7 +351,7 @@ def get_lec_grand_real_MHz(e_theta, e_phi, freq_target_MHz):
     freq_target_MHz = np.asarray(freq_target_MHz, dtype = float)
 
     # 1) 取该方向的辐射响应 (与原函数相同)
-    e_radiation = inter(EFL_all_grand, e_theta, e_phi)     # (221, 3 ports, 3 comps)
+    e_radiation = inter(_get_efl_all_grand(), e_theta, e_phi)     # (221, 3 ports, 3 comps)
 
     nfreq = freq_target_MHz.size
     Lce_cart_real = np.zeros((nfreq, 3, 3), dtype = complex)   # [freq, comp, port]
