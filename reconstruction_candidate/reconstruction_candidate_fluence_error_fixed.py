@@ -146,7 +146,8 @@ logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 efield_rec_dir = './Reconstruction/' # 结果保存目录
 # efield_rec_dir = './Reconstruction_test/' # 结果保存目录, 用于测试筛选事件
 # efield_rec_dir = './Reconstruction_colleague/'
-os.makedirs(efield_rec_dir, exist_ok=True)   # 并行进程同时启动时 os.path.exists 有 TOCTOU 竞态, 会 FileExistsError
+# 目录不在这里创建: 只有真正做电场反演(efield_recons_*)时才需要, 由第 945 行按事例按需创建
+# (exist_ok=True)。ADF/解析 A 只用电压 fluence, 完全不碰这个目录。
 
 #--------------------------------------------------------------------------
 
