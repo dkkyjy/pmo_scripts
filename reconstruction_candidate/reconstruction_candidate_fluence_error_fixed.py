@@ -146,7 +146,7 @@ logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 efield_rec_dir = './Reconstruction/' # 结果保存目录
 # efield_rec_dir = './Reconstruction_test/' # 结果保存目录, 用于测试筛选事件
 # efield_rec_dir = './Reconstruction_colleague/'
-if not os.path.exists(efield_rec_dir): os.makedirs(efield_rec_dir)
+os.makedirs(efield_rec_dir, exist_ok=True)   # 并行进程同时启动时 os.path.exists 有 TOCTOU 竞态, 会 FileExistsError
 
 #--------------------------------------------------------------------------
 
@@ -942,7 +942,7 @@ def efield_recons_from_efield_PWF(root_path, event_number_int, det_pos_path = No
 
     filename = os.path.splitext(os.path.basename(root_path))[0] + f"_event_{int(event_number_int)}" # 得到文件名和事件编号
 
-    if not os.path.exists(efield_rec_dir + filename + '/'): os.makedirs(efield_rec_dir + filename + '/')
+    os.makedirs(efield_rec_dir + filename + '/', exist_ok=True)
 
     #---------------------------------------------------------------------------
     
