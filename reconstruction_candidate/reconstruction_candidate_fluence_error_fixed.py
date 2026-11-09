@@ -1568,7 +1568,7 @@ def ADF_fit_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, A0, obs_altitud
 
 #--------------------------------------------------------------------------
 
-def recons_angle(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_external=None, y_xmax_external=None, z_xmax_external=None, chi_square_external=None):  # time given in ns
+def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_external=None, y_xmax_external=None, z_xmax_external=None, chi_square_external=None):  # time given in ns
     """
     联合重建簇射方向和 Xmax 位置。
     
@@ -1911,7 +1911,7 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     chi2Sph, rec_theta_sph, rec_phi_sph, rec_dw, rec_A, fmin, rec_wc, \
     rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, \
     rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = \
-    recons_angle(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
+    recons_direction_swf_adf(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
 
 
     logger.info(f"Reconstructed Xmax coordinates (m) and chi2: {rec_x_xmax} {rec_y_xmax} {rec_z_xmax} {chi2Sph}")
@@ -2448,7 +2448,7 @@ def adf_angles_from_voc(root_path, event_number_int, det_pos_path = None, fluenc
     obs_altitude = float(np.mean(z))
     # 注意: recons_angle 内部的 SWF_fit 用 c[m/s] * t, 所以这里必须传**秒**
     # (energy_restruction 也是这么做的: fluence_data[:, 7] * 1e-9)。
-    out = recons_angle(x, y, z, t_ns * 1e-9, fluence, [zenith_ini, azimuth_ini, chi2_plane],
+    out = recons_direction_swf_adf(x, y, z, t_ns * 1e-9, fluence, [zenith_ini, azimuth_ini, chi2_plane],
                        obs_altitude, None, x_xmax, y_xmax, z_xmax, chi_square_external)
     return dict(
         azimuth = float(out[8]), zenith = float(out[7]),
@@ -2669,7 +2669,7 @@ def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
 
     # ---- 默认: ADF ----
     try:
-        r = recons_angle(x, y, z, t, p, [zenith_ini, azimuth_ini, chi2_plane],
+        r = recons_direction_swf_adf(x, y, z, t, p, [zenith_ini, azimuth_ini, chi2_plane],
                          obs_altitude, p_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
     except Exception as exc:                      # noqa: BLE001
         logger.warning(f"recons_direction: recons_angle 失败: {exc}")
@@ -2679,3 +2679,6 @@ def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
     out.update(zenith = float(r[7]), azimuth = float(r[8]), dw = float(r[9]),
                A = float(r[10]), wc = float(r[12]) if len(r) > 12 else np.nan)
     return out
+
+# 向后兼容别名: 旧名 recons_angle 保留 (SWF->ADF 方向重建驱动, 返回 20 元组)
+recons_angle = recons_direction_swf_adf
