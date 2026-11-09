@@ -103,7 +103,13 @@ except ImportError:
         for key in keys:
             if "tadc" in str(key):
                 return key, "tadc"
-        raise KeyError(f"neither teventadc nor tadc TTree found in file: {file_name}")
+        for key in keys:                       # 仿真真值电场 / 真电压 (CoREAS/Dunhuang 的 L0 文件)
+            if "tefield" in str(key):
+                return key, "tefield"
+        for key in keys:
+            if "tvoltage" in str(key):
+                return key, "tvoltage"
+        raise KeyError(f"none of teventadc / tadc / tefield / tvoltage TTree found in file: {file_name}")
 
     def parse_sim_base_time(file_path):
         for part in reversed(str(file_path).replace("\\", "/").split("/")):
@@ -493,12 +499,24 @@ def read_root_file_from_path(root_path, event_number_int):
             data = data[int(event_number_int)]
             event_num, du_ids_all, gps_time, du_nanoseconds = data["event_number"], np.array(data["du_id"]), data["gps_time"], np.array(data["du_nanoseconds"])
             trace_1, trace_2, trace_3 = np.array(data["trace_1"]), np.array(data["trace_2"]), np.array(data["trace_3"])
-        else: # tadc (CoREAS / Dunhuang simulation)
+        elif tree_kind == "tadc": # tadc (CoREAS / Dunhuang simulation)
             data = tree.arrays(["event_number", "du_id", "du_nanoseconds", "trace_ch"], library = "ak")
             data = data[int(event_number_int)]
             event_num, du_ids_all, du_nanoseconds = data["event_number"], np.array(data["du_id"]), np.array(data["du_nanoseconds"])
             trace_ch = np.array(data["trace_ch"].to_list()) # (n_du, 3, n_time)
             trace_1, trace_2, trace_3 = trace_ch[:, 0], trace_ch[:, 1], trace_ch[:, 2]
+            gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
+        elif tree_kind in ("tefield", "tvoltage"):
+            # 仿真真值 (L0): trace 形状 (n_du, 3, n_time), 无 gps_time / du_nanoseconds
+            # 时间轴由 run 目录名合成, du_nanoseconds 置 0 (方向重建只用 fluence + 相对时间窗)
+            data = tree.arrays(["event_number", "du_id", "trace"], library = "ak")
+            data = data[int(event_number_int)]
+            event_num, du_ids_all = data["event_number"], np.array(data["du_id"])
+            tr = np.array(data["trace"].to_list())        # (n_du, 3, n_time)
+            if tr.ndim != 3:
+                raise ValueError(f"{tree_kind}: 期望 trace 形状 (n_du,3,n_time), 实际 {tr.shape}")
+            trace_1, trace_2, trace_3 = tr[:, 0], tr[:, 1], tr[:, 2]
+            du_nanoseconds = np.zeros(len(du_ids_all), dtype = np.int64)
             gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
     finally:
         root_file.close()
@@ -2564,3 +2582,100 @@ def ADF_fit_analytic_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, obs_al
     fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
                                       theta, phi, dw0, wc0)
     return theta, phi, dw0, a_best, fval
+
+
+def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
+                     x_xmax = None, y_xmax = None, z_xmax = None,
+                     chi_square_external = None, method = "ADF"):
+    """只做**方向**重建, 不做能量重建, 也不落盘。
+
+    与 :func:`efield_recons_from_efield_PWF` 的区别: 后者是"电压->反演电场->SWF->ADF"
+    的完整链路, 会把结果写到 ``./Reconstruction/<file>_event_N/`` 并附带能量信息;
+    本函数只回答"这个事例的来向是多少", 因此
+
+      - 不创建/读写任何目录 (并行安全);
+      - 不做电场反演 (能量重建与方向无关);
+      - PWM / SWM 的先验直接由调用者通过参数传入。
+
+    参数
+    ----
+    x, y, z : array_like
+        天线坐标 [m], 形状 (n_du,)。
+    t : array_like
+        到达时间, **单位秒** (不是 ns)。ADF/SWF 需要绝对时间对齐, PWF 只用差值。
+    p : array_like
+        fluence, 形状 (n_du,)。可用真电场 Σ|E|²、真电压 ΣV²、或带噪 ADC 的
+        峰值对齐 ±N 样点窗内 ΣV² (见 :func:`adf_angles_from_voc`)。
+    init_angles : (zenith, azimuth) 或 (zenith, azimuth, chi2)
+        PWM (或任一平面波) 结果作初值 [deg]。
+    obs_altitude : float
+        观测面海拔 [m]。
+    x_xmax, y_xmax, z_xmax, chi_square_external : optional
+        SWM 结果作先验 (Xmax 源点 [m] 与外部 chi2)。给定则跳过内部 SWF 网格,
+        直接用该点做 ADF 几何中心。
+    method : {"ADF", "PWF", "SWF"}
+        "ADF" (默认) —— 切伦科夫环幅度分布拟合, 内部 36 起点 + 解析幅度 A;
+        "PWF" —— 平面波前拟合, 初值取 ``init_angles``;
+        "SWF" —— 球面波前拟合, 初值取 ``init_angles`` + (若给出) SWM 源点。
+
+    返回
+    ----
+    dict
+        ``method``, ``zenith``, ``azimuth`` [deg], ``chi2``, 以及对应方法的附加量
+        (ADF: ``dw``/``A``/``wc``/``xmax``; SWF: ``x_max``/``y_max``/``z_max``;
+        PWF: ``chi2_per_dof``)。失败时 ``zenith``/``azimuth`` 为 NaN。
+    """
+    x = np.asarray(x, float); y = np.asarray(y, float); z = np.asarray(z, float)
+    t = np.asarray(t, float); p = np.asarray(p, float)
+    zenith_ini, azimuth_ini = float(init_angles[0]), float(init_angles[1])
+    chi2_plane = float(init_angles[2]) if len(init_angles) > 2 else 0.0
+    out = dict(method = method, zenith = np.nan, azimuth = np.nan, chi2 = np.nan,
+               dw = np.nan, A = np.nan, wc = np.nan, x_max = np.nan,
+               y_max = np.nan, z_max = np.nan, chi2_per_dof = np.nan)
+
+    ok = np.isfinite(p) & (p > 0)
+    if ok.sum() < 5:
+        logger.warning(f"recons_direction: 有效天线数 {int(ok.sum())} < 5, 跳过")
+        return out
+
+    if method.upper() == "PWF":
+        theta, phi, fval_dof, theta_err, phi_err = PWF_fit(
+            x[ok], y[ok], z[ok], t[ok], zenith_ini, azimuth_ini)
+        out.update(zenith = float(theta), azimuth = float(phi),
+                   chi2_per_dof = float(fval_dof),
+                   chi2 = float(fval_dof) * max(len(t[ok]) - 2, 1))
+        return out
+
+    if method.upper() == "SWF":
+        # SWF 拟合的是源点 (xs, ys, zs), 返回 (xs, ys, zs, fval, xs_err, ys_err, zs_err)。
+        # 方向由源点相对阵列给出, 需由调用者换算; 这里只汇报源点与 chi2。
+        if x_xmax is None:
+            # 无 SWM 先验: 从 init_angles 沿视线推一个 10 km 处的初值
+            d = 10000.0
+            x_xmax = -d * np.sin(np.radians(zenith_ini)) * np.cos(np.radians(azimuth_ini))
+            y_xmax = -d * np.sin(np.radians(zenith_ini)) * np.sin(np.radians(azimuth_ini))
+            z_xmax = obs_altitude + d * np.cos(np.radians(zenith_ini))
+            simplex = True
+        else:
+            simplex = False
+        xs, ys, zs, fval, xs_err, ys_err, zs_err = SWF_fit(
+            x[ok], y[ok], z[ok], t[ok], x_xmax, y_xmax, z_xmax, simplex = simplex)
+        out.update(x_max = float(xs), y_max = float(ys), z_max = float(zs),
+                   chi2 = float(fval),
+                   zenith = float(np.degrees(np.arccos(np.clip(
+                       (zs - obs_altitude) / max(np.hypot(xs, ys, zs - obs_altitude), 1e-9), -1, 1)))),
+                   azimuth = float(np.degrees(np.arctan2(-ys, -xs)) % 360.0))
+        return out
+
+    # ---- 默认: ADF ----
+    try:
+        r = recons_angle(x, y, z, t, p, [zenith_ini, azimuth_ini, chi2_plane],
+                         obs_altitude, p_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
+    except Exception as exc:                      # noqa: BLE001
+        logger.warning(f"recons_direction: recons_angle 失败: {exc}")
+        return out
+    # 列序经逐事例 dump 验证: 7=zenith 8=azimuth 9=dw 10=A 12=wc
+    # (recons_angle 返回 20 个元素, 其余列的含义未逐一核对, 故不在此汇报)
+    out.update(zenith = float(r[7]), azimuth = float(r[8]), dw = float(r[9]),
+               A = float(r[10]), wc = float(r[12]) if len(r) > 12 else np.nan)
+    return out
