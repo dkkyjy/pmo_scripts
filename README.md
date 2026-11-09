@@ -2,8 +2,8 @@
 
 敦煌 DU 阵列数据分析脚本：从 ROOT 文件读取事件数据，完成时间戳/时间的提取、
 时间/位置标定、因果律（causality）匹配、时间差指纹过滤与定制化筛选，
-并用平面波模型（PWM）与球面波模型（SWM）拟合出射方向，最后输出拟合参数与
-可视化图表。
+并用平面波模型（PWM）、PWF 精修、球面波模型（SWM/SWF）与切伦科夫环幅度分布
+拟合（ADF）得到出射方向，最后输出拟合参数与可视化图表。
 
 按数据来源分三种输入布局（由 `loop.py --reader` 选择）：
 
@@ -293,6 +293,61 @@ ID x y z
 `position/du_coords_CoreasDC2.txt` 为逗号分隔版本（CoREAS DC2 布局）。
 `position/*_du_pair_theoretical.csv` 为 `du_pair_theoretical.py` 生成的
 DU 对理论时间差缓存（字段 `du_a, du_b, distance_m, theoretical_delta_ns`）。
+
+## ADF 方向重建（解析幅度 A）
+
+`reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py` 末节的 ADF
+链条。ADF 模型对幅度 `A` 是线性的，因此 `A` 不再交给 Minuit：
+
+```
+A*      = Σ(p·g/σ²) / Σ(g²/σ²)
+χ²_min  = Σ(p²/σ²) − (Σ(p·g/σ²))² / Σ(g²/σ²)
+```
+
+`g = f_Cerenkov · f_GeoM / early_late`，一次几何遍历即可，于是
+
+- `ADF_fit_analytic()`：幅度解析消去，只优化 (θ, φ, d_w)
+- `ADF_fit_analytic_fixdw()`：d_w 固定时只优化 (θ, φ)，用于 `d_w>3.499` 的回退分支
+- `recons_angle()` 的 ADF 网格：**3×3 θ/φ × 4 d_w = 36 起点**（原为 108，A 那层已删除）
+
+与原 108 起点版（`ADF_fit`，A 自由 + 边界 `[A0/2, A0·1e3]`）对比：**快 5.8×**，
+χ² 在同一参数下逐位相同；全量 14873 事例上集合统计略优（见下），但**逐事例不等价**
+（约 1/5 落进不同局部极小，最大差 3.4°）—— **不可用作逐事例回归门禁**。
+
+### 直接用带噪电压，跳过电场反演
+
+```python
+adf_angles_from_voc(x, y, z, t, voc, p, init_angles, obs_altitude,
+                    fluence_window=5)          # ±5 样点窗内 ΣV²
+```
+
+`fluence_window=0` 退化为整迹。CLI 侧：`RECON_ADF_VOC_WINDOW=N`
+（CoREAS 还需 `RECON_COREAS_DET_POS` 提供天线坐标）。
+
+> 时间参数 `t` 的单位是**秒**（早期 docstring 写 ns 是错的）。
+
+### 实测角分辨率（全量 14873 事例，仿真 CoREAS-AN，真值对比）
+
+| fluence 来源 | median | 68% | >1° |
+|---|---|---|---|
+| 真电场 | **0.135°** | 0.260° | 2.0% |
+| 真电压 | **0.166°** | 0.402° | 4.9% |
+| 带噪电压（ADC，±5 样点窗） | **0.287°** | 0.613° | 19.5% |
+
+按天线数：NDU 60–120 最好（0.09–0.10°）；**NDU 120–300 呈双峰**（中位 0.165° 但
+第 68 百分位 1.073°、>1° 占 33.1%），坏尾与拟合器无关，首选嫌疑是 `ADF.chi2` 中
+`len(x)>50` 时 `wc` 被 `omega[argmax(p·early_late)]` 覆写。
+
+### 并行批处理注意
+
+- 模块 import 不再创建 `./Reconstruction/`（只有电场反演才需要，按事例 `makedirs`）；
+- 所有 `makedirs` 均带 `exist_ok=True` —— 否则上百个并行进程会因 TOCTOU 竞态
+  大量抛 `FileExistsError`；
+- GRAND 天线有效长度表（961 MB `.mat`）**懒加载**：纯电压 ADF 路径 import 内存
+  从 ~4.2 GB 降到 ~0.13 GB，实测单任务峰值 ~0.5 GB（`--mem=2G` 足够）。
+
+分析与出图脚本另见 `../tools/sim_dunhuang/`：`adf_speedup.md`（解析 A 与加速比）、
+`RUN_3src.md`（三源一致性复现方法）、`FIGURES.md`（图注）。
 
 ## 参考
 
