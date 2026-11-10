@@ -70,6 +70,11 @@ DU_POS_TABLE = _resolve_path('RECON_DU_POS_TABLE', os.path.join(_REPO_ROOT, '_gp
 # DU 安装转角表 (RTK 实测)。
 DU_ROTATION_FILE = _resolve_data_file('RECON_DU_ROTATION_FILE', '_rtk_fred_rotation_order.txt')
 
+# CoREAS 真值树：有 trace 但没有 du_nanoseconds，且 DU id 与 GP65 生产表不重合，
+# 因此必须走 readroot 的探测分支 + CoREAS 坐标表（_resolve_coreas_det_pos）。
+# 这是"哪些 kind 属于这一类"的唯一真相来源：新增同类树时只改这里。
+_COREAS_TRUTH_TREES = ('tefield', 'tvoltage')
+
 #--------------------------------------------------------------------------
 
 from logger_config import logger  # 统一日志输出 (loguru), 替代 print
@@ -507,7 +512,7 @@ def read_root_file_from_path(root_path, event_number_int):
             trace_ch = np.array(data["trace_ch"].to_list()) # (n_du, 3, n_time)
             trace_1, trace_2, trace_3 = trace_ch[:, 0], trace_ch[:, 1], trace_ch[:, 2]
             gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
-        elif tree_kind in ("tefield", "tvoltage"):
+        elif tree_kind in _COREAS_TRUTH_TREES:
             # 仿真真值 (L0): trace 形状 (n_du, 3, n_time), 无 gps_time / du_nanoseconds
             # 时间轴由 run 目录名合成, du_nanoseconds 置 0 (方向重建只用 fluence + 相对时间窗)
             data = tree.arrays(["event_number", "du_id", "trace"], library = "ak")
@@ -595,7 +600,7 @@ def _load_du_position_for_input(root_path, det_pos_path = None):
         tree_kind = find_event_tree_key(list(probe_file.keys()), root_path)[1]
     finally:
         probe_file.close()
-    if tree_kind in ('tadc', 'tefield', 'tvoltage'):
+    if tree_kind == 'tadc' or tree_kind in _COREAS_TRUTH_TREES:
         path = _resolve_coreas_det_pos(root_path, det_pos_path)
     else:
         path = det_pos_path if det_pos_path is not None else DU_POS_TABLE
