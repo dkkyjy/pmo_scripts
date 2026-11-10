@@ -584,7 +584,9 @@ def _load_du_position_for_input(root_path, det_pos_path = None):
     """根据输入 tree 类型选定 DU 坐标表路径。
 
     ``teventadc`` (真实 trigger) 沿用生产表 :data:`DU_POS_TABLE`;
-    ``tadc`` (CoREAS) 使用 :func:`_resolve_coreas_det_pos` 选定的独立坐标表。
+    ``tadc`` / ``tefield`` / ``tvoltage`` (CoREAS, 含 L0 真值) 使用
+    :func:`_resolve_coreas_det_pos` 选定的独立坐标表 —— 它们的 DU id 与 GP65
+    生产表不重合, 用错表会得到静默错误的位置。
     返回 ``(tree_kind, position_path)``; 具体坐标由 :func:`read_xyz_coordinates`
     读取, 以保证与生产路径完全一致。
     """
@@ -593,7 +595,7 @@ def _load_du_position_for_input(root_path, det_pos_path = None):
         tree_kind = find_event_tree_key(list(probe_file.keys()), root_path)[1]
     finally:
         probe_file.close()
-    if tree_kind == 'tadc':
+    if tree_kind in ('tadc', 'tefield', 'tvoltage'):
         path = _resolve_coreas_det_pos(root_path, det_pos_path)
     else:
         path = det_pos_path if det_pos_path is not None else DU_POS_TABLE

@@ -55,3 +55,30 @@ def test_direction_tuple_keeps_len_20_and_carries_dw_fixed():
     assert (a, b) == (0, 19)
     assert t.dw_fixed is True
     assert DirectionTuple(tuple(range(20))).dw_fixed is False
+
+
+def test_coreas_truth_trees_use_coreas_coord_table(tmp_path, monkeypatch):
+    """tefield/tvoltage 与 tadc 一样必须用 CoREAS 坐标表，不能落到生产表。
+
+    R1 修好 tree 探测后这批文件才可达；若仍走 `else` 分支就会用 GP65 生产表，
+    而 CoREAS 的 DU id 与生产表不重合 —— 位置静默错。
+    """
+    import reconstruction_candidate_fluence_error_fixed as m
+
+    coords = tmp_path / "du_coords.txt"
+    coords.write_text("1, 0, 0, 0\n")
+    root = tmp_path / "efield_0-99_L0_0000.root"
+    root.write_text("placeholder")
+
+    class _FakeRoot:
+        def keys(self):
+            return ["tefield;7"]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(m.uproot, "open", lambda *a, **kw: _FakeRoot())
+    monkeypatch.setattr(m, "find_event_tree_key", lambda keys, name: ("tefield;7", "tefield"))
+    kind, path = m._load_du_position_for_input(str(root), None)
+    assert kind == "tefield"
+    assert path == str(coords), f"tefield 应使用 CoREAS 坐标表，实际 {path}"
