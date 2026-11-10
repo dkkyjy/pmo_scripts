@@ -48,6 +48,8 @@ SIGNAL_COLLECTION_TREE = "SignalCollection"
 #
 # * ``run_<n>_L<L>_<k>.root``            -> ``trun``           (DU layout / site)
 # * ``runefieldsim_<n>_L<L>_<k>.root``   -> ``trunefieldsim``  (efield config)
+TEFIELD_TREE = "tefield"
+TVOLTAGE_TREE = "tvoltage"
 SHOWER_TREE = "tshower"
 SHOWERSIM_TREE = "tshowersim"
 RUN_TREE = "trun"
@@ -68,9 +70,15 @@ def find_event_tree_key(keys: List[str], file_name: str) -> Tuple[str, str]:
     """Return ``(key, tree_kind)`` for the first recognised event tree.
 
     Prefers ``teventadc`` (real trigger data), then ``tadc`` (CoREAS/Dunhuang
-    simulation), then ``SimuCollection`` (StarShape/ZHAireS simulation).
-    ``tree_kind`` is one of ``"teventadc"``, ``"tadc"`` or ``"starshape"`` so
-    callers can branch on the concrete schema.
+    simulation), then ``tefield`` / ``tvoltage`` (CoREAS field/voltage truth),
+    then ``SimuCollection`` (StarShape/ZHAireS simulation).
+    ``tree_kind`` is one of ``"teventadc"``, ``"tadc"``, ``"tefield"``,
+    ``"tvoltage"`` or ``"starshape"`` so callers can branch on the concrete
+    schema.
+
+    ``tefield`` / ``tvoltage`` carry no arrival times (see
+    ``reconstruction_candidate`` 的读取分支), so a caller that needs time
+    differences must not use them.
     """
     for key in keys:
         if TEVENTADC_TREE in str(key):
@@ -79,11 +87,17 @@ def find_event_tree_key(keys: List[str], file_name: str) -> Tuple[str, str]:
         if TADC_TREE in str(key):
             return key, TADC_TREE
     for key in keys:
+        if TEFIELD_TREE in str(key):
+            return key, TEFIELD_TREE
+    for key in keys:
+        if TVOLTAGE_TREE in str(key):
+            return key, TVOLTAGE_TREE
+    for key in keys:
         if SIMU_COLLECTION_TREE in str(key):
             return key, STARSHAPE_TREE
     raise KeyError(
-        f"neither {TEVENTADC_TREE}, {TADC_TREE} nor {SIMU_COLLECTION_TREE} "
-        f"TTree found in file: {file_name}"
+        f"none of {TEVENTADC_TREE}, {TADC_TREE}, {TEFIELD_TREE}, "
+        f"{TVOLTAGE_TREE} or {SIMU_COLLECTION_TREE} TTree found in file: {file_name}"
     )
 
 
