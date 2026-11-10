@@ -83,3 +83,35 @@ def test_direction_only_writes_nothing(tmp_path, monkeypatch):
     assert res.raw == tuple(raw)
     assert res.zenith_init == raw[0] and res.azimuth_init == raw[1]
     assert res.chi2_plane == raw[2]
+
+
+def test_swm_prior_skips_internal_swf_grid(monkeypatch):
+    """U6/R3：给了 SWM 源点就只跑一次 SWF_fit，不给则跑网格。
+
+    这条固化的是驱动侧 `run_parallel_reconstruction_fixed.py:530` 已经在传
+    `spec.x_xmax/y_xmax/z_xmax/chi_square_external` 之后的行为契约。
+    """
+    import reconstruction_candidate_fluence_error_fixed as m
+
+    x, y, z, t, p = _synth_event()
+    init = (30.0, 120.0, 1.0)
+
+    calls = {"n": 0}
+    real = m.SWF_fit
+
+    def counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(m, "SWF_fit", counting)
+
+    calls["n"] = 0
+    m.recons_direction_swf_adf(x, y, z, t, p, init, 0.0, None, 120.0, -80.0, 6000.0, 1.0)
+    with_prior = calls["n"]
+
+    calls["n"] = 0
+    m.recons_direction_swf_adf(x, y, z, t, p, init, 0.0)
+    without_prior = calls["n"]
+
+    assert with_prior == 1, f"给先验时应只跑 1 次 SWF_fit，实际 {with_prior}"
+    assert without_prior > with_prior, (with_prior, without_prior)
