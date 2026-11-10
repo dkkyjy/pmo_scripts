@@ -272,6 +272,11 @@ Trigger_xxx.yaml                    # read 阶段产出（含 time、du_id）
   `trace_ch`（形状 `(n_du, 3, n_time)`，X/Y/Z；无 F 口，F 通道回退为 X）。
   无 `gps_time`，由运行目录时间戳合成单调时间轴；配套 `shower`/`run`/`showersim`/
   `runefieldsim` companion 文件提供 `truth` / `efield_config` / 逐事件 `det_pos`。
+- `tefield` / `tvoltage`（coreas 真值，`efield_<lo>-<hi>_L0_*.root`）：`event_number`、
+  `du_id`、`trace`（形状 `(n_du, 3, n_time)`，X/Y/Z）。**没有 `du_nanoseconds`**，
+  读取时置 0 并打一条 `logger.warning` —— 依赖时间差的 PWF/SWF 不要走这条路径。
+  检索顺序为 `teventadc` → `tadc` → `tefield` → `tvoltage` → `SimuCollection`，
+  同时含 `tadc` 与 `tefield` 的文件仍解析为 `tadc`。
 - StarShape（starshape）：`SimuCollection/SimShowerBranch`（shower truth）、
   `EfieldCollection/SimEfieldBranch`（`Detectors_det_id`、`Detectors_det_pos_shc`、
   `Detectors_t_0` 逐天线布局与到达时间）。无 `gps_time`/`du_id`/`du_nanoseconds`，
