@@ -515,8 +515,11 @@ def read_root_file_from_path(root_path, event_number_int):
         elif tree_kind in _COREAS_TRUTH_TREES:
             # 仿真真值 (L0): trace 形状 (n_du, 3, n_time), 无 gps_time / du_nanoseconds
             # 时间轴由 run 目录名合成, du_nanoseconds 置 0 (方向重建只用 fluence + 相对时间窗)
-            data = tree.arrays(["event_number", "du_id", "trace"], library = "ak")
-            data = data[int(event_number_int)]
+            # 只取这一条: 本函数是逐事例调用的, 整树读会把 N 个事例的 trace 反序列化 N 次。
+            # entry_start/entry_stop 与旧的 data[int(event_number_int)] 等价(已实测核对)。
+            _idx = int(event_number_int)
+            data = tree.arrays(["event_number", "du_id", "trace"],
+                               entry_start = _idx, entry_stop = _idx + 1, library = "ak")[0]
             event_num, du_ids_all = data["event_number"], np.array(data["du_id"])
             tr = np.array(data["trace"].to_list())        # (n_du, 3, n_time)
             if tr.ndim != 3:
