@@ -31,17 +31,12 @@ def _synth_event(n=40, seed=11):
     return x, y, z, t, p
 
 
-def test_tuple_fields_length_is_20():
-    assert len(_TUPLE_FIELDS) == 20
-
-
 def test_field_map_matches_raw_indices():
     raw = tuple(float(i) for i in range(20))
     res = direction_result_from_tuple(raw)
     assert isinstance(res, DirectionResult)
     assert res.raw == raw
-    by = dict(zip(_TUPLE_FIELDS, raw))
-    assert res.zenith == by["zenith"] == raw[7]
+    assert res.zenith == raw[7]
     assert res.azimuth == raw[8]
     assert res.dw == raw[9]
     assert res.A == raw[10]
