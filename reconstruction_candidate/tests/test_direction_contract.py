@@ -9,6 +9,7 @@ from reconstruction_candidate_fluence_error_fixed import (
     direction_result_from_tuple,
     recons_direction_struct,
     recons_direction_swf_adf,
+    reconstruct_direction_only,
 )
 
 
@@ -67,3 +68,18 @@ def test_struct_matches_tuple_on_a_real_fit():
     assert res.zenith == raw[7] and res.azimuth == raw[8]
     assert res.x_max == raw[3] and res.fmin == raw[11]
     assert res.dw_fixed == getattr(raw, "dw_fixed", False)
+
+
+def test_direction_only_writes_nothing(tmp_path, monkeypatch):
+    """U5：只算方向的入口不得建目录 / 写文件，且结果与方向核心一致。"""
+    x, y, z, t, p = _synth_event()
+    init = (30.0, 120.0, 1.0)
+
+    monkeypatch.chdir(tmp_path)
+    res = reconstruct_direction_only(x, y, z, t, p, init, 0.0)
+    assert list(tmp_path.iterdir()) == [], f"方向入口写了文件: {list(tmp_path.iterdir())}"
+
+    raw = recons_direction_swf_adf(x, y, z, t, p, init, 0.0)
+    assert res.raw == tuple(raw)
+    assert res.zenith_init == raw[0] and res.azimuth_init == raw[1]
+    assert res.chi2_plane == raw[2]

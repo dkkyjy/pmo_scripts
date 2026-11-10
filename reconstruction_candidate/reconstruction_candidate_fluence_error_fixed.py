@@ -1546,6 +1546,8 @@ class DirectionResult(NamedTuple):
     ``raw`` 是 20 元组原件，迁移期兜底；新代码请只读具名字段。
     """
 
+    zenith_init: float
+    azimuth_init: float
     zenith: float
     azimuth: float
     dw: float
@@ -1577,6 +1579,7 @@ def direction_result_from_tuple(t) -> DirectionResult:
         raise ValueError(f"方向返回元组长度应为 {_TUPLE_LEN}，实际 {len(t)}")
     by_name = dict(zip(_TUPLE_FIELDS, t))
     return DirectionResult(
+        zenith_init = by_name["zenith_init"], azimuth_init = by_name["azimuth_init"],
         zenith = by_name["zenith"], azimuth = by_name["azimuth"],
         dw = by_name["dw"], A = by_name["A"], wc = by_name["wc"],
         x_max = by_name["x_max"], y_max = by_name["y_max"], z_max = by_name["z_max"],
@@ -1596,6 +1599,19 @@ def recons_direction_struct(x, y, z, t, p, init_input, obs_altitude, **kwargs) -
     return direction_result_from_tuple(
         recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, **kwargs)
     )
+
+
+def reconstruct_direction_only(x, y, z, t, p, init_input, obs_altitude,
+                               p_sigma = None, x_xmax = None, y_xmax = None,
+                               z_xmax = None, chi_square_external = None) -> DirectionResult:
+    """只做方向重建：不建目录、不写盘、不做能量重建（R2 的分离入口）。
+
+    与 ``efield_recons_from_efield_PWF`` 内的方向那一段完全同参，
+    调用方拿到 :class:`DirectionResult` 即可，不需要触发任何 IO。
+    """
+    raw = recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude,
+                                   p_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
+    return direction_result_from_tuple(raw)
 
 
 def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_external=None, y_xmax_external=None, z_xmax_external=None, chi_square_external=None):  # time given in ns
@@ -1941,12 +1957,21 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     init_input = [rec_theta_plane[0], rec_phi_plane[0], chi2Plane[0]] # 使用平面波重建结果作为 ADF 重建的初始输入
 
-    rec_theta_plane, rec_phi_plane, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, \
-    chi2Sph, rec_theta_sph, rec_phi_sph, rec_dw, rec_A, fmin, rec_wc, \
-    rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, \
-    _dir_result = recons_direction_swf_adf(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
-    rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = _dir_result[17], _dir_result[18], _dir_result[19]
-    rec_dw_fixed = getattr(_dir_result, "dw_fixed", False)
+    _dir = reconstruct_direction_only(
+        positions_x, positions_y, positions_z, nanosecond_time, Fluence,
+        init_input, obs_altitude, p_sigma = Fluence_sigma,
+        x_xmax = x_xmax, y_xmax = y_xmax, z_xmax = z_xmax,
+        chi_square_external = chi_square_external,
+    )
+    rec_theta_plane, rec_phi_plane, chi2Plane = _dir.zenith_init, _dir.azimuth_init, _dir.chi2_plane
+    rec_x_xmax, rec_y_xmax, rec_z_xmax = _dir.x_max, _dir.y_max, _dir.z_max
+    chi2Sph = _dir.chi2_sph
+    rec_theta_sph, rec_phi_sph, rec_dw, rec_A = _dir.zenith, _dir.azimuth, _dir.dw, _dir.A
+    fmin, rec_wc = _dir.fmin, _dir.wc
+    rec_theta_err, rec_phi_err = _dir.zenith_err, _dir.azimuth_err
+    rec_dw_err, rec_A_err = _dir.dw_err, _dir.A_err
+    rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = _dir.x_max_err, _dir.y_max_err, _dir.z_max_err
+    rec_dw_fixed = _dir.dw_fixed
 
 
     logger.info(f"Reconstructed Xmax coordinates (m) and chi2: {rec_x_xmax} {rec_y_xmax} {rec_z_xmax} {chi2Sph}")
