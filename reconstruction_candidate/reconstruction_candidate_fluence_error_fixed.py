@@ -2711,10 +2711,9 @@ def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
     except Exception as exc:                      # noqa: BLE001
         logger.warning(f"recons_direction: recons_angle 失败: {exc}")
         return out
-    # 列序经逐事例 dump 验证: 7=zenith 8=azimuth 9=dw 10=A 12=wc
-    # (recons_angle 返回 20 个元素, 其余列的含义未逐一核对, 故不在此汇报)
-    out.update(zenith = float(r[7]), azimuth = float(r[8]), dw = float(r[9]),
-               A = float(r[10]), wc = float(r[12]) if len(r) > 12 else np.nan)
+    res = direction_result_from_tuple(r)
+    out.update(zenith = float(res.zenith), azimuth = float(res.azimuth),
+               dw = float(res.dw), A = float(res.A), wc = float(res.wc))
     return out
 
 # 向后兼容别名: 旧名 recons_angle 保留 (SWF->ADF 方向重建驱动, 返回 20 元组)
