@@ -517,6 +517,10 @@ def read_root_file_from_path(root_path, event_number_int):
                 raise ValueError(f"{tree_kind}: 期望 trace 形状 (n_du,3,n_time), 实际 {tr.shape}")
             trace_1, trace_2, trace_3 = tr[:, 0], tr[:, 1], tr[:, 2]
             du_nanoseconds = np.zeros(len(du_ids_all), dtype = np.int64)
+            logger.warning(
+                f"{tree_kind}: 无到达时间，du_nanoseconds 置 0（{len(du_ids_all)} 根天线）；"
+                "不要用此路径做 PWF/SWF —— 它们依赖真实时间差，置 0 会给出静默错误的方向"
+            )
             gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
     finally:
         root_file.close()
@@ -1507,6 +1511,22 @@ def ADF_fit_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, A0, obs_altitud
 
 #--------------------------------------------------------------------------
 
+class DirectionTuple(tuple):
+    """`recons_direction_swf_adf` 的 20 元组返回，额外带一个 `dw_fixed` 属性。
+
+    为什么不用 `rec_dw_err == 0` 当哨兵：dw 被固定时误差不可得，写成 0.0 会被读成"误差为零"。
+    dw_err 现在固定时为 NaN，而 NaN 无法区分"固定"与"拟合失败"，所以固定与否单独带出来。
+    保持 tuple 子类：长度、下标、解包全部与旧契约一致。
+    """
+
+    dw_fixed = False
+
+    def __new__(cls, values, dw_fixed = False):
+        obj = super().__new__(cls, values)
+        obj.dw_fixed = dw_fixed
+        return obj
+
+
 def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_external=None, y_xmax_external=None, z_xmax_external=None, chi_square_external=None):  # time given in ns
     """
     联合重建簇射方向和 Xmax 位置。
@@ -1555,6 +1575,9 @@ def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=No
     zenith_ini, azimuth_ini, chi2Plane  = init_input
     rec_dw, rec_A, rec_theta, rec_phi, fmin = np.inf, np.inf, np.inf, np.inf, np.inf
     rec_dw_err, rec_A_err, rec_theta_err, rec_phi_err = 0, 0, 0, 0
+    # dw 是否被固定（而不是“误差为零”）：下游 dof / dE_dw 判据一律看这个布尔，
+    # 不再用 rec_dw_err == 0 当哨兵（固定时 rec_dw_err 现在是 NaN）。
+    rec_dw_fixed = False
     
     
     thetalist = np.linspace(zenith_ini - 0.5, zenith_ini + 0.5, 3)
@@ -1614,7 +1637,8 @@ def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=No
             obs_altitude, p_sigma_masked)
         if _fv <= fmin_fixdw:
             fmin_fixdw, rec_theta, rec_phi, rec_A = _fv, _t, _p, _a
-        rec_dw_err = 0 # 固定 dw 后误差设为 0
+        rec_dw_err = np.nan          # 固定 dw -> 误差不可得；固定与否看 rec_dw_fixed
+        rec_dw_fixed = True
 
         fmin = fmin_fixdw
 
@@ -1630,7 +1654,7 @@ def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=No
     except Exception as e:
         logger.warning(f"Could not calculate wc for display: {e}")
     
-    return zenith_ini, azimuth_ini, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph / (len(x) - 3), rec_theta, rec_phi, rec_dw, rec_A, fmin / (len(p[~np.isnan(p)]) - (3 if rec_dw_err == 0 else 4)), np.asarray(wc_adf).reshape(-1)[0], rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err # wc_adf 兼容写法(标量/单元素数组都可)
+    return DirectionTuple((zenith_ini, azimuth_ini, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, chi2Sph / (len(x) - 3), rec_theta, rec_phi, rec_dw, rec_A, fmin / (len(p[~np.isnan(p)]) - (3 if rec_dw_fixed else 4)), np.asarray(wc_adf).reshape(-1)[0], rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err,), dw_fixed = rec_dw_fixed) # wc_adf 兼容写法(标量/单元素数组都可)
 
 #--------------------------------------------------------------------------
 
@@ -1849,8 +1873,9 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     rec_theta_plane, rec_phi_plane, chi2Plane, rec_x_xmax, rec_y_xmax, rec_z_xmax, \
     chi2Sph, rec_theta_sph, rec_phi_sph, rec_dw, rec_A, fmin, rec_wc, \
     rec_theta_err, rec_phi_err, rec_dw_err, rec_A_err, \
-    rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = \
-    recons_direction_swf_adf(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
+    _dir_result = recons_direction_swf_adf(positions_x, positions_y, positions_z, nanosecond_time, Fluence, init_input, obs_altitude, Fluence_sigma, x_xmax, y_xmax, z_xmax, chi_square_external)
+    rec_x_xmax_err, rec_y_xmax_err, rec_z_xmax_err = _dir_result[17], _dir_result[18], _dir_result[19]
+    rec_dw_fixed = getattr(_dir_result, "dw_fixed", False)
 
 
     logger.info(f"Reconstructed Xmax coordinates (m) and chi2: {rec_x_xmax} {rec_y_xmax} {rec_z_xmax} {chi2Sph}")
@@ -1976,7 +2001,7 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
 
     print("ADF constant fit results: A =", ADF_A_constant, "A_err =", ADF_A_err_constant, "chi2/dof =", ADF_chi2_constant, flush = True)
 
-    if rec_dw_err == 0: 
+    if rec_dw_fixed: 
         delta_ADF_chi2 = ADF_chi2_constant * (len(Fluence[~np.isnan(Fluence)]) - 1) - fmin * (len(Fluence[~np.isnan(Fluence)]) - 3) # 计算 Δχ² = χ²_constant - χ²_ADF, 并乘以自由度 (dof = N - 3)
         delta_ADF_chi2_sigma = sigma(delta_ADF_chi2, 2) # 将 Δχ² 转换为 σ 级别
 
@@ -2226,7 +2251,10 @@ def energy_restruction(root_path, event_number_int, det_pos_path = None, x_xmax 
     
     dE_A_adf = (compute_energy_adf(adf_pars[0] + rec_A_err, adf_pars[1], adf_pars[2]) - compute_energy_adf(adf_pars[0] - rec_A_err, adf_pars[1], adf_pars[2])) / 2
     
-    dE_dw_adf = (compute_energy_adf(adf_pars[0], adf_pars[1], adf_pars[2] + rec_dw_err) - compute_energy_adf(adf_pars[0], adf_pars[1], adf_pars[2] - rec_dw_err)) / 2
+    if rec_dw_fixed:
+        dE_dw_adf = 0.0          # 与旧行为一致：固定 dw 时不计 dw 不确定度
+    else:
+        dE_dw_adf = (compute_energy_adf(adf_pars[0], adf_pars[1], adf_pars[2] + rec_dw_err) - compute_energy_adf(adf_pars[0], adf_pars[1], adf_pars[2] - rec_dw_err)) / 2
 
     for energy_list in range(3):
 
@@ -2606,7 +2634,8 @@ def _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
     ``fix_dw``   —— ``dw0`` 是固定值(True)还是初值(False)
 
     返回 ``(theta, phi, dw, A, fval, theta_err, phi_err, dw_err, A_err)``;
-    ``amp="profiled"`` 时四个误差均为 NaN (``fix_dw`` 时 ``dw_err`` 沿用旧约定为 0)。
+    ``amp="profiled"`` 时四个误差均为 NaN (``fix_dw`` 时 ``dw_err`` 也是 NaN ——
+    "参数被固定"不是"误差为零"，调用方要判断固定与否请看自己传的 ``fix_dw``)。
     """
     if amp == "profiled":
         wc0 = float(ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma).wc)
@@ -2630,7 +2659,7 @@ def _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
         fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude,
                                           ant_p_sigma, theta, phi, dw, wc0)
         return (theta, phi, dw, a_best, fval,
-                np.nan, np.nan, (0.0 if fix_dw else np.nan), np.nan)
+                np.nan, np.nan, np.nan, np.nan)
 
     # ---- amp == "free" (旧 ADF_fit / ADF_fit_fixdw 的行为, 逐行等价) ----
     if A0 is None:
@@ -2652,6 +2681,6 @@ def _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
     m.hesse()
     theta, theta_err = m.values["theta"], m.errors["theta"]
     phi, phi_err = m.values["phi"], m.errors["phi"]
-    dw, dw_err = m.values["dw"], (0 if fix_dw else m.errors["dw"])
+    dw, dw_err = m.values["dw"], (np.nan if fix_dw else m.errors["dw"])
     A, A_err = m.values["A"], m.errors["A"]
     return theta, phi, dw, A, m.fval, theta_err, phi_err, dw_err, A_err
