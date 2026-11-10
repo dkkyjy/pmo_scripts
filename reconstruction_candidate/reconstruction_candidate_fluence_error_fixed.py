@@ -1,6 +1,7 @@
 import os
 import matplotlib.pyplot as plt
 import sys
+from typing import NamedTuple
 import numpy as np
 from scipy.fftpack import ifft, fft # 引入快速傅里叶变换和逆变换函数
 from scipy.fftpack import fftfreq
@@ -1510,6 +1511,18 @@ def ADF_fit_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, A0, obs_altitud
     return r
 
 #--------------------------------------------------------------------------
+# 20 元组的位置契约（:func:`recons_direction_swf_adf` 的返回值）。
+# 这是**唯一**允许出现下标的地方：其余代码一律走 :class:`DirectionResult` 的具名字段。
+_TUPLE_FIELDS = (
+    "zenith_init", "azimuth_init", "chi2_plane_init",
+    "x_max", "y_max", "z_max",
+    "chi2_sph", "zenith", "azimuth", "dw", "A", "fmin", "wc",
+    "zenith_err", "azimuth_err", "dw_err", "A_err",
+    "x_max_err", "y_max_err", "z_max_err",
+)
+_TUPLE_LEN = len(_TUPLE_FIELDS)
+assert _TUPLE_LEN == 20, _TUPLE_LEN
+
 
 class DirectionTuple(tuple):
     """`recons_direction_swf_adf` 的 20 元组返回，额外带一个 `dw_fixed` 属性。
@@ -1525,6 +1538,64 @@ class DirectionTuple(tuple):
         obj = super().__new__(cls, values)
         obj.dw_fixed = dw_fixed
         return obj
+
+
+class DirectionResult(NamedTuple):
+    """方向重建的具名结果。
+
+    ``raw`` 是 20 元组原件，迁移期兜底；新代码请只读具名字段。
+    """
+
+    zenith: float
+    azimuth: float
+    dw: float
+    A: float
+    wc: float
+    x_max: float
+    y_max: float
+    z_max: float
+    chi2_plane: float
+    chi2_sph: float
+    fmin: float
+    zenith_err: float
+    azimuth_err: float
+    dw_err: float
+    A_err: float
+    dw_fixed: bool
+    x_max_err: float
+    y_max_err: float
+    z_max_err: float
+    raw: tuple
+
+
+def direction_result_from_tuple(t) -> DirectionResult:
+    """把 :func:`recons_direction_swf_adf` 的返回值包成 :class:`DirectionResult`。
+
+    下标只在这里出现，并且由 ``_TUPLE_FIELDS`` 驱动；长度不符直接抛错而不是静默错位。
+    """
+    if len(t) != _TUPLE_LEN:
+        raise ValueError(f"方向返回元组长度应为 {_TUPLE_LEN}，实际 {len(t)}")
+    by_name = dict(zip(_TUPLE_FIELDS, t))
+    return DirectionResult(
+        zenith = by_name["zenith"], azimuth = by_name["azimuth"],
+        dw = by_name["dw"], A = by_name["A"], wc = by_name["wc"],
+        x_max = by_name["x_max"], y_max = by_name["y_max"], z_max = by_name["z_max"],
+        chi2_plane = by_name["chi2_plane_init"], chi2_sph = by_name["chi2_sph"],
+        fmin = by_name["fmin"],
+        zenith_err = by_name["zenith_err"], azimuth_err = by_name["azimuth_err"],
+        dw_err = by_name["dw_err"], A_err = by_name["A_err"],
+        dw_fixed = bool(getattr(t, "dw_fixed", False)),
+        x_max_err = by_name["x_max_err"], y_max_err = by_name["y_max_err"],
+        z_max_err = by_name["z_max_err"],
+        raw = tuple(t),
+    )
+
+
+def recons_direction_struct(x, y, z, t, p, init_input, obs_altitude, **kwargs) -> DirectionResult:
+    """与 :func:`recons_direction_swf_adf` 同参，但返回 :class:`DirectionResult`。"""
+    return direction_result_from_tuple(
+        recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, **kwargs)
+    )
 
 
 def recons_direction_swf_adf(x, y, z, t, p, init_input, obs_altitude, p_sigma=None, x_xmax_external=None, y_xmax_external=None, z_xmax_external=None, chi_square_external=None):  # time given in ns
