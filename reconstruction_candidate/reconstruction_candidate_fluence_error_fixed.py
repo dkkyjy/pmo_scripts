@@ -2521,13 +2521,14 @@ def adf_angles_from_voc(root_path, event_number_int, det_pos_path = None, fluenc
     obs_altitude = float(np.mean(z))
     # 注意: recons_angle 内部的 SWF_fit 用 c[m/s] * t, 所以这里必须传**秒**
     # (energy_restruction 也是这么做的: fluence_data[:, 7] * 1e-9)。
-    out = recons_direction_swf_adf(x, y, z, t_ns * 1e-9, fluence, [zenith_ini, azimuth_ini, chi2_plane],
-                       obs_altitude, None, x_xmax, y_xmax, z_xmax, chi_square_external)
+    res = direction_result_from_tuple(
+        recons_direction_swf_adf(x, y, z, t_ns * 1e-9, fluence, [zenith_ini, azimuth_ini, chi2_plane],
+                                 obs_altitude, None, x_xmax, y_xmax, z_xmax, chi_square_external))
     return dict(
-        azimuth = float(out[8]), zenith = float(out[7]),
+        azimuth = float(res.azimuth), zenith = float(res.zenith),
         azimuth_pwf = azimuth_ini, zenith_pwf = zenith_ini, chi2_pwf = float(chi2_plane),
-        xmax = (float(out[3]), float(out[4]), float(out[5])),
-        dw = float(out[9]), A = float(out[10]), chi2 = float(out[11]), wc = float(out[12]),
+        xmax = (float(res.x_max), float(res.y_max), float(res.z_max)),
+        dw = float(res.dw), A = float(res.A), chi2 = float(res.chi2_sph), wc = float(res.wc),
         n_du = int(ok.sum()), fluence_window = window, fluence = fluence[ok].tolist(),
     )
 

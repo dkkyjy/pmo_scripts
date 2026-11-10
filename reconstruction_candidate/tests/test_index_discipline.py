@@ -12,7 +12,7 @@ import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
 
-_GUARDED = ("raw", "_dir", "_dir_result", "r")
+_GUARDED = ("raw", "_dir", "_dir_result", "r", "out")
 _ONLY_ALLOWED_IN = "direction_result_from_tuple"
 
 
@@ -46,7 +46,15 @@ def test_tuple_indexing_confined_to_one_function():
 
 def test_the_guard_actually_catches_a_violation():
     """反证：给守卫喂一段含 r[7] 的伪造源码，它必须命中（否则本测试恒真）。"""
-    fake = "def f():\n    a = r[7]\n    b = raw[3]\n"
+    fake = "def f():\n    a = r[7]\n    b = raw[3]\n    c = out[9]\n"
     hits = _index_hits(fake)
-    assert len(hits) == 2, hits
+    assert len(hits) == 3, hits
     assert _index_hits("def f():\n    return raw\n") == []
+
+
+def test_strip_function_removes_only_the_target():
+    """反证 _strip_function：给定函数被整段切掉，其余函数保留。"""
+    src = "def a():\n    return raw[1]\n\ndef direction_result_from_tuple(t):\n    return t[0]\n\ndef b():\n    return 0\n"
+    rest = _strip_function(src, "direction_result_from_tuple")
+    assert "return t[0]" not in rest
+    assert "return raw[1]" in rest and "def b():" in rest, rest
