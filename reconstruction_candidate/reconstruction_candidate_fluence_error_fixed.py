@@ -1493,78 +1493,17 @@ class ADF:
 
 
 def ADF_fit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, A0, obs_altitude, ant_p_sigma=None):
-    """
-    执行 ADF 拟合。
-    
-    拟合参数: theta, phi, dw (宽度), A (幅度)。
-    固定参数: B (地磁参数), rc。
-    ant_p_sigma: 【新增】每根天线 Fluence 的物理误差, 传给 ADF 类用作 chi2 归一化分母。
-    """
-    m = iminuit.Minuit(
-        ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma),
-        theta = theta0,
-        phi = phi0,
-        dw = dw0,
-        A = A0,
-        B = 0.01,
-        rc = 1,
-    )
-    # 设置参数限制
-    m.limits = (
-        [theta0 - 0.8, theta0 + 0.8],
-        [phi0 - 0.8, phi0 + 0.8],
-        [0.01, 5],
-        [A0 / 2, A0 * 1e3], [0, 0.01],
-        [0, 1],
-    )
-    # 固定 B 和 rc
-    m.fixed = (False, False, False, False, True, True)
-    m.errordef = 1
-    m.tol = 1e-4
-    m.migrad()
-    m.hesse()
-    theta, theta_err = m.values["theta"], m.errors["theta"]
-    phi, phi_err = m.values["phi"], m.errors["phi"]
-    dw, dw_err = m.values["dw"], m.errors["dw"]
-    A, A_err = m.values["A"], m.errors["A"]
-    fval = m.fval
-    return theta, phi, dw, A, fval, theta_err, phi_err, dw_err, A_err
+    """见 :func:`_adf_minuit`; 本函数只固定 amp / fix_dw 两个开关。"""
+    r = _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
+                    dw0 = dw0, A0 = A0, ant_p_sigma = ant_p_sigma, amp = "free", fix_dw = False)
+    return r
 
 
 def ADF_fit_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, A0, obs_altitude, ant_p_sigma=None):
-    """
-    执行固定宽度的 ADF 拟合。
-    
-    当自由拟合的 dw 不合理时使用。固定 dw 为传入的 dw0。
-    ant_p_sigma: 【新增】每根天线 Fluence 的物理误差, 传给 ADF 类用作 chi2 归一化分母。
-    """
-    m = iminuit.Minuit(
-        ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma),
-        theta = theta0,
-        phi = phi0,
-        dw = dw0,
-        A = A0,
-        B = 0.01,
-        rc = 1,
-    )
-    m.limits = (
-        [theta0 - 0.8, theta0 + 0.8],
-        [phi0 - 0.8, phi0 + 0.8],
-        [0.01, 5],
-        [A0 / 2, A0 * 1e3], [0, 0.01],
-        [0, 1],
-    )
-    m.fixed = (False, False, True, False, True, True) # 固定 dw, B, rc
-    m.errordef = 1
-    m.tol = 1e-4
-    m.migrad()
-    m.hesse()
-    theta, theta_err = m.values["theta"], m.errors["theta"]
-    phi, phi_err = m.values["phi"], m.errors["phi"]
-    dw, dw_err = m.values["dw"], 0 # dw 固定, 误差设为 0
-    A, A_err = m.values["A"], m.errors["A"]
-    fval = m.fval
-    return theta, phi, dw, A, fval, theta_err, phi_err, dw_err, A_err
+    """见 :func:`_adf_minuit`; 本函数只固定 amp / fix_dw 两个开关。"""
+    r = _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
+                    dw0 = dw0, A0 = A0, ant_p_sigma = ant_p_sigma, amp = "free", fix_dw = True)
+    return r
 
 #--------------------------------------------------------------------------
 
@@ -2537,51 +2476,18 @@ def _adf_chi2_profiled(x, y, z, p, xs, ys, zs, obs_altitude, p_sigma,
 
 def ADF_fit_analytic(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, obs_altitude,
                      ant_p_sigma = None):
-    """与 :func:`ADF_fit` 同参同返回, 但幅度 A 由解析式给出, 不交给 Minuit。
-
-    返回 ``(theta, phi, dw, A, fval)``; ``fval`` 是解析极小化 A 后的 chi2 (与 ADF_fit
-    的 m.fval 同口径, 未除以自由度)。起点/边界与 ADF_fit 完全一致。
-    """
-    wc0 = float(ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma).wc)
-
-    def _f(theta, phi, dw):
-        return _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
-                                  theta, phi, dw, wc0)[0]
-
-    m = iminuit.Minuit(_f, theta = theta0, phi = phi0, dw = dw0)
-    m.limits = ([theta0 - 0.8, theta0 + 0.8], [phi0 - 0.8, phi0 + 0.8], [0.01, 5])
-    m.errordef = 1
-    m.tol = 1e-4
-    m.migrad()
-
-    theta, phi, dw = float(m.values["theta"]), float(m.values["phi"]), float(m.values["dw"])
-    fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
-                                      theta, phi, dw, wc0)
-    return theta, phi, dw, a_best, fval
+    """见 :func:`_adf_minuit`; 本函数只固定 amp / fix_dw 两个开关。"""
+    r = _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
+                    dw0 = dw0, A0 = None, ant_p_sigma = ant_p_sigma, amp = "profiled", fix_dw = False)
+    return r[:5]
 
 
 def ADF_fit_analytic_fixdw(x, y, z, ant_p, xs, ys, zs, theta0, phi0, dw0, obs_altitude,
-                           ant_p_sigma = None):
-    """与 :func:`ADF_fit_fixdw` 同参, 但幅度 A 解析消去 (dw 固定)。
-
-    返回 ``(theta, phi, dw0, A, fval)`` —— dw 原样返回, 便于与 ADF_fit 的输出对齐。
-    """
-    wc0 = float(ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma).wc)
-
-    def _f(theta, phi):
-        return _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
-                                  theta, phi, dw0, wc0)[0]
-
-    m = iminuit.Minuit(_f, theta = theta0, phi = phi0)
-    m.limits = ([theta0 - 0.8, theta0 + 0.8], [phi0 - 0.8, phi0 + 0.8])
-    m.errordef = 1
-    m.tol = 1e-4
-    m.migrad()
-
-    theta, phi = float(m.values["theta"]), float(m.values["phi"])
-    fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma,
-                                      theta, phi, dw0, wc0)
-    return theta, phi, dw0, a_best, fval
+                     ant_p_sigma = None):
+    """见 :func:`_adf_minuit`; 本函数只固定 amp / fix_dw 两个开关。"""
+    r = _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
+                    dw0 = dw0, A0 = None, ant_p_sigma = ant_p_sigma, amp = "profiled", fix_dw = True)
+    return r[:5]
 
 
 def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
@@ -2682,3 +2588,70 @@ def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
 
 # 向后兼容别名: 旧名 recons_angle 保留 (SWF->ADF 方向重建驱动, 返回 20 元组)
 recons_angle = recons_direction_swf_adf
+
+
+def _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
+                dw0 = 1.0, A0 = None, ant_p_sigma = None,
+                amp = "free", fix_dw = False):
+    """ADF 拟合的唯一实现。四个公开变体只是本函数的薄壳。
+
+    两个正交开关:
+
+    ``amp``      —— 幅度的处理方式
+        ``"free"``     : A 交给 Minuit（与旧 ``ADF_fit`` 完全一致: B=0.01/rc=1 固定,
+                         A 边界 [A0/2, A0*1e3], migrad+hesse 取误差）
+        ``"profiled"`` : A 解析消去（profile likelihood, 见 :func:`_adf_chi2_profiled`）,
+                         只优化 theta/phi[/dw]，误差不可得 -> NaN
+
+    ``fix_dw``   —— ``dw0`` 是固定值(True)还是初值(False)
+
+    返回 ``(theta, phi, dw, A, fval, theta_err, phi_err, dw_err, A_err)``;
+    ``amp="profiled"`` 时四个误差均为 NaN (``fix_dw`` 时 ``dw_err`` 沿用旧约定为 0)。
+    """
+    if amp == "profiled":
+        wc0 = float(ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma).wc)
+        if fix_dw:
+            def _f(theta, phi):
+                return _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude,
+                                          ant_p_sigma, theta, phi, dw0, wc0)[0]
+            m = iminuit.Minuit(_f, theta = theta0, phi = phi0)
+            m.limits = ([theta0 - 0.8, theta0 + 0.8], [phi0 - 0.8, phi0 + 0.8])
+        else:
+            def _f(theta, phi, dw):
+                return _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude,
+                                          ant_p_sigma, theta, phi, dw, wc0)[0]
+            m = iminuit.Minuit(_f, theta = theta0, phi = phi0, dw = dw0)
+            m.limits = ([theta0 - 0.8, theta0 + 0.8], [phi0 - 0.8, phi0 + 0.8], [0.01, 5])
+        m.errordef = 1
+        m.tol = 1e-4
+        m.migrad()
+        theta, phi = float(m.values["theta"]), float(m.values["phi"])
+        dw = dw0 if fix_dw else float(m.values["dw"])
+        fval, a_best = _adf_chi2_profiled(x, y, z, ant_p, xs, ys, zs, obs_altitude,
+                                          ant_p_sigma, theta, phi, dw, wc0)
+        return (theta, phi, dw, a_best, fval,
+                np.nan, np.nan, (0.0 if fix_dw else np.nan), np.nan)
+
+    # ---- amp == "free" (旧 ADF_fit / ADF_fit_fixdw 的行为, 逐行等价) ----
+    if A0 is None:
+        raise ValueError("amp='free' 需要 A0 (幅度初值)")
+    m = iminuit.Minuit(
+        ADF(x, y, z, ant_p, xs, ys, zs, obs_altitude, ant_p_sigma),
+        theta = theta0, phi = phi0, dw = dw0, A = A0, B = 0.01, rc = 1,
+    )
+    m.limits = (
+        [theta0 - 0.8, theta0 + 0.8],
+        [phi0 - 0.8, phi0 + 0.8],
+        [0.01, 5],
+        [A0 / 2, A0 * 1e3], [0, 0.01], [0, 1],
+    )
+    m.fixed = (False, False, bool(fix_dw), False, True, True)   # B / rc 恒固定
+    m.errordef = 1
+    m.tol = 1e-4
+    m.migrad()
+    m.hesse()
+    theta, theta_err = m.values["theta"], m.errors["theta"]
+    phi, phi_err = m.values["phi"], m.errors["phi"]
+    dw, dw_err = m.values["dw"], (0 if fix_dw else m.errors["dw"])
+    A, A_err = m.values["A"], m.errors["A"]
+    return theta, phi, dw, A, m.fval, theta_err, phi_err, dw_err, A_err
