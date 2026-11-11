@@ -15,8 +15,14 @@
 
 断言分两层：
 1. 每类输入都能驱动同一次 ADF 拟合，给出物理上合理的 (theta, phi, dw, A)；
-2. 三类输入在同一事例、同一几何中心下给出的方向互相一致（差异在度级以内）——
+2. 四类输入在同一事例、同一几何中心下给出的方向互相一致 ——
    这是"不同来源的幅度喂给同一个 ADF 是否等价"的端到端判据。
+
+#2 的容差来自实测（15 个事例 × 4 类输入，以 tadc 为参考）：
+    dtheta: p50=0.00 p95=0.48 max=1.60   dphi: p50=0.00 p95=1.60 max=1.60
+数值集中在 0.00 与 1.60 两档，是拟合精度的离散下界；取 3 度作为回归门限。
+注意 fval 在不同输入间可以差一倍以上（幅度尺度与噪声水平不同），方向仍稳定，
+所以只对方向设门限，不对 chi2 设。
 """
 
 import glob
@@ -70,10 +76,10 @@ def _source_from_tadc(idx):
     return float(xs), float(ys), float(zs)
 
 
+@pytest.mark.parametrize("idx", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("name", list(INPUTS))
-def test_adf_fits_real_input(name):
+def test_adf_fits_real_input(name, idx):
     root = _one(INPUTS[name])
-    idx = 0
     src = _source_from_tadc(idx)
     assert np.all(np.isfinite(src)) and abs(src[2]) > 1000.0, src
 
@@ -87,13 +93,15 @@ def test_adf_fits_real_input(name):
 
     assert 0.0 < theta < 90.0, (name, theta)
     assert 0.0 <= phi < 360.0, (name, phi)
-    assert 0.05 < dw < 5.0, (name, dw)
+    # dw 的下界取 0.005：MINUIT 自身把 dw 限在 [0.01, 5]，真实事例里确实会贴到下边界
+    # （环极宽/极平的事例，例如 event 3 的 tvoltage 落在 0.021），这不是缺陷。
+    assert 0.005 < dw <= 5.0, (name, dw)
     assert A > 0.0 and np.isfinite(fval), (name, A, fval)
 
 
-def test_inputs_agree_with_each_other():
-    """三类真实输入在同一事例、同一几何中心下的方向差异必须在度级以内。"""
-    idx = 0
+@pytest.mark.parametrize("idx", [0, 1, 2, 3, 4])
+def test_inputs_agree_with_each_other(idx):
+    """四类真实输入在同一事例、同一几何中心下的方向差异必须 <=3 度（见模块 docstring 的实测分布）。"""
     src = _source_from_tadc(idx)
     got = {}
     for name in INPUTS:
@@ -108,7 +116,7 @@ def test_inputs_agree_with_each_other():
     for name, (th, ph) in got.items():
         dth = abs(th - ref[0])
         dph = abs((ph - ref[1] + 180) % 360 - 180)
-        assert dth < 20.0 and dph < 20.0, (name, got[name], ref, dth, dph)
+        assert dth < 3.0 and dph < 3.0, (f"event {idx}", name, got[name], ref, dth, dph)
 
 
 @pytest.mark.skipif(
