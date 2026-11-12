@@ -204,14 +204,18 @@ results, 108-start ADF grid) — do not trust them for the current chain (18 col
 ## Testing & QA
 
 - Suite: `reconstruction_candidate/tests/` (tracked; root `tests/` does not exist and is ignored).
-  `pytest reconstruction_candidate/tests -q` → **59 collected, 32 passed, 27 skipped** without
-  ROOT data, ~23 s (25 skips are real-input ADF cases gated by `PYTEST_COREAS_ROOT`; 2 are
+  `pytest reconstruction_candidate/tests -q` → **76 collected, 49 passed, 27 skipped** without
+  ROOT data, ~26 s (25 skips are real-input ADF cases gated by `PYTEST_COREAS_ROOT`; 2 are
   placeholders needing the absent `parameter_files/` EFL table).
   With `PYTEST_COREAS_ROOT=<CoREAS-AN event dir>` the real-input tests run and add a cross-input
   direction agreement gate (`< 3°`).
-- Coverage is one module only — `reconstruction_candidate_fluence_error_fixed.py` and its driver.
-  `loop.py`, `main.py`, `readroot/`, `find_event/`, `restoration/` have **zero tests**. Changing
-  the CLI, a stage suffix or a reader is verified by running it, not by the suite.
+- Coverage is the ADF/PWF/SWF chain plus the driver around it:
+  `reconstruction_candidate_fluence_error_fixed.py` and `run_parallel_reconstruction_fixed.py`
+  (task loading, resume short-circuit, `reconstruct_one` statuses 0–3, summary assembly, and a
+  real-subprocess end-to-end that exercises only the resume path because the physics entries need
+  `parameter_files/`). `loop.py`, `main.py`, `readroot/`, `find_event/`, `restoration/` have
+  **zero tests**. Changing the CLI, a stage suffix or a reader is verified by running it, not by
+  the suite.
 - Use `python -m py_compile <file>` as the syntax gate (the project's own practice); there is no
   lint/format config — the stale `.ruff_cache/` is not enforcement. No CI: `.github/` is gitignored.
 - The suite encodes contracts that are easy to violate: 20-tuple indexing confined to
