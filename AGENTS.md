@@ -82,6 +82,7 @@ Invariants that are load-bearing:
 | `calibration/` | `jul24_locked_xyz_additive_utc.csv` (time windows + per-DU xyz offsets) |
 | `time_position_offset.py`, `du_pair_theoretical.py` | calibration subroutine; DU-pair theoretical-Δt cache builder |
 | `restoration/` | old snapshot of the recon chain — do not edit |
+| `docs/solutions/` | documented solutions to past problems (bugs, workflow patterns), one file per solved problem, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`); gitignored, local-only |
 
 ## Development Commands
 
