@@ -49,28 +49,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 #       RECON_COREAS_DET_POS     CoREAS du_coords.txt (tadc 输入用)
 #--------------------------------------------------------------------------
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_PARAM_DIR = os.path.join(_HERE, 'parameter_files')
-_REPO_ROOT = os.path.abspath(os.path.join(_HERE, '..'))
 
-def _resolve_path(env_var, default):
-    """返回环境变量 ``env_var`` 指定的路径, 未设置时回退到 ``default``。"""
-    return os.environ.get(env_var, default)
-
-def _resolve_data_file(env_var, filename):
-    """在 parameter_files/ 下解析数据文件, 可用环境变量 ``env_var`` 覆盖。"""
-    return _resolve_path(env_var, os.path.join(_PARAM_DIR, filename))
 
 # 生产 (GP65) DU 位置表: 历史上位于仓库根目录的 _gp65_rtksort.txt。
-DU_POS_TABLE = _resolve_path('RECON_DU_POS_TABLE', os.path.join(_REPO_ROOT, '_gp65_rtksort.txt'))
 
 # DU 安装转角表 (RTK 实测)。
-DU_ROTATION_FILE = _resolve_data_file('RECON_DU_ROTATION_FILE', '_rtk_fred_rotation_order.txt')
 
 # CoREAS 真值树：有 trace 但没有 du_nanoseconds，且 DU id 与 GP65 生产表不重合，
 # 因此必须走 readroot 的探测分支 + CoREAS 坐标表（_resolve_coreas_det_pos）。
 # 这是"哪些 kind 属于这一类"的唯一真相来源：新增同类树时只改这里。
-_COREAS_TRUTH_TREES = ('tefield', 'tvoltage')
 
 #--------------------------------------------------------------------------
 
@@ -102,56 +89,41 @@ from reconstruction_direction import (
 )
 from _optimized_read_matching_times_graph import optimized_read_matching_times_graph
 
+# 重建层已按职责拆分（单向依赖：本文件 -> common / antenna / io / direction）。
+from reconstruction_common import (
+    DU_POS_TABLE,
+    DU_ROTATION_FILE,
+    _PARAM_DIR,
+    efield_rec_dir,
+    rotation_m,
+    calculate_energy_fluence_and_error,
+)
+from reconstruction_antenna import (
+    ADC_trace_to_Voc_time,
+    Voc_fft_real_MHz,
+    e_recons_real_MHz,
+    get_lec_grand_real_MHz,
+    re_calculate_Voc_from_reconstruction,
+    rotate_xy_ports,
+    read_du_rotation_angles,
+)
+from reconstruction_io import (
+    read_root_file_from_path,
+    read_xyz_coordinates,
+    causality_filter,
+    _load_du_position_for_input,
+    _read_du_position_table,
+)
+
 #--------------------------------------------------------------------------
-# readroot: 统一的 tree 探测 (teventadc / tadc) 与 CoREAS 基准时间解析。
-# 若 readroot 不在 sys.path (例如仅分发本文件), 使用等价的内联实现以保证可移植性。
-try:
-    from readroot.common import find_event_tree_key, parse_sim_base_time
-except ImportError:
-    import re as _re
-    from datetime import datetime as _datetime
-    import calendar as _calendar
-
-    _SIM_TIME_PATTERN = _re.compile(r"(\d{8})_(\d{6})")
-
-    def find_event_tree_key(keys, file_name):
-        for key in keys:
-            if "teventadc" in str(key):
-                return key, "teventadc"
-        for key in keys:
-            if "tadc" in str(key):
-                return key, "tadc"
-        for key in keys:                       # 仿真真值电场 / 真电压 (CoREAS/Dunhuang 的 L0 文件)
-            if "tefield" in str(key):
-                return key, "tefield"
-        for key in keys:
-            if "tvoltage" in str(key):
-                return key, "tvoltage"
-        raise KeyError(f"none of teventadc / tadc / tefield / tvoltage TTree found in file: {file_name}")
-
-    def parse_sim_base_time(file_path):
-        for part in reversed(str(file_path).replace("\\", "/").split("/")):
-            m = _SIM_TIME_PATTERN.search(part)
-            if not m:
-                continue
-            ds, ts = m.group(1), m.group(2)
-            try:
-                dt = _datetime(int(ds[0:4]), int(ds[4:6]), int(ds[6:8]),
-                               int(ts[0:2]), int(ts[2:4]), int(ts[4:6]))
-            except ValueError:
-                continue
-            return int(ds), int(ts), int(_calendar.timegm(dt.timetuple()))
-        return None
 
 #--------------------------------------------------------------------------
 
 # 定义一些全局参数和常量
 
 
-tukey_wind = windows.tukey(200) # 创建一个长度为200的Tukey窗函数
 time_wind = 100 # 定义时间窗口大小
 
-flower, fupper = 30, 201 # 定义频率范围的下界和上界, MHz
 
 thetaList, phiList = np.linspace(90, 180, 6), np.linspace(0, 360, 6) # 定义初始角度列表, 用于波前拟合的初始猜测
 
@@ -164,7 +136,6 @@ logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 
 #--------------------------------------------------------------------------
 
-efield_rec_dir = './Reconstruction/' # 结果保存目录
 # efield_rec_dir = './Reconstruction_test/' # 结果保存目录, 用于测试筛选事件
 # efield_rec_dir = './Reconstruction_colleague/'
 # 目录不在这里创建: 只有真正做电场反演(efield_recons_*)时才需要, 由第 945 行按事例按需创建
@@ -172,228 +143,28 @@ efield_rec_dir = './Reconstruction/' # 结果保存目录
 
 #--------------------------------------------------------------------------
 
-def gps_to_lst(gps_times):
-    GPS_UTC_OFFSET = 18
-    LON_DEG = 93.97111533
-    gps_times = np.array(gps_times)
-    valid_mask = np.isfinite(gps_times)
-    if not np.any(valid_mask): return None
-    valid_gps = gps_times[valid_mask]
-    unix_times = valid_gps - GPS_UTC_OFFSET
-    jd = 2440587.5 + unix_times / 86400.0
-    d = jd - 2451545.0
-    T = d / 36525.0
-    gmst_deg = 280.46061837 + 360.98564736629 * d + 0.000387933 * T**2 - T**3 / 38710000.0
-    gmst_hr = (gmst_deg / 15.0) % 24
-    lon_hr = LON_DEG / 15.0
-    lst_hr = (gmst_hr + lon_hr) % 24
-    return lst_hr
 
 #--------------------------------------------------------------------------
 
-def rotation_m(theta, phi):
-    # 定义旋转矩阵，用于坐标系转换
-    # 输入: theta (天顶角), phi (方位角)
-    # 输出: 3x3 旋转矩阵
-    return np.array([[np.cos(theta) * np.cos(phi), -np.sin(phi), np.sin(theta) * np.cos(phi)],
-                     [np.cos(theta) * np.sin(phi),  np.cos(phi), np.sin(theta) * np.sin(phi)],
-                     [             -np.sin(theta),            0,               np.cos(theta)]])
 
 #--------------------------------------------------------------------------
 #--------------------------------------------------------------------------
 
-def e_recons(Voc, Lce, Vnoise):
-    # 电场重建函数, 最小二乘法 (3分量), 频域输入: Voc (开路电压), Lce (天线有效长度), Vnoise (噪声电压)
-    Et_rec, Ep_rec = np.array([]), np.array([]) # 初始化重建的theta, phi分量电场数组
-    invM_Ett, invM_Epp, invM_Etp = np.array([]), np.array([]), np.array([])
-    
-    for ff in range(fupper - flower): # 遍历频率范围
-        freq = ff + flower # 当前频率
-        V1, V2, V3 = Voc[freq, :] # 获取当前频率下三个端口的电压
-        
-        A = np.array([[Lce[freq, 0, 0], Lce[freq, 1, 0]],
-                      [Lce[freq, 0, 1], Lce[freq, 1, 1]],
-                      [Lce[freq, 0, 2], Lce[freq, 1, 2]]]) # 构建天线响应矩阵 A (3x2矩阵，假设电场只有theta和phi分量)
-        
-        sig_V = np.array([[abs(Vnoise[freq, 0]) ** 2, 0, 0], 
-                          [0, abs(Vnoise[freq, 1]) ** 2, 0],
-                          [0, 0, abs(Vnoise[freq, 2]) ** 2]]) # 构建噪声协方差矩阵 sig_V (对角阵), 使用噪声幅度平方作为方差
-        
-        #AT = A.T # A的转置
-        AT = A.conj().T # A的共轭转置, 因为A是复数矩阵 ; 这样做会更好 ? ? ?
-        
-        #sig_V_inv = np.linalg.inv(sig_V) # 噪声矩阵求逆
-        sig_V_inv = np.linalg.solve(sig_V, np.eye(sig_V.shape[0], dtype = sig_V.dtype)) # 用 solve 等价计算 sig_V_inv，避免显式求逆放大数值误差
-
-        ATsig = np.dot(AT, sig_V_inv) # AT * sig_V_inv
-        ATVA = np.dot(ATsig, A) # AT * sig_V_inv * A (信息矩阵)
-        
-        #ATVA_inv = np.linalg.inv(ATVA) # 信息矩阵求逆 (协方差矩阵)
-        ATVA_inv = np.linalg.solve(ATVA, np.eye(ATVA.shape[0], dtype = ATVA.dtype)) # 用 solve 等价计算 ATVA_inv，避免显式求逆带来的病态放大
-    
-        invAT = np.dot(ATVA_inv, AT) # (AT * sig_V_inv * A)^-1 * AT
-        A_ = np.dot(invAT, sig_V_inv) # 最终的重建矩阵 (最小二乘解)
-        V = np.array([V1, V2, V3]) # 电压向量
-        et, ep = np.dot(A_, V) # 重建电场 (theta, phi)
-        
-        Et_rec, Ep_rec = np.append(Et_rec, et), np.append(Ep_rec, ep) # 保存结果
-        invM_Ett, invM_Epp = np.append(invM_Ett, ATVA_inv[0, 0]), np.append(invM_Epp, ATVA_inv[1, 1]) # 保存不确定度信息
-        invM_Etp = np.append(invM_Etp, ATVA_inv[0, 1]) # 保存协方差信息 (可选)
-
-    E_inv = np.array([invM_Ett, invM_Epp, invM_Etp]) # 组合不确定度
-    
-    return (Et_rec), (Ep_rec), (E_inv) # 返回重建电场和不确定度
 
 
-def e_recons_real_MHz(Voc, Lce, Vnoise):
-    """真实频点版: Voc / Lce / Vnoise 第一维为同一频点数组 (30-250MHz 内的真实 rfft 频点)."""
-    nfreq = Voc.shape[0]
-    Et_rec, Ep_rec = np.zeros(nfreq, dtype = complex), np.zeros(nfreq, dtype = complex)
-    invM_Ett = np.zeros(nfreq); invM_Epp = np.zeros(nfreq); invM_Etp = np.zeros(nfreq)
-
-    for k in range(nfreq):
-        V1, V2, V3 = Voc[k, :]
-        A = np.array([[Lce[k, 0, 0], Lce[k, 1, 0]],
-                      [Lce[k, 0, 1], Lce[k, 1, 1]],
-                      [Lce[k, 0, 2], Lce[k, 1, 2]]])          # (3,2)
-        sig_V = np.diag(np.abs(Vnoise[k, :]) ** 2)            # (3,3) 对角
-        # sig_V_inv = np.linalg.solve(sig_V, np.eye(3))
-        sig_V_inv = np.linalg.solve(sig_V, np.eye(sig_V.shape[0], dtype = sig_V.dtype)) # 用 solve 等价计算 sig_V_inv，避免显式求逆放大数值误差
-        AT = A.conj().T
-        ATVA = AT @ sig_V_inv @ A
-        # ATVA_inv = np.linalg.solve(ATVA, np.eye(2))
-        ATVA_inv = np.linalg.solve(ATVA, np.eye(ATVA.shape[0], dtype = ATVA.dtype)) # 用 solve 等价计算 ATVA_inv，避免显式求逆带来的病态放大
-        A_ = ATVA_inv @ AT @ sig_V_inv
-        et, ep = A_ @ np.array([V1, V2, V3])
-        Et_rec[k], Ep_rec[k] = et, ep
-        invM_Ett[k], invM_Epp[k], invM_Etp[k] = ATVA_inv[0, 0], ATVA_inv[1, 1], ATVA_inv[0, 1]
-
-    return Et_rec, Ep_rec, np.array([invM_Ett, invM_Epp, invM_Etp])
 
 #--------------------------------------------------------------------------
 
 # GRAND 天线有效长度 (EFL) 数据文件, 默认取 parameter_files/ 下的副本, 可用
 # 环境变量 RECON_EFL_MAT 覆盖。
-REfile_grand = _resolve_data_file('RECON_EFL_MAT', 'EFL_data_3.2m_XYZ_20250313.mat')
-_EFL_CACHE = {}
 
-def _get_efl_all_grand():
-    """懒加载 GRAND 天线有效长度表。
 
-    这个 .mat 有 961 MB, loadmat 后常驻约 4 GB —— 而 ADF 用带噪电压做方向拟合时
-    完全不需要 (只有电压->电场反演才用)。改成首次调用时才加载, 并行任务可省下这笔内存。
-    """
-    if 'all' not in _EFL_CACHE:
-        if not os.path.exists(REfile_grand):
-            raise FileNotFoundError(
-                f"未找到 GRAND 天线有效长度数据文件: {REfile_grand}\n"
-                f"请将其放入 {_PARAM_DIR}/ , 或用环境变量 RECON_EFL_MAT 指向实际路径。"
-            )
-        _EFL_CACHE['all'] = scipy.io.loadmat(REfile_grand)['EFL_all']
-    return _EFL_CACHE['all']
-
-def get_lec_grand(e_theta, e_phi, N, f0):
-    """
-    获取 GRAND 天线的有效长度 (Effective Length)。
-    
-    该函数从加载的 GRAND 天线响应数据中插值获取特定方向的有效长度，并将其转换到球面坐标系。
-    
-    参数:
-        e_theta (float): 天顶角 (度)。
-        e_phi (float): 方位角 (度)。
-        N (int): 频率点数。
-        f0 (float): 频率步长。
-    
-    返回:
-        numpy.ndarray: 球面坐标系下的有效长度矩阵 (N x 3 x 3)。
-    """
-
-    # 插值获取辐射方向图数据
-    e_radiation = inter(_get_efl_all_grand(), e_theta, e_phi)
-    Lce = np.zeros((N, 3, 3), dtype = complex)
-    
-    # 展开复数系数
-    for i in range(3):
-        for p in range(3):
-            f, Lce[:, i, p] = expan(N, f0, 30, 250, e_radiation[:, p, i])
-            
-    # 坐标转换：笛卡尔 -> 球面
-    R_sph2cart = rotation_m(e_theta * np.pi / 180, e_phi * np.pi / 180)
-    R_cart2sph = np.linalg.inv(np.matrix(R_sph2cart))
-    Lce_sphere_ = np.zeros((N, 3, 3), dtype = complex)
-    for i in range(2000):
-        for j in range(3):
-            Lce_sphere_[i,:,j] = np.dot(R_cart2sph,Lce[i,:,j])
-    
-    return Lce_sphere_
 
 #--------------------------------------------------------------------------
 
-def _interp_complex_1d(f_src, y_src, f_tar, kind = "cubic"):
-    """
-    复数一维插值 (实部/虚部分别插值, 与 vad2voc 风格一致).
-    范围外的频点置 0 (与 get_lec_grand 中 expan 在 30-250 MHz 之外为 0 的行为一致).
-    """
-    f_src = np.asarray(f_src, dtype = float)
-    f_tar = np.asarray(f_tar, dtype = float)
-    y_src = np.asarray(y_src).reshape(len(f_src), -1)      # (Nsrc, 1)
-
-    out = np.empty((f_tar.size, y_src.shape[1]), dtype = np.complex128)
-    for k in range(y_src.shape[1]):
-        re_f = interp1d(f_src, y_src[:, k].real, kind = kind, bounds_error = False, fill_value = 0.0)
-        im_f = interp1d(f_src, y_src[:, k].imag, kind = kind, bounds_error = False, fill_value = 0.0)
-        out[:, k] = re_f(f_tar) + 1j * im_f(f_tar)
-
-    return out[:, 0]   # 返回 1D
 
 
 # 真实频点版有效长度: 可指定天顶角/方位角/任意频点数组
-def get_lec_grand_real_MHz(e_theta, e_phi, freq_target_MHz):
-    """
-    获取 GRAND 天线在指定真实频点上的有效长度 (球面坐标系).
-
-    参数
-    ----
-    e_theta : float, 天顶角 (度), 与 get_lec_grand 完全一致.
-    e_phi : float, 方位角 (度), 与 get_lec_grand 完全一致.
-    freq_target_MHz : array_like
-        目标频点数组 (MHz), 可为真实 FFT 频点 (如 0.488 MHz 间隔).
-        仅 30-250 MHz 内的频点有效, 范围外置 0.
-
-    返回
-    ----
-    Lce_sphere_real : (Nfreq_target, 3, 3) complex
-        索引 [频点, 球面分量, 端口]:
-          分量 0 = theta, 1 = phi, 2 = r;
-          端口 0/1/2 = X/Y/Z.
-        与 get_lec_grand 返回语义完全一致 (可直接给 e_recons 用 [:, 0, p] 与 [:, 1, p]),
-        只是频率轴由 1 MHz 网格换成你指定的 freq_target_MHz.
-    """
-    freq_target_MHz = np.asarray(freq_target_MHz, dtype = float)
-
-    # 1) 取该方向的辐射响应 (与原函数相同)
-    e_radiation = inter(_get_efl_all_grand(), e_theta, e_phi)     # (221, 3 ports, 3 comps)
-
-    nfreq = freq_target_MHz.size
-    Lce_cart_real = np.zeros((nfreq, 3, 3), dtype = complex)   # [freq, comp, port]
-
-    # 2) 把 1 MHz 网格频响插值到目标真实频点
-    for i in range(3):        # 笛卡尔分量
-        for p in range(3):    # 端口
-            Lce_cart_real[:, i, p] = _interp_complex_1d(
-                np.arange(30, 251, 1), e_radiation[:, p, i], freq_target_MHz, kind = "cubic"
-            )
-
-    # 3) 笛卡尔 -> 球面 (与原函数相同, 修掉了硬编码 2000 的隐患)
-    R_sph2cart = rotation_m(e_theta * np.pi / 180.0, e_phi * np.pi / 180.0)
-    R_cart2sph = np.asarray(np.linalg.inv(np.matrix(R_sph2cart)))
-
-    Lce_sphere_real = np.zeros((nfreq, 3, 3), dtype = complex)
-    for i in range(nfreq):
-        for j in range(3):    # 端口
-            Lce_sphere_real[i, :, j] = R_cart2sph @ Lce_cart_real[i, :, j]
-
-    return Lce_sphere_real
 
 #--------------------------------------------------------------------------
 
@@ -401,171 +172,17 @@ def get_lec_grand_real_MHz(e_theta, e_phi, freq_target_MHz):
 
 #--------------------------------------------------------------------------
 
-def read_root_file_from_path(root_path, event_number_int):
-    """读取指定事件的 ADC 波形, 兼容真实 trigger 的 ``teventadc`` 与
-    CoREAS/Dunhuang 仿真的 ``tadc`` 两种 tree schema。
-
-    返回 ``(event_num, du_ids_all, gps_time, du_nanoseconds, LST_time,
-    trace_1, trace_2, trace_3)``。``teventadc`` 直接提供 ``trace_1/2/3`` 与
-    ``gps_time``; ``tadc`` 提供 ``trace_ch`` (形状 ``(n_du, 3, n_time)``) 且
-    ``gps_time`` 为空, 由 run 目录名合成。
-    """
-
-    root_file = uproot.open(root_path)
-    try:
-        key, tree_kind = find_event_tree_key(list(root_file.keys()), root_path) # 探测 teventadc / tadc
-        tree = root_file[key]
-
-        if tree_kind == "teventadc":
-            data = tree.arrays(["event_number", "du_id", "gps_time", "du_seconds", "du_nanoseconds", "trace_1", "trace_2", "trace_3"], library = "ak")
-            data = data[int(event_number_int)]
-            event_num, du_ids_all, gps_time, du_nanoseconds = data["event_number"], np.array(data["du_id"]), data["gps_time"], np.array(data["du_nanoseconds"])
-            trace_1, trace_2, trace_3 = np.array(data["trace_1"]), np.array(data["trace_2"]), np.array(data["trace_3"])
-        elif tree_kind == "tadc": # tadc (CoREAS / Dunhuang simulation)
-            data = tree.arrays(["event_number", "du_id", "du_nanoseconds", "trace_ch"], library = "ak")
-            data = data[int(event_number_int)]
-            event_num, du_ids_all, du_nanoseconds = data["event_number"], np.array(data["du_id"]), np.array(data["du_nanoseconds"])
-            trace_ch = np.array(data["trace_ch"].to_list()) # (n_du, 3, n_time)
-            trace_1, trace_2, trace_3 = trace_ch[:, 0], trace_ch[:, 1], trace_ch[:, 2]
-            gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
-        elif tree_kind in _COREAS_TRUTH_TREES:
-            # 仿真真值 (L0): trace 形状 (n_du, 3, n_time), 无 gps_time / du_nanoseconds
-            # 时间轴由 run 目录名合成, du_nanoseconds 置 0 (方向重建只用 fluence + 相对时间窗)
-            # 只取这一条: 本函数是逐事例调用的, 整树读会把 N 个事例的 trace 反序列化 N 次。
-            # entry_start/entry_stop 与旧的 data[int(event_number_int)] 等价(已实测核对)。
-            _idx = int(event_number_int)
-            data = tree.arrays(["event_number", "du_id", "trace"],
-                               entry_start = _idx, entry_stop = _idx + 1, library = "ak")[0]
-            event_num, du_ids_all = data["event_number"], np.array(data["du_id"])
-            tr = np.array(data["trace"].to_list())        # (n_du, 3, n_time)
-            if tr.ndim != 3:
-                raise ValueError(f"{tree_kind}: 期望 trace 形状 (n_du,3,n_time), 实际 {tr.shape}")
-            trace_1, trace_2, trace_3 = tr[:, 0], tr[:, 1], tr[:, 2]
-            du_nanoseconds = np.zeros(len(du_ids_all), dtype = np.int64)
-            logger.warning(
-                f"{tree_kind}: 无到达时间，du_nanoseconds 置 0（{len(du_ids_all)} 根天线）；"
-                "不要用此路径做 PWF/SWF —— 它们依赖真实时间差，置 0 会给出静默错误的方向"
-            )
-            gps_time = _synthesize_gps_times(root_path, int(event_num), len(du_ids_all))
-    finally:
-        root_file.close()
-
-    LST_time = int(np.round(gps_to_lst(gps_time[2])[0]))
-
-    logger.info(f"Trigger Time @ LST Time (hours) {LST_time}")
-
-    return event_num, du_ids_all, gps_time, du_nanoseconds, LST_time, trace_1, trace_2, trace_3
 
 #--------------------------------------------------------------------------
 
-def _synthesize_gps_times(root_path, event_number, n_du):
-    """为无 ``gps_time`` 向量的 CoREAS ``tadc`` 树合成扁平 GPS 时间轴。
-
-    复用 :func:`parse_sim_base_time` 从 run 目录名解析基准时间, 并按每个 DU 重复
-    ``[date, hhmmss, epoch + event_number]`` 三元组, 使其与真实 ``teventadc`` 树的
-    ``gps_time`` 布局 (长度 ``3 * n_du``) 一致。
-    """
-    base = parse_sim_base_time(root_path)
-    if base is None:
-        logger.warning(f"[WARN] 无法从路径解析 CoREAS 基准时间, gps_time 置零: {root_path}")
-        return np.zeros(3 * n_du, dtype = int)
-    date_int, hhmmss_int, epoch = base
-    row = [int(date_int), int(hhmmss_int), int(epoch) + int(event_number)]
-    return np.array(row * n_du, dtype = int)
 
 #--------------------------------------------------------------------------
 
-def _read_du_position_table(path):
-    """读取 DU 位置表, 兼容空格分隔 (GP65) 与逗号分隔 (CoREAS ``du_coords.txt``)。"""
-    try:
-        return np.loadtxt(path)  # GP65 使用空格/制表符分隔
-    except ValueError:
-        return np.loadtxt(path, delimiter = ',')  # CoREAS 使用逗号分隔
 
-def _resolve_coreas_det_pos(root_path, det_pos_path = None):
-    """为 CoREAS 输入选定 DU 坐标表 (tadc)。
 
-    优先级: 显式 ``det_pos_path`` -> 环境变量 ``RECON_COREAS_DET_POS`` ->
-    在 root 文件同级/上级目录查找 ``du_coords.txt``。CoREAS 的 DU id 与 GP65 生产
-    表不重合, 必须使用独立的坐标表。
-    """
-    if det_pos_path:
-        return det_pos_path
-    env_path = os.environ.get('RECON_COREAS_DET_POS')
-    if env_path:
-        return env_path
-    start = os.path.dirname(os.path.abspath(root_path))
-    for base in (start, os.path.dirname(start)):
-        candidate = os.path.join(base, 'du_coords.txt')
-        if os.path.exists(candidate):
-            return candidate
-    raise FileNotFoundError(
-        "CoREAS 输入需要 DU 坐标表 (du_coords.txt), 请通过 det_pos_path 参数或 "
-        f"RECON_COREAS_DET_POS 环境变量指定: {root_path}"
-    )
-
-def _load_du_position_for_input(root_path, det_pos_path = None):
-    """根据输入 tree 类型选定 DU 坐标表路径。
-
-    ``teventadc`` (真实 trigger) 沿用生产表 :data:`DU_POS_TABLE`;
-    ``tadc`` / ``tefield`` / ``tvoltage`` (CoREAS, 含 L0 真值) 使用
-    :func:`_resolve_coreas_det_pos` 选定的独立坐标表 —— 它们的 DU id 与 GP65
-    生产表不重合, 用错表会得到静默错误的位置。
-    返回 ``(tree_kind, position_path)``; 具体坐标由 :func:`read_xyz_coordinates`
-    读取, 以保证与生产路径完全一致。
-    """
-    probe_file = uproot.open(root_path)
-    try:
-        tree_kind = find_event_tree_key(list(probe_file.keys()), root_path)[1]
-    finally:
-        probe_file.close()
-    if tree_kind == 'tadc' or tree_kind in _COREAS_TRUTH_TREES:
-        path = _resolve_coreas_det_pos(root_path, det_pos_path)
-    else:
-        path = det_pos_path if det_pos_path is not None else DU_POS_TABLE
-    return tree_kind, path
 
 #--------------------------------------------------------------------------
 
-def read_xyz_coordinates(file_path, du_ids_all, rotate=True):
-    # rotate=True : 对坐标施加 GRAND 站点布局旋转 (真实 trigger / teventadc 生产表需要)。
-    # rotate=False: 直接使用坐标表原文 (CoREAS / starshape 的 du_coords.txt 已在重建所用
-    #               坐标系中, 与 pmo 生成 PWM/SWM yaml 及 shower tshower 真值保持一致)。
-    DU_position = _read_du_position_table(file_path) # 加载 DU 位置数据, 包含 DU ID 和坐标信息 (兼容空格/逗号分隔)
-
-    DU_rotation_matrix = np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
-
-    DU_all_x_positions, DU_all_y_positions, DU_all_z_positions = np.array(DU_position[:, 1]), np.array(DU_position[:, 2]), np.array(DU_position[:, 3]) # 所有 DU 的位置列表 (根据提供的 DU_position 数据)
-
-    DU_all_positions = np.stack((DU_all_x_positions, DU_all_y_positions, DU_all_z_positions), axis = 1) # 所有 DU 的位置矩阵 (M x 3)
-
-    if rotate:
-        DU_all_positions_rotated = np.dot(DU_rotation_matrix, DU_all_positions.T).T # 所有 DU 的位置矩阵经过旋转后的版本 (M x 3)
-    else:
-        DU_all_positions_rotated = DU_all_positions # CoREAS/starshape: 坐标表原文即为重建坐标系, 不旋转
-
-    #--------------------------------------------------------------------------
-
-    x_position, y_position, z_position = [], [], []
-    
-    for du in du_ids_all:
-
-        x_position.append(DU_position[np.where(DU_position[:, 0] == du)[0][0], 1])
-        y_position.append(DU_position[np.where(DU_position[:, 0] == du)[0][0], 2])
-        z_position.append(DU_position[np.where(DU_position[:, 0] == du)[0][0], 3])
-
-    x_position, y_position, z_position = np.array(x_position), np.array(y_position), np.array(z_position)
-
-    DU_positions = np.stack((x_position, y_position, z_position), axis = 1) # 触发的 DU 的位置矩阵 (N x 3)
-
-    if rotate:
-        DU_positions_rotated = np.dot(DU_rotation_matrix, DU_positions.T).T # 旋转坐标系以适应 GRAND 的站点布局
-    else:
-        DU_positions_rotated = DU_positions # CoREAS/starshape: 坐标表原文即为重建坐标系, 不旋转
-
-    #--------------------------------------------------------------------------
-
-    return x_position, y_position, z_position, DU_positions_rotated, DU_all_positions_rotated
 
 # 注: "全部 DU 的旋转坐标"(仅用于绘图背景点) 不再作为模块级全局状态, 而是由
 # efield_recons_from_efield_PWF / energy_restruction 在选定正确坐标表后按需局部加载,
@@ -573,238 +190,18 @@ def read_xyz_coordinates(file_path, du_ids_all, rotate=True):
 
 #--------------------------------------------------------------------------
 
-def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanoseconds, trace_1, trace_2, trace_3, x_position, y_position, z_position, DU_positions_rotated):
-
-    detector_positions_for_causal = {} # 构造 detector_positions 字典以满足函数的输入要求 (使用你当前已经提取过的坐标)
-    
-    for j, du_ in enumerate(du_ids_all): detector_positions_for_causal[str(du_)] = np.array([x_position[j], y_position[j], z_position[j]]) # 原函数内部还会自己调用一次 rotate_and_shift, 为了不发生两次旋转，我们直接传原始的未经旋转偏置的硬坐标
-    
-
-    temp_causal_file = os.path.join(efield_rec_dir, f'temp_causality_event_{event_num}.txt') # 生成一个满足 parser 语法的纯文本行并写入临时文件
-    
-    
-    match_str_list = [f"('{du_ids_all[j]}', {int(du_nanoseconds[j])})" for j in range(len(du_ids_all))] # 将 DU_id 和 nanosecond 时间戳组装成 '[('56', 15632890), ('103', 15639100), ...]' 
-    
-    match_str = ", ".join(match_str_list)
-    
-    line_to_write = f"{gps_time[2]}: [{match_str}]"  # gps_time[2] 用作标识
-    
-    with open(temp_causal_file, 'w') as tf: tf.write(line_to_write + '\n')
-
-    
-    logger.info("Executing strict causality cleaning via graph optimization...") # 调用引用的图论清理函数（设定最少容忍 4 个探测器）
-    
-    matching_times = optimized_read_matching_times_graph(
-        file_path = temp_causal_file, 
-        detector_positions = detector_positions_for_causal, 
-        min_detectors = 4)
-
-    if os.path.exists(temp_causal_file): os.remove(temp_causal_file) # 删除临时缓存文件
-
-    
-    if len(matching_times) == 0: # 分析返回列表，应用掩码
-        
-        logger.warning(f"Event {event_num} failed strict causality check completely. Skipping.")
-        
-        return None
-
-    valid_du_list = matching_times[0][1]
-    
-    indices = []
-    for du_id_str, ns_target in valid_du_list:
-        du_target = int(du_id_str)
-        match = np.where((du_ids_all == du_target) & (du_nanoseconds == ns_target))[0] # 在原始数组中寻找同时匹配 du_id 和 nanosecond 的行
-        if len(match) > 0: indices.append(match[0])  # 取第一个匹配（理论上应该只有一个）
-        else: logger.warning(f"[WARN] 未找到匹配 (DU={du_target}, ns={ns_target})，跳过")
-
-    indices = np.array(indices)
-    
-    triggered_du_ids, du_nanoseconds_filtered = du_ids_all[indices], du_nanoseconds[indices] # 找出原阵列里保留下来的天线的索引
-    
-    trace_1_filtered, trace_2_filtered, trace_3_filtered = trace_1[indices], trace_2[indices], trace_3[indices] # 同样使用索引过滤波形数据
-    
-    DU_positions_rotated = DU_positions_rotated[indices] # 同样使用索引过滤位置数据
-    
-    n_triggered = len(triggered_du_ids)
-    
-    logger.info(f"Passed strict causality check: {n_triggered} DUs retained: {triggered_du_ids}")
-
-    #---------------------------------------------------------------------------
-
-    return triggered_du_ids, du_nanoseconds_filtered, trace_1_filtered, trace_2_filtered, trace_3_filtered, DU_positions_rotated, n_triggered
 
 #--------------------------------------------------------------------------
 
-def ADC_trace_to_Voc_time(trace_1, trace_2, trace_3):
-
-    '''
-    # 给定 3 个通道的 Vad 时域数据, 计算对应的 Voc 时域数据
-    # 输入: trace_1, trace_2, trace_3: 3 个通道的时域数据, 形状为 (N_time, 3)
-    # 输出: Voc_time: 对应的 Voc 时域数据, 形状为 (N_time, 3)
-    '''
-
-    N_time = len(trace_1) # 动态获取长度, 支持 1024 或 512.
-        
-    ADC_single_du_time = np.array([trace_1, trace_2, trace_3]).T # 形状 (N_time, 3)，每列对应一个通道的时域数据
-
-    #-----------------------------------------------------------------------
-    
-    ADC_single_du_rfft = np.fft.rfft(ADC_single_du_time, axis = 0) # 对每个通道进行实数快速傅里叶变换，得到频域数据，形状为 (N_time/2 + 1, 3)
-    
-    freqs_real_MHz = np.fft.rfftfreq(N_time, d = 2e-9) / 1e6 # 计算对应的频率点, 单位 MHz, 长度为 N_time/2 + 1
-
-    ADC_single_du_rfft[freqs_real_MHz > 120, :] = 0 # 频域滤波: 将 120 MHz 以上的频点置零, 根据实际情况调整截止频率
-
-    ADC_single_du_time_filtered = np.fft.irfft(ADC_single_du_rfft, n = N_time, axis = 0) # 对滤波后的频域数据进行逆变换，得到滤波后的时域数据，形状为 (N_time, 3)
-
-    #-----------------------------------------------------------------------
-        
-    band_mask = (freqs_real_MHz >= 30) & (freqs_real_MHz <= 250) # 频带掩码, 选取有效频率范围内的频点
-        
-    freqs_band = freqs_real_MHz[band_mask] # 选取有效频率范围内的频点, 长度根据实际数据而定, 满足 vad2voc 的输入要求
-
-    freqs_band_hz = freqs_band * 1e6 # 26-08-26 新加代码
-
-    ADC_band = ADC_single_du_rfft[band_mask, :] # 获取高精度的原始信号有效频带 (完全不经过任何降采样插值)
-
-    Voc_rfft_band = vad2voc(ADC_band, target_freq_hz = freqs_band_hz) # 直接在真实频点上一步计算 Voc
-
-    #-----------------------------------------------------------------------
-    
-    window_real = np.pad(windows.tukey(len(freqs_band) - 8, alpha = 0.5), (4, 4), mode = 'constant')
-    
-    Voc_rfft_band *= window_real[:, None]
-
-    #-----------------------------------------------------------------------
-
-    Voc_full_rfft = np.zeros_like(ADC_single_du_rfft, dtype = complex) 
-    # 必须创建一个完整的频点数组, 包括直流分量, 再把对应频点数据放上去, 才可以逆傅立叶变换
-    
-    Voc_full_rfft[band_mask, :] = Voc_rfft_band # 拼装回完整的 RFFT 数组中进行 IRFFT
-    
-    Voc_time = np.fft.irfft(Voc_full_rfft, n = N_time, axis = 0) * (109.86) # units of uV.
-
-    #-----------------------------------------------------------------------
-
-    return Voc_time, ADC_single_du_time_filtered, N_time, freqs_real_MHz, freqs_band
 
 #--------------------------------------------------------------------------
 
-def Voc_fft_real_MHz(Voc_time, freqs_real_MHz, ADC_single_du_time_filtered, time_wind):
-
-    """
-    # 给定开路电压 Voc_time, 在峰值位置加窗函数, 傅立叶变换, 只取位于 30--250 MHz频段内的数据, 输出用于电场重建.
-    """
-
-    vx_std, vy_std, vz_std = np.std(Voc_time[int(len(Voc_time) * 0.75) : , :], axis = 0) # 计算噪声标准差
-    stds_V = np.array([vx_std, vy_std, vz_std])
-
-    # 2026-09-07 新加代码
-    peak_pos = np.argmax(abs(Voc_time[0 : 300, :]), axis = 0) # 获取每个通道的峰值位置索引, 以便后续加窗使用
-
-    peaks_V = np.max(abs(Voc_time[0 : 300, :]), axis = 0) # 获取每个通道的峰值电压, 用于信号筛选和加窗判断
-
-    #----------------------------------------------------------------------
-
-    Voc_time_windows = np.zeros(Voc_time.shape) # 初始化加窗后的时域 Voc 数组, 形状与原始 Voc_time 相同
-
-    for cmp in range(3): 
-            
-        best_ch = np.argmax(peaks_V) # 确定峰值的中心基准点.
-        
-        if peaks_V[best_ch] / stds_V[best_ch] > 5:
-            
-            # if peaks_V[cmp] / stds_V[cmp] > 5: center_idx = peak_pos[cmp]
-            
-            # else: 
-            
-            center_idx = peak_pos[best_ch] # 2026-09-07 修正代码
-        
-        else: # center_idx = np.argmax(np.abs(ADC_single_du_time_filtered))
-
-            # 2026-09-07 修正代码
-            center_idx = np.argmax(np.max(np.abs(ADC_single_du_time_filtered[0 : 300, :]), axis = 1)) - 25
-        
-        
-        left_ideal, right_ideal = center_idx - time_wind, center_idx + time_wind # 计算理想窗口游标
-        
-        left_actual, right_actual = max(0, left_ideal), min(len(Voc_time), right_ideal) # 计算实际能切出的合法边界 (限制在 0 到 数组最大长度 之间)
-        
-        
-        crop_start, crop_end = left_actual - left_ideal, 2 * time_wind - (right_ideal - right_actual) # 判断合法边界到理想边界失去了多少点，从而裁剪对应的 Tukey 窗并赋值
-
-        if right_actual > left_actual: # 确保存在有效窗口切片
-            
-            Voc_time_windows[left_actual : right_actual, cmp] = Voc_time[left_actual : right_actual, cmp] * tukey_wind[crop_start : crop_end]
-
-    Voc_fft_windows = np.fft.rfft(Voc_time_windows, axis = 0) # 将加窗后的时域信号重新变回频域, 得到无瑕的 rfft 形式，提供极干净的边界供物理方程匹配
-
-    # Voc_fft_windows = np.fft.rfft(Voc_time, axis = 0)
-
-    #----------------------------------------------------------------------------------
-
-    band_mask = (freqs_real_MHz >= 30) & (freqs_real_MHz <= 250)
-
-    Voc_fft_band = Voc_fft_windows[band_mask, :]
-
-    return Voc_fft_band
 
 #--------------------------------------------------------------------------
 
 # DU 转角: RTK 实测角 -> 重建代码方位角约定 -> 把 X/Y 端口旋到标称系
 
-def read_du_rotation_angles(file_path, usecols = (1, 3, 4), angle_overrides = None):
-    """
-    读取每个 DU 的安装转角, 返回 {du_id: phi}。
 
-    phi 的约定 = **重建代码的方位角约定**: 正北 = 0 度, 逆时针为正。
-
-    文件 (_rtk_fred_rotation_order.txt) 列:
-        第 1 列 = DU ID, 第 3 列 = X 通道相对正北的夹角 α (度), 第 4 列 = Y 通道相对正北的夹角 β (度);
-    文件里的角度是 **正北 = 0 度, 顺时针为正**。
-
-    推导:
-        X 标称指向正北 -> "X 与正北的夹角" = α
-        Y 标称指向正东 -> "Y 与正东的夹角" = β - 90
-        两者平均 = 该 DU 的整体安装转角 (顺时针为正):  phi_rtk = (α + (β - 90)) / 2
-        代码方位角是逆时针为正, 与顺时针差一个符号:      phi = -phi_rtk
-    """
-    data = np.loadtxt(file_path, usecols = usecols)
-
-    rot_dict = {}
-    for du_id, ang_x, ang_y in data:
-        phi_rtk = 0.5 * (ang_x + (ang_y - 90.0))          # 顺时针为正的安装转角
-        phi     = -phi_rtk                                # 换成代码约定 (逆时针为正)
-        if angle_overrides is not None:
-            phi += angle_overrides.get(int(du_id), 0.0)   # 个别 DU 的安装特例 (同样按逆时针为正)
-        rot_dict[int(du_id)] = phi
-    return rot_dict
-
-def rotate_xy_ports(arr, angle_deg, axis = -1):
-    """
-    把 X(0)/Y(1) 两个端口的极化基旋到标称参考系 (X->正北, Y->正东); Z 端口不动。
-
-    angle_deg : 该 DU 的安装转角, **必须是重建代码的方位角约定 (正北=0, 逆时针为正)**,
-                即 read_du_rotation_angles 返回的值。
-
-    变换 (实际端口电压 -> 标称端口电压):
-        V_X_nominal =  cos(phi) * V_X_physical + sin(phi) * V_Y_physical
-        V_Y_nominal = -sin(phi) * V_X_physical + cos(phi) * V_Y_physical
-
-    适用于 (Nfreq, 3) 的 Voc, 也可用于 (Nfreq, 3, 3) 的有效长度 (端口都在 axis 轴, 默认最后一维)。
-    """
-    phi = np.deg2rad(angle_deg)
-    c, s = np.cos(phi), np.sin(phi)
-
-    out  = np.array(arr, copy = True)
-    sl_x = [slice(None)] * out.ndim ; sl_x[axis] = 0   # X 端口
-    sl_y = [slice(None)] * out.ndim ; sl_y[axis] = 1   # Y 端口
-
-    X = out[tuple(sl_x)].copy()
-    Y = out[tuple(sl_y)].copy()
-    out[tuple(sl_x)] =  c * X + s * Y     # 标称 X (正北)
-    out[tuple(sl_y)] = -s * X + c * Y     # 标称 Y (正东)
-    return out
 
 # 每个 DU 的转角表 (已换算成代码的方位角约定: 逆时针为正)。
 # 文件缺失时不修正转角 (等价于所有 DU 转角为 0), 保证链路仍可运行。
@@ -817,75 +214,9 @@ else:
 
 #--------------------------------------------------------------------------
 
-def calculate_energy_fluence_and_error(Et_rec, Ep_rec, E_inv, freqs_real_MHz, N_time):
-
-    E_rec_complex = np.zeros((len(freqs_real_MHz), 2), dtype = complex)
-
-    band_mask = (freqs_real_MHz >= 30) & (freqs_real_MHz <= 250)
-
-    E_rec_complex[band_mask, 0], E_rec_complex[band_mask, 1] = Et_rec, Ep_rec
-
-    E_rec_time = np.fft.irfft(E_rec_complex, n = N_time, axis = 0)
-
-    #----------------------------------------------------------------------
-
-    E_rec_amp = np.sqrt(E_rec_time[:, 0] ** 2 + E_rec_time[:, 1] ** 2) # 计算重建电场的振幅，供后续物理方程正演使用
-
-    # Fluence = np.sum(E_rec_amp[np.argmax(E_rec_amp) -50 : np.argmax(E_rec_amp) + 50] ** 2) # 计算重建电场的 fluence, 供后续物理方程正演使用
-    Fluence, Fluence_theta, Fluence_phi = np.sum(E_rec_amp ** 2), np.sum(E_rec_time[:, 0] ** 2), np.sum(E_rec_time[:, 1] ** 2) 
-    # 计算重建电场的 fluence，供后续物理方程正演使用, 同时分离 theta 和 phi 分量的 fluence 以供分析
-    Fluence_theta_phi = np.sum(E_rec_time[:, 0] * E_rec_time[:, 1]) # 计算 theta 和 phi 分量的 fluence 交叉项, 用于分析两者之间的相关性
-
-    transform_factor = 6.242e18 * 1e-12 * 2e-9 / 377 # 根据实际情况调整能量因子, 以使得 fluence 的单位为 eV/m^2
-
-    Fluence *= transform_factor ; Fluence_theta *= transform_factor ; Fluence_phi *= transform_factor ; Fluence_theta_phi *= transform_factor
-
-    #----------------------------------------------------------------------
-
-    invM_Ett, invM_Epp, invM_Etp = np.real(E_inv[0]), np.real(E_inv[1]), E_inv[2]
-
-    var_freq_sum = np.sum((invM_Ett ** 2 + 2 * invM_Ett * np.abs(Et_rec) ** 2) + (invM_Epp ** 2 + 2 * invM_Epp * np.abs(Ep_rec) ** 2))
-    var_freq_sum += np.sum(2 * np.abs(invM_Etp) ** 2 + 4 * np.real(invM_Etp * np.conj(Et_rec) * Ep_rec)) # 加上 Et 和 Ep 的协方差项, 以考虑两者之间的相关性
-
-    parseval_factor = 2.0 / N_time  # N = N_time 时域点数, 频段内均非DC/Nyquist频点
-    Fluence_sigma = np.sqrt(var_freq_sum) * parseval_factor * transform_factor
-    
-    Fluence_frequency = parseval_factor * np.sum(np.abs(Et_rec) ** 2 + np.abs(Ep_rec) ** 2) * transform_factor
-
-    logger.info(f"Reconstructed E-field Fluence frequency = {Fluence_frequency:.3e} eV/m^2, time {Fluence:.3e} eV/m^2, relative error = {(Fluence_frequency / Fluence - 1.0):.3f}")
-    logger.info(f"Reconstructed E-field Fluence = {Fluence:.3e} eV/m^2 ± {Fluence_sigma:.3e} eV/m^2")
-    
-    #----------------------------------------------------------------------
-
-    return E_rec_time, Fluence, Fluence_theta, Fluence_phi, Fluence_theta_phi, Fluence_sigma
 
 #-------------------------------------------------------------------------
 
-def re_calculate_Voc_from_reconstruction(LST_time, N_time, freqs_band, freqs_real_MHz, Lce_sphere, Et_rec, Ep_rec):
-
-    _, galactic_v_complex_double = gala_new((LST_time, 0), N_time)
-
-    noise_mask = freqs_band > 120.0
-
-    galactic_v_complex_double[noise_mask, :] = 0.0 # 将高于 120 MHz 的银河噪声频点置零, 以便后续重建 Voc 时不引入高频噪声
-
-
-    Voc_recalc_complex_band = np.zeros((len(freqs_band), 3), dtype = complex) # 初始化输出电压的频域容器
-    
-    for k in range(len(freqs_band)):
-        for p in range(3):
-            Voc_recalc_complex_band[k, p] = (Lce_sphere[k, 0, p] * Et_rec[k] + Lce_sphere[k, 1, p] * Ep_rec[k] + galactic_v_complex_double[k, p]) # 直接在频域下根据物理方程重建 Voc，注意这里的 galactic noise 也是频域表示, 直接乘以对应的 Lce 分量后叠加到 Voc 中, 完美保护时间相位
-
-
-    Voc_recalc_complex_real_MHz = np.zeros((len(freqs_real_MHz), 3), dtype = complex)
-
-    band_mask = (freqs_real_MHz >= 30) & (freqs_real_MHz <= 250)
-
-    Voc_recalc_complex_real_MHz[band_mask, :] = Voc_recalc_complex_band
-
-    Voc_recalc_time = np.fft.irfft(Voc_recalc_complex_real_MHz, n = N_time, axis = 0) # 将重新计算的频域电压进行 IRFFT，得到时域波形，供与原始 Voc 的时域波形进行对比
-
-    return Voc_recalc_time
 
 #--------------------------------------------------------------------------
 

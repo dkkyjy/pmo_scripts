@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_common as common
+import reconstruction_io as rio
 import reconstruction_direction as rf
 
 
@@ -19,13 +21,13 @@ def test_sigma_is_zero_at_zero_dchi2_and_monotone():
 
 def test_gps_to_lst_is_deterministic_and_in_range():
     gps = 1.5e9
-    a = m.gps_to_lst(gps)
-    b = m.gps_to_lst(gps)
+    a = common.gps_to_lst(gps)
+    b = common.gps_to_lst(gps)
     assert a == b
     lst = float(np.ravel(a)[0])
     assert 0.0 <= lst < 24.0, lst
     # 一整天后 LST 基本相同；恒星日 vs 太阳日差约 86400/365.25 s = 0.0657 h
-    assert abs(float(np.ravel(m.gps_to_lst(gps + 86400.0))[0]) - lst) == pytest.approx(0.0657, abs=5e-3)
+    assert abs(float(np.ravel(common.gps_to_lst(gps + 86400.0))[0]) - lst) == pytest.approx(0.0657, abs=5e-3)
 
 
 def test_synthesize_gps_times_is_monotone_and_sized(tmp_path):
@@ -33,7 +35,7 @@ def test_synthesize_gps_times_is_monotone_and_sized(tmp_path):
     root.parent.mkdir(parents=True)
     root.write_text("x")
     # 返回扁平三元组 (year, hhmmss, unix) 每个 DU 一组
-    out = np.asarray(m._synthesize_gps_times(str(root), 3, 4))
+    out = np.asarray(rio._synthesize_gps_times(str(root), 3, 4))
     assert out.size == 3 * 4, out
     assert out[0] == 20170331 and out[1] == 220000
     assert np.all(out[2::3] == out[2])
@@ -43,7 +45,7 @@ def test_synthesize_gps_times_is_monotone_and_sized(tmp_path):
 
 def test_rotation_matrix_is_orthonormal():
     for theta, phi in ((0.0, 0.0), (25.0, 40.0), (80.0, 300.0)):
-        r = np.asarray(m.rotation_m(np.radians(theta), np.radians(phi)))
+        r = np.asarray(common.rotation_m(np.radians(theta), np.radians(phi)))
         assert r.shape == (3, 3)
         assert np.allclose(r @ r.T, np.eye(3), atol=1e-9), (theta, phi)
         assert np.isclose(np.linalg.det(r), 1.0, atol=1e-9), (theta, phi)
@@ -54,13 +56,13 @@ def test_rotation_matrix_is_orthonormal():
 def test_read_du_position_table_comma_and_space(tmp_path):
     comma = tmp_path / "du_coords.txt"
     comma.write_text("0, 0.0, 0.0, 0.0\n1, -501.4150, 286.2280, 4.9852\n")
-    a = np.asarray(m._read_du_position_table(str(comma)))
+    a = np.asarray(rio._read_du_position_table(str(comma)))
     assert a.shape == (2, 4)
     assert a[1, 1] == pytest.approx(-501.4150)
 
     space = tmp_path / "gp65.txt"
     space.write_text("0 0.0 0.0 0.0\n1 10.0 20.0 30.0\n")
-    b = np.asarray(m._read_du_position_table(str(space)))
+    b = np.asarray(rio._read_du_position_table(str(space)))
     assert b.shape == (2, 4)
     assert b[1, 3] == pytest.approx(30.0)
 
@@ -68,7 +70,7 @@ def test_read_du_position_table_comma_and_space(tmp_path):
 def test_read_xyz_coordinates_without_rotation(tmp_path, monkeypatch):
     table = tmp_path / "du_coords.txt"
     table.write_text("7, 11.0, 22.0, 33.0\n8, 44.0, 55.0, 66.0\n")
-    x, y, z, rotated, all_rotated = m.read_xyz_coordinates(str(table), [7, 8], rotate=False)
+    x, y, z, rotated, all_rotated = rio.read_xyz_coordinates(str(table), [7, 8], rotate=False)
     assert (list(x), list(y), list(z)) == ([11.0, 44.0], [22.0, 55.0], [33.0, 66.0])
     # rotate=False 时"旋转后"与原文一致
     assert np.allclose(np.asarray(rotated)[:, 0], x)

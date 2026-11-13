@@ -17,6 +17,9 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_antenna as ant
+import reconstruction_common as common
+import reconstruction_io as rio
 import reconstruction_direction as rf
 
 # ── 复数插值 ─────────────────────────────────────────────────────────────────
@@ -27,11 +30,11 @@ def test_interp_complex_1d_linear_is_exact_and_zero_outside():
     y_src = np.array([1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j])
 
     # 落在源点上：线性插值应逐点还原
-    same = m._interp_complex_1d(f_src, y_src, f_src, kind="linear")
+    same = ant._interp_complex_1d(f_src, y_src, f_src, kind="linear")
     assert np.allclose(same, y_src)
 
     # 区间外的频点按契约置 0，而不是外插或抛错
-    out = m._interp_complex_1d(f_src, y_src, np.array([5.0, 20.0, 100.0]), kind="linear")
+    out = ant._interp_complex_1d(f_src, y_src, np.array([5.0, 20.0, 100.0]), kind="linear")
     assert out[0] == 0 and out[2] == 0
     assert out[1] == pytest.approx(3 + 4j)
 
@@ -44,7 +47,7 @@ def test_rotate_xy_ports_preserves_norm_and_leaves_z():
     voc = rng.normal(size=(7, 3)) + 1j * rng.normal(size=(7, 3))
 
     for angle in (-37.0, 0.0, 25.0, 90.0):
-        rot = m.rotate_xy_ports(voc, angle)
+        rot = ant.rotate_xy_ports(voc, angle)
         # Z 端口不动
         assert np.allclose(rot[:, 2], voc[:, 2])
         # 正交变换保范数（|Vx|²+|Vy|² 不变）
@@ -52,7 +55,7 @@ def test_rotate_xy_ports_preserves_norm_and_leaves_z():
                            np.abs(voc[:, 0]) ** 2 + np.abs(voc[:, 1]) ** 2)
 
     # 90 度：按文档公式 (V_X, V_Y) -> (V_Y, -V_X)
-    rot90 = m.rotate_xy_ports(voc, 90.0)
+    rot90 = ant.rotate_xy_ports(voc, 90.0)
     assert np.allclose(rot90[:, 0], voc[:, 1])
     assert np.allclose(rot90[:, 1], -voc[:, 0])
 
@@ -60,7 +63,7 @@ def test_rotate_xy_ports_preserves_norm_and_leaves_z():
 def test_rotate_xy_ports_handles_effective_length_axis():
     lec = np.zeros((5, 3, 3), dtype=complex)
     lec[:, 0, 0], lec[:, 0, 1] = 1.0, 0.0        # X 端口只沿 X
-    rot = m.rotate_xy_ports(lec, 90.0, axis=1)
+    rot = ant.rotate_xy_ports(lec, 90.0, axis=1)
     # 端口轴旋 90 度后，X 端口的响应整体转到 Y 端口
     assert np.allclose(rot[:, 0, 0], 0.0) and np.allclose(rot[:, 1, 0], -1.0)
 
@@ -72,12 +75,12 @@ def test_read_du_rotation_angles_converts_and_applies_overrides(tmp_path):
     table = tmp_path / "rotation.txt"
     np.savetxt(table, np.array([[1000.0, 0.0, 10.0, 0.0, 100.0],
                                 [1001.0, 0.0, 40.0, 0.0, 40.0]]))
-    angles = m.read_du_rotation_angles(str(table), usecols=(0, 2, 4))
+    angles = ant.read_du_rotation_angles(str(table), usecols=(0, 2, 4))
     # phi = -0.5 * (ang_x + (ang_y - 90))
     assert angles[1000] == pytest.approx(-0.5 * (10.0 + 10.0))
     assert angles[1001] == pytest.approx(-0.5 * (40.0 - 50.0))
 
-    adjusted = m.read_du_rotation_angles(str(table), usecols=(0, 2, 4),
+    adjusted = ant.read_du_rotation_angles(str(table), usecols=(0, 2, 4),
                                          angle_overrides={1000: -2.0})
     assert adjusted[1000] == pytest.approx(angles[1000] - 2.0)
     assert adjusted[1001] == pytest.approx(angles[1001])
@@ -89,7 +92,7 @@ def test_read_du_rotation_angles_converts_and_applies_overrides(tmp_path):
 def test_resolve_coreas_det_pos_precedence(tmp_path, monkeypatch):
     explicit = tmp_path / "explicit.txt"
     explicit.write_text("1000 0 0 0\n", encoding="utf-8")
-    assert m._resolve_coreas_det_pos("/any/sim/adc_0.root", str(explicit)) == str(explicit)
+    assert rio._resolve_coreas_det_pos("/any/sim/adc_0.root", str(explicit)) == str(explicit)
 
     # 环境变量优先于同级文件
     env_path = tmp_path / "env.txt"
@@ -98,22 +101,22 @@ def test_resolve_coreas_det_pos_precedence(tmp_path, monkeypatch):
     root = tmp_path / "run" / "adc_0.root"
     root.parent.mkdir(parents=True)
     (root.parent / "du_coords.txt").write_text("1000 0 0 0\n", encoding="utf-8")
-    assert m._resolve_coreas_det_pos(str(root)) == str(env_path)
+    assert rio._resolve_coreas_det_pos(str(root)) == str(env_path)
 
     # 去掉环境变量 -> 同级 du_coords.txt
     monkeypatch.delenv("RECON_COREAS_DET_POS")
-    assert m._resolve_coreas_det_pos(str(root)) == str(root.parent / "du_coords.txt")
+    assert rio._resolve_coreas_det_pos(str(root)) == str(root.parent / "du_coords.txt")
 
     # 同级没有 -> 上一级；都没有 -> FileNotFoundError
     root2 = tmp_path / "run2" / "deep" / "adc_0.root"
     root2.parent.mkdir(parents=True)
     (tmp_path / "run2" / "du_coords.txt").write_text("1000 0 0 0\n", encoding="utf-8")
-    assert m._resolve_coreas_det_pos(str(root2)) == str(tmp_path / "run2" / "du_coords.txt")
+    assert rio._resolve_coreas_det_pos(str(root2)) == str(tmp_path / "run2" / "du_coords.txt")
 
     missing = tmp_path / "empty" / "adc_0.root"
     missing.parent.mkdir()
     with pytest.raises(FileNotFoundError):
-        m._resolve_coreas_det_pos(str(missing))
+        rio._resolve_coreas_det_pos(str(missing))
 
 
 # ── 频域 Voc ─────────────────────────────────────────────────────────────────
@@ -126,12 +129,12 @@ def test_voc_fft_real_mhz_shape_and_band_only():
     freqs = np.fft.rfftfreq(n_time, d=2e-9) / 1e6
     adc = rng.normal(scale=1e-4, size=(n_time, 3))
 
-    band = m.Voc_fft_real_MHz(voc, freqs, adc, m.time_wind)
+    band = ant.Voc_fft_real_MHz(voc, freqs, adc, m.time_wind)
 
     n_band = int(((freqs >= 30) & (freqs <= 250)).sum())
     assert band.shape == (n_band, 3)
     # 全零输入 -> 全零输出（窗口与变换都不产生虚假支撑）
-    zeros = m.Voc_fft_real_MHz(np.zeros((n_time, 3)), freqs, np.zeros((n_time, 3)), m.time_wind)
+    zeros = ant.Voc_fft_real_MHz(np.zeros((n_time, 3)), freqs, np.zeros((n_time, 3)), m.time_wind)
     assert zeros.shape == (n_band, 3) and np.all(zeros == 0)
 
 
@@ -147,7 +150,7 @@ def test_calculate_energy_fluence_partition_and_zero_input():
     ep = rng.normal(size=n_band) * 1e-6
     e_inv = np.zeros(3, dtype=complex)
 
-    e_time, flu, f_th, f_phi, f_cross, f_sigma = m.calculate_energy_fluence_and_error(
+    e_time, flu, f_th, f_phi, f_cross, f_sigma = common.calculate_energy_fluence_and_error(
         et, ep, e_inv, freqs, n_time)
 
     assert e_time.shape == (n_time, 2)
@@ -157,7 +160,7 @@ def test_calculate_energy_fluence_partition_and_zero_input():
     assert abs(f_cross) <= np.sqrt(f_th * f_phi) + 1e-30
     assert f_sigma >= 0
 
-    zeros = m.calculate_energy_fluence_and_error(
+    zeros = common.calculate_energy_fluence_and_error(
         np.zeros(n_band), np.zeros(n_band), e_inv, freqs, n_time)
     _, flu0, f_th0, f_phi0, f_cross0, f_sigma0 = zeros
     assert flu0 == 0 and f_th0 == 0 and f_phi0 == 0 and f_cross0 == 0 and f_sigma0 == 0
@@ -217,9 +220,9 @@ def test_causality_filter_keeps_surviving_rows_and_cleans_temp_file(tmp_path, mo
             seen["line"] = fh.read().strip()
         return [(1234, [("1000", -10), ("1002", 5)])]
 
-    monkeypatch.setattr(m, "optimized_read_matching_times_graph", fake_graph)
+    monkeypatch.setattr(rio, "optimized_read_matching_times_graph", fake_graph)
 
-    kept = m.causality_filter(str(rec_dir), 7, du, [1, 2, 1700000000],
+    kept = rio.causality_filter(str(rec_dir), 7, du, [1, 2, 1700000000],
                               ns, t1, t2, t3,
                               pos[:, 0], pos[:, 1], pos[:, 2], pos)
 
@@ -239,10 +242,10 @@ def test_causality_filter_keeps_surviving_rows_and_cleans_temp_file(tmp_path, mo
 
 def test_causality_filter_returns_none_when_graph_keeps_nothing(tmp_path, monkeypatch):
     du, ns, t1, t2, t3, pos = _causality_inputs(tmp_path)
-    monkeypatch.setattr(m, "optimized_read_matching_times_graph",
+    monkeypatch.setattr(rio, "optimized_read_matching_times_graph",
                         lambda *a, **kw: [])
 
-    result = m.causality_filter(str(tmp_path), 1, du, [1, 2, 3], ns, t1, t2, t3,
+    result = rio.causality_filter(str(tmp_path), 1, du, [1, 2, 3], ns, t1, t2, t3,
                                 pos[:, 0], pos[:, 1], pos[:, 2], pos)
     assert result is None
     assert list(tmp_path.glob("temp_causality_event_*.txt")) == []

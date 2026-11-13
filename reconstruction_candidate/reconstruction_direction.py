@@ -95,9 +95,9 @@ class PWF:
         
         # 平面波方程残差: r * n - c * t
         # 这里使用的是差分形式
-        fmin = dxx * sint * cosp + dyy * sint * sinp + dzz * cost - rc * 299792458 * dtt
+        fmin = dxx * sint * cosp + dyy * sint * sinp + dzz * cost - rc * c * dtt
         # 修正卡方公式：如果是基于时间分辨率 (6 ns) 计算误差 (sigma)，分母应该是方差 (sigma**2)
-        chi2 = (fmin ** 2 / (6e-9 * 299792458) ** 2).sum()
+        chi2 = (fmin ** 2 / (6e-9 * c) ** 2).sum()
         
         return chi2
         
@@ -223,7 +223,7 @@ class SWF:
         dr = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
         ts = (self.t * c / n_eff_mean - dr).mean() # unit of t is s, 估算发射时间 ts
         fmin = (self.t * c / n_eff_mean - ts) - dr # 计算残差: (t_obs - t_emit) * c/n - distance
-        chi2 = (fmin ** 2 / (6e-9 * 299792458) ** 2).sum()
+        chi2 = (fmin ** 2 / (6e-9 * c) ** 2).sum()
         return chi2
         
     def __call__(self, xs, ys, zs, rc):

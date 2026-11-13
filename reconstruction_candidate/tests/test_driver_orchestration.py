@@ -438,6 +438,24 @@ def test_main_honours_no_resume_and_default_output(tmp_path, rec_root, monkeypat
     assert (tmp_path / "Trigger_list_reconstruction_summary.yaml").is_file()
 
 
+# ── 门禁：0 个事例 ≠ 通过 ───────────────────────────────────────────────────
+
+
+def test_adf_equivalence_gate_refuses_zero_cases():
+    """等价性门禁必须区分"比较了 0 个"与"全部相等"。
+
+    2026-11-13 的拆分 review 抓到过反例：TARGET 改指新模块后每个事例都
+    AttributeError、被每事例 except 吞掉、比较 0 个却打印 PASS。这条测试把
+    "说不出比了几个"钉成失败，读不到数据时必须是 NOT RUN 且退出非 0。
+    """
+    proc = subprocess.run(
+        [sys.executable, os.path.join(MODULE_DIR, "tests", "run_adf_equiv.py"),
+         "--root", "/dev/null", "--coords", "/dev/null", "--baseline", "/dev/null"],
+        capture_output=True, text=True, timeout=300)
+    assert proc.returncode != 0, proc.stdout[-800:]
+    assert "NOT RUN" in proc.stdout, proc.stdout[-800:]
+
+
 # ── 端到端 2：真实子进程，只走断点续跑（无需 parameter_files/）───────────────
 
 

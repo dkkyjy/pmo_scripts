@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_io as rio
 import reconstruction_direction as rf
 
 COREAS_ROOT = os.environ.get("PYTEST_COREAS_ROOT", "")
@@ -60,7 +61,7 @@ def _one(pattern):
 
 def _amplitudes(root, idx):
     """读一类真实输入，返回 (du_ids, 每 DU 三通道全窗峰值幅度)。"""
-    ev, du, gps, ns, lst, tr1, tr2, tr3 = m.read_root_file_from_path(root, idx)
+    ev, du, gps, ns, lst, tr1, tr2, tr3 = rio.read_root_file_from_path(root, idx)
     tr = np.stack([np.asarray(tr1), np.asarray(tr2), np.asarray(tr3)])
     return np.asarray(du, dtype=int), np.max(np.abs(tr), axis=(0, 2))
 
@@ -68,9 +69,9 @@ def _amplitudes(root, idx):
 def _source_from_tadc(idx):
     """用同一事例的 tadc（有时间）跑 SWF，得到 ADF 需要的几何中心。"""
     du, p = _amplitudes(_one(INPUTS["tadc_L1"]), idx)
-    ev, du2, gps, ns, lst, tr1, tr2, tr3 = m.read_root_file_from_path(
+    ev, du2, gps, ns, lst, tr1, tr2, tr3 = rio.read_root_file_from_path(
         _one(INPUTS["tadc_L1"]), idx)
-    x, y, z, _, _ = m.read_xyz_coordinates(COORDS, du, rotate=False)
+    x, y, z, _, _ = rio.read_xyz_coordinates(COORDS, du, rotate=False)
     xs, ys, zs, *_ = rf.SWF_fit(np.asarray(x), np.asarray(y), np.asarray(z),
                                np.asarray(ns, dtype=float) * 1e-9,
                                0.0, 0.0, 6000.0)
@@ -86,7 +87,7 @@ def test_adf_fits_real_input(name, idx):
 
     du, ant_p = _amplitudes(root, idx)
     assert du.size >= 5 and np.all(np.isfinite(ant_p)), (du.size, ant_p[:3])
-    x, y, z, _, _ = m.read_xyz_coordinates(COORDS, du, rotate=False)
+    x, y, z, _, _ = rio.read_xyz_coordinates(COORDS, du, rotate=False)
 
     theta, phi, dw, A, fval = rf.ADF_fit_analytic(
         np.asarray(x), np.asarray(y), np.asarray(z), ant_p,
@@ -107,7 +108,7 @@ def test_inputs_agree_with_each_other(idx):
     got = {}
     for name in INPUTS:
         du, ant_p = _amplitudes(_one(INPUTS[name]), idx)
-        x, y, z, _, _ = m.read_xyz_coordinates(COORDS, du, rotate=False)
+        x, y, z, _, _ = rio.read_xyz_coordinates(COORDS, du, rotate=False)
         th, ph, dw, A, fv = rf.ADF_fit_analytic(
             np.asarray(x), np.asarray(y), np.asarray(z), ant_p,
             src[0], src[1], src[2], 30.0, 180.0, 1.2, 0.0)

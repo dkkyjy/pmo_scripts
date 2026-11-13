@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+import reconstruction_io as rio
+
 from reconstruction_direction import (
     DirectionTuple,
     _adf_minuit,
@@ -78,8 +80,8 @@ def test_coreas_truth_trees_use_coreas_coord_table(tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(m.uproot, "open", lambda *a, **kw: _FakeRoot())
-    monkeypatch.setattr(m, "find_event_tree_key", lambda keys, name: ("tefield;7", "tefield"))
-    kind, path = m._load_du_position_for_input(str(root), None)
+    monkeypatch.setattr(rio, "find_event_tree_key", lambda keys, name: ("tefield;7", "tefield"))
+    kind, path = rio._load_du_position_for_input(str(root), None)
     assert kind == "tefield"
     assert path == str(coords), f"tefield 应使用 CoREAS 坐标表，实际 {path}"
 
@@ -102,13 +104,13 @@ def test_all_coreas_kinds_use_coreas_coord_table(tmp_path, monkeypatch):
 
     monkeypatch.setattr(m.uproot, "open", lambda *a, **kw: _FakeRoot())
     for kind in ("tadc", "tefield", "tvoltage"):
-        monkeypatch.setattr(m, "find_event_tree_key", lambda keys, name, k=kind: ("x;1", k))
-        got_kind, path = m._load_du_position_for_input(str(root), None)
+        monkeypatch.setattr(rio, "find_event_tree_key", lambda keys, name, k=kind: ("x;1", k))
+        got_kind, path = rio._load_du_position_for_input(str(root), None)
         assert got_kind == kind
         assert path == str(coords), f"{kind} 应使用 CoREAS 坐标表，实际 {path}"
 
-    monkeypatch.setattr(m, "find_event_tree_key", lambda keys, name: ("x;1", "teventadc"))
-    _, path = m._load_du_position_for_input(str(root), None)
+    monkeypatch.setattr(rio, "find_event_tree_key", lambda keys, name: ("x;1", "teventadc"))
+    _, path = rio._load_du_position_for_input(str(root), None)
     assert path == m.DU_POS_TABLE, "trigger 仍应使用生产表"
 
 
@@ -118,8 +120,8 @@ def test_coreas_truth_tree_set_has_one_source():
     import re
     import reconstruction_candidate_fluence_error_fixed as m
 
-    src = inspect.getsource(m)
-    assert m._COREAS_TRUTH_TREES == ('tefield', 'tvoltage')
+    src = inspect.getsource(rio)
+    assert rio._COREAS_TRUTH_TREES == ('tefield', 'tvoltage')
     hits = [ln for ln in src.splitlines()
             if re.search(r"[\(\[]\s*['\"]tefield['\"]", ln) and 'tvoltage' in ln]
     assert len(hits) == 1, f"真值树集合字面量出现了 {len(hits)} 处: {hits}"

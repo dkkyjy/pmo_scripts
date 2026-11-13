@@ -15,6 +15,7 @@ import pytest
 import uproot
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_io as rio
 import reconstruction_direction as rf
 
 MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,7 +61,7 @@ def test_reader_to_direction_end_to_end(tmp_path, monkeypatch):
     root = run_dir / "adc_0-1_L1_0000.root"
     xs, ys = _write_synthetic_tadc(str(root))
 
-    ev, du_ids, gps, du_ns, lst, tr1, tr2, tr3 = m.read_root_file_from_path(str(root), 0)
+    ev, du_ids, gps, du_ns, lst, tr1, tr2, tr3 = rio.read_root_file_from_path(str(root), 0)
     assert ev == 0
     assert np.asarray(tr1).shape == (N_DU, N_TIME)
     assert len(du_ids) == N_DU and len(du_ns) == N_DU
@@ -68,7 +69,7 @@ def test_reader_to_direction_end_to_end(tmp_path, monkeypatch):
     # 坐标表：与合成几何一致
     table = tmp_path / "du_coords.txt"
     table.write_text("".join(f"{i}, {xs[i]:.4f}, {ys[i]:.4f}, 0.0\n" for i in range(N_DU)))
-    x, y, z, _, _ = m.read_xyz_coordinates(str(table), list(range(N_DU)), rotate=False)
+    x, y, z, _, _ = rio.read_xyz_coordinates(str(table), list(range(N_DU)), rotate=False)
 
     # 每个 DU 取三通道、全时间窗的峰值幅度 -> 形状 (n_du,)
     p = np.max(np.abs(np.stack([np.asarray(tr1), np.asarray(tr2), np.asarray(tr3)])), axis=(0, 2))

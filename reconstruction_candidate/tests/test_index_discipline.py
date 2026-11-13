@@ -10,8 +10,11 @@ import re
 
 import pytest
 
+import reconstruction_antenna as ant
 import reconstruction_candidate_fluence_error_fixed as legacy
+import reconstruction_common as common
 import reconstruction_direction as m
+import reconstruction_io as rio
 
 _GUARDED = ("raw", "_dir", "_dir_result", "r", "out")
 _ONLY_ALLOWED_IN = "direction_result_from_tuple"
@@ -42,8 +45,12 @@ def _index_hits(text):
 def test_tuple_indexing_confined_to_one_function():
     # 契约在新模块定义，消费者仍在旧模块（`_dir = reconstruct_direction_only(...)`）——
     # 两处都要扫，否则守卫只覆盖了定义方、漏掉使用方。
-    rest = _strip_function(inspect.getsource(m) + "\n" + inspect.getsource(legacy),
-                           _ONLY_ALLOWED_IN)
+    # 契约在 direction 定义，使用方分散在编排与按层拆出的模块里——五处都要扫。
+    rest = _strip_function(
+        inspect.getsource(m) + "\n" + inspect.getsource(legacy) + "\n"
+        + inspect.getsource(ant) + "\n" + inspect.getsource(rio) + "\n"
+        + inspect.getsource(common),
+        _ONLY_ALLOWED_IN)
     hits = _index_hits(rest)
     assert not hits, f"20 元组下标出现在 {_ONLY_ALLOWED_IN} 之外: {hits}"
 

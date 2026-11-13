@@ -121,8 +121,7 @@ def main():
         sys.path.insert(0, repo_root)
     cur = load_module(os.path.join(MOD_DIR, TARGET), "rc_current")
     # 读 ROOT 的能力留在旧模块（新模块刻意不做 I/O）：比较用 cur，读事例用 reader。
-    reader = load_module(os.path.join(MOD_DIR, "reconstruction_candidate_fluence_error_fixed.py"),
-                         "rc_reader")
+    reader = load_module(os.path.join(MOD_DIR, "reconstruction_io.py"), "rc_reader")
     base, tmpdir = load_baseline(args.baseline)
     coords = read_coords(args.coords)
 
