@@ -204,12 +204,13 @@ results, 108-start ADF grid) — do not trust them for the current chain (18 col
 ## Testing & QA
 
 - Suite: `reconstruction_candidate/tests/` (tracked; root `tests/` does not exist and is ignored).
-  `pytest reconstruction_candidate/tests -q` → **76 collected, 49 passed, 27 skipped** without
-  ROOT data, ~26 s (25 skips are real-input ADF cases gated by `PYTEST_COREAS_ROOT`; 2 are
+  `pytest reconstruction_candidate/tests -q` → **87 collected, 60 passed, 27 skipped** without
+  ROOT data, ~33 s (25 skips are real-input ADF cases gated by `PYTEST_COREAS_ROOT`; 2 are
   placeholders needing the absent `parameter_files/` EFL table).
   With `PYTEST_COREAS_ROOT=<CoREAS-AN event dir>` the real-input tests run and add a cross-input
   direction agreement gate (`< 3°`).
-- Coverage is the ADF/PWF/SWF chain plus the driver around it:
+- Coverage is the ADF/PWF/SWF chain plus the driver around it (`--cov` on the package reports
+  46% for `reconstruction_candidate_fluence_error_fixed.py`; the rest is EFL-blocked physics):
   `reconstruction_candidate_fluence_error_fixed.py` and `run_parallel_reconstruction_fixed.py`
   (task loading, resume short-circuit, `reconstruct_one` statuses 0–3, summary assembly, and a
   real-subprocess end-to-end that exercises only the resume path because the physics entries need
