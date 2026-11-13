@@ -86,9 +86,9 @@ import AiresInfoFunctions as aires
 import coordinatesystems, helper
 import models as atm
 
-# 拟合与方向层已拆到独立模块（单向依赖：本文件 -> reconstruction_fitting）。
+# 拟合与方向层已拆到独立模块（单向依赖：本文件 -> reconstruction_direction）。
 # 这里只接回本文件仍在解析的符号；不要在这里加转发别名。
-from reconstruction_fitting import (
+from reconstruction_direction import (
     PWF_fit,
     che_fit,
     f_Che,

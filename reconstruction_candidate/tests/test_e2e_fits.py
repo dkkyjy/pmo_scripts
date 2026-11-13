@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-import reconstruction_fitting as m
+import reconstruction_direction as m
 
 C_M_PER_S = 299792458.0        # PWF/SWF 的残差里 c 用 m/s，时间用秒
 

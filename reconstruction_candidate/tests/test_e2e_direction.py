@@ -15,7 +15,7 @@ import pytest
 import uproot
 
 import reconstruction_candidate_fluence_error_fixed as m
-import reconstruction_fitting as rf
+import reconstruction_direction as rf
 
 MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRIVER = os.path.join(MODULE_DIR, "run_parallel_reconstruction_fixed.py")

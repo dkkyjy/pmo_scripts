@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from reconstruction_fitting import (
+from reconstruction_direction import (
     DirectionResult,
     _TUPLE_FIELDS,
     direction_result_from_tuple,
@@ -86,7 +86,7 @@ def test_swm_prior_skips_internal_swf_grid(monkeypatch):
     这条固化的是驱动侧 `run_parallel_reconstruction_fixed.py:530` 已经在传
     `spec.x_xmax/y_xmax/z_xmax/chi_square_external` 之后的行为契约。
     """
-    import reconstruction_fitting as m
+    import reconstruction_direction as m
 
     x, y, z, t, p = _synth_event()
     init = (30.0, 120.0, 1.0)

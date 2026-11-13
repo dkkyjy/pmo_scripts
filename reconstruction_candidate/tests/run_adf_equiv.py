@@ -23,7 +23,7 @@ import tempfile
 import numpy as np
 
 MOD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TARGET = "reconstruction_fitting.py"
+TARGET = "reconstruction_direction.py"
 
 
 def load_module(path, name):
@@ -120,6 +120,9 @@ def main():
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
     cur = load_module(os.path.join(MOD_DIR, TARGET), "rc_current")
+    # 读 ROOT 的能力留在旧模块（新模块刻意不做 I/O）：比较用 cur，读事例用 reader。
+    reader = load_module(os.path.join(MOD_DIR, "reconstruction_candidate_fluence_error_fixed.py"),
+                         "rc_reader")
     base, tmpdir = load_baseline(args.baseline)
     coords = read_coords(args.coords)
 
@@ -127,10 +130,11 @@ def main():
     try:
         for i in range(args.index_start, args.index_start + args.events):
             try:
-                arrays = event_arrays(cur, coords, args.root, i)
-            except Exception as exc:                      # 读不出来的事例跳过，不掩盖
+                arrays = event_arrays(reader, coords, args.root, i)
+            except (OSError, ValueError, IndexError, KeyError) as exc:   # 数据侧问题：跳过并计数
                 print(f"event[{i}] read failed: {exc}")
                 continue
+            # 工具自身的 AttributeError/TypeError 不再被吞：那是 harness 坏了，不是数据坏了
             if arrays is None:
                 print(f"event[{i}] skipped (n_det<5)")
                 continue
@@ -139,8 +143,18 @@ def main():
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    print(f"\nRESULT: {'PASS' if ok_all else 'MISMATCH'}  ({done} 事例参与对比)")
-    return 0 if ok_all and done else 1
+    # 0 个事例不是 PASS：这次 review 的 P1 正是"比较了 0 个却打印 PASS"。
+    if done == 0:
+        print(f"\nRESULT: NOT RUN (0 cases)  请检查 --root / --coords / --baseline")
+        return 1
+    if not ok_all:
+        print(f"\nRESULT: MISMATCH  ({done}/{args.events} 事例参与对比)")
+        return 1
+    if done < args.events:
+        print(f"\nRESULT: PARTIAL  ({done}/{args.events} 事例参与对比，部分事例未读出)")
+        return 1
+    print(f"\nRESULT: PASS  ({done}/{args.events} 事例参与对比)")
+    return 0
 
 
 if __name__ == "__main__":

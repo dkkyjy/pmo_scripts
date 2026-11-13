@@ -11,10 +11,20 @@ ADF 最小化辅助、方向求解入口，以及 :class:`DirectionResult` 声�
 都应作为独立的一次变更，而不是顺手做在这次搬迁里。
 """
 
+import os
+import sys
+
 import numpy as np
 import iminuit
 from typing import NamedTuple, Optional
 from scipy.stats import chi2, norm
+
+# 本模块要能被单独 import：它按扁平顶层名引入 logger_config / AiresInfoFunctions 等，
+# 因此自己把模块目录与仓库根放进 sys.path，不依赖调用方先 import 旧模块。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.dirname(_HERE)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from logger_config import logger
 import AiresInfoFunctions as aires

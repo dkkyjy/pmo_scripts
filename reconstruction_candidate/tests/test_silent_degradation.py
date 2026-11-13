@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from reconstruction_fitting import (
+from reconstruction_direction import (
     DirectionTuple,
     _adf_minuit,
     ADF_fit_analytic_fixdw,

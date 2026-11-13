@@ -11,7 +11,7 @@ import re
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as legacy
-import reconstruction_fitting as m
+import reconstruction_direction as m
 
 _GUARDED = ("raw", "_dir", "_dir_result", "r", "out")
 _ONLY_ALLOWED_IN = "direction_result_from_tuple"

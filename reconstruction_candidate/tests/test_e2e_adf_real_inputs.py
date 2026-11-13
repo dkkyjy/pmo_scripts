@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
-import reconstruction_fitting as rf
+import reconstruction_direction as rf
 
 COREAS_ROOT = os.environ.get("PYTEST_COREAS_ROOT", "")
 COORDS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
