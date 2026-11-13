@@ -15,6 +15,7 @@ import pytest
 import uproot
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_fitting as rf
 
 MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRIVER = os.path.join(MODULE_DIR, "run_parallel_reconstruction_fixed.py")
@@ -73,9 +74,9 @@ def test_reader_to_direction_end_to_end(tmp_path, monkeypatch):
     p = np.max(np.abs(np.stack([np.asarray(tr1), np.asarray(tr2), np.asarray(tr3)])), axis=(0, 2))
 
     monkeypatch.chdir(tmp_path)
-    res = m.reconstruct_direction_only(x, y, z, np.asarray(du_ns, dtype=float), p,
+    res = rf.reconstruct_direction_only(x, y, z, np.asarray(du_ns, dtype=float), p,
                                       (30.0, 120.0, 1.0), 0.0)
-    assert isinstance(res, m.DirectionResult)
+    assert isinstance(res, rf.DirectionResult)
     assert np.isfinite(res.zenith) and np.isfinite(res.azimuth)
     assert 0.0 <= res.azimuth < 360.0
     assert np.isfinite(res.fmin)

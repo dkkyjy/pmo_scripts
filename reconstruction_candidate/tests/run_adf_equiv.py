@@ -23,7 +23,7 @@ import tempfile
 import numpy as np
 
 MOD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TARGET = "reconstruction_candidate_fluence_error_fixed.py"
+TARGET = "reconstruction_fitting.py"
 
 
 def load_module(path, name):
@@ -114,6 +114,11 @@ def main():
 
     if MOD_DIR not in sys.path:
         sys.path.insert(0, MOD_DIR)
+    # 新目标模块按扁平顶层名 import（logger_config 等），需要仓库根在 sys.path 上；
+    # 这份路径由本工具自己负责，不写进被加载的模块。
+    repo_root = os.path.dirname(MOD_DIR)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
     cur = load_module(os.path.join(MOD_DIR, TARGET), "rc_current")
     base, tmpdir = load_baseline(args.baseline)
     coords = read_coords(args.coords)

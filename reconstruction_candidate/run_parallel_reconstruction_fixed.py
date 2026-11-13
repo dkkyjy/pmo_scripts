@@ -54,9 +54,8 @@ from reconstruction_candidate_fluence_error_fixed import (
     efield_rec_dir,
     helper,
     rotation_m,
-    find_core,
-    magnetic_field_vector,
 )
+from reconstruction_fitting import find_core, magnetic_field_vector
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 工具函数

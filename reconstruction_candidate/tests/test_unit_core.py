@@ -6,13 +6,14 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_fitting as rf
 
 
 # --- 统计与时间 -------------------------------------------------------------
 
 def test_sigma_is_zero_at_zero_dchi2_and_monotone():
-    assert m.sigma(0.0, 1) == pytest.approx(0.0, abs=1e-9)
-    s = [m.sigma(x, 1) for x in (1.0, 4.0, 9.0)]
+    assert rf.sigma(0.0, 1) == pytest.approx(0.0, abs=1e-9)
+    s = [rf.sigma(x, 1) for x in (1.0, 4.0, 9.0)]
     assert all(np.isfinite(s)) and s[0] < s[1] < s[2], s
 
 

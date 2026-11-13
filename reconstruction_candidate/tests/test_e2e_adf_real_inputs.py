@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_fitting as rf
 
 COREAS_ROOT = os.environ.get("PYTEST_COREAS_ROOT", "")
 COORDS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -70,7 +71,7 @@ def _source_from_tadc(idx):
     ev, du2, gps, ns, lst, tr1, tr2, tr3 = m.read_root_file_from_path(
         _one(INPUTS["tadc_L1"]), idx)
     x, y, z, _, _ = m.read_xyz_coordinates(COORDS, du, rotate=False)
-    xs, ys, zs, *_ = m.SWF_fit(np.asarray(x), np.asarray(y), np.asarray(z),
+    xs, ys, zs, *_ = rf.SWF_fit(np.asarray(x), np.asarray(y), np.asarray(z),
                                np.asarray(ns, dtype=float) * 1e-9,
                                0.0, 0.0, 6000.0)
     return float(xs), float(ys), float(zs)
@@ -87,7 +88,7 @@ def test_adf_fits_real_input(name, idx):
     assert du.size >= 5 and np.all(np.isfinite(ant_p)), (du.size, ant_p[:3])
     x, y, z, _, _ = m.read_xyz_coordinates(COORDS, du, rotate=False)
 
-    theta, phi, dw, A, fval = m.ADF_fit_analytic(
+    theta, phi, dw, A, fval = rf.ADF_fit_analytic(
         np.asarray(x), np.asarray(y), np.asarray(z), ant_p,
         src[0], src[1], src[2], 30.0, 180.0, 1.2, 0.0)
 
@@ -107,7 +108,7 @@ def test_inputs_agree_with_each_other(idx):
     for name in INPUTS:
         du, ant_p = _amplitudes(_one(INPUTS[name]), idx)
         x, y, z, _, _ = m.read_xyz_coordinates(COORDS, du, rotate=False)
-        th, ph, dw, A, fv = m.ADF_fit_analytic(
+        th, ph, dw, A, fv = rf.ADF_fit_analytic(
             np.asarray(x), np.asarray(y), np.asarray(z), ant_p,
             src[0], src[1], src[2], 30.0, 180.0, 1.2, 0.0)
         got[name] = (float(th), float(ph))

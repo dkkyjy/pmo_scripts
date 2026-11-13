@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 import reconstruction_candidate_fluence_error_fixed as m
+import reconstruction_fitting as rf
 
 # ── 复数插值 ─────────────────────────────────────────────────────────────────
 
@@ -169,9 +170,9 @@ def test_calculate_energy_fluence_partition_and_zero_input():
 def test_che_fit_chi2_recovers_synthetic_curve():
     omega = np.linspace(1e-4, 0.1, 80)
     amp_true, wc_true, dw_true = 10.0, 0.05, 0.5
-    data = m.f_Che([amp_true, wc_true, dw_true], omega)
+    data = rf.f_Che([amp_true, wc_true, dw_true], omega)
 
-    amp, wc, dw, chi2, amp_err, wc_err, dw_err = m.che_fit_chi2(
+    amp, wc, dw, chi2, amp_err, wc_err, dw_err = rf.che_fit_chi2(
         omega, data, amp_true, wc_true, dw_true, 0)
 
     assert amp == pytest.approx(amp_true, rel=0.05)
@@ -183,9 +184,9 @@ def test_che_fit_chi2_recovers_synthetic_curve():
 
 def test_che_fit_chi2_fix_dw_keeps_initial_width():
     omega = np.linspace(1e-4, 0.1, 60)
-    data = m.f_Che([10.0, 0.05, 0.5], omega)
+    data = rf.f_Che([10.0, 0.05, 0.5], omega)
 
-    _, _, dw, chi2, _, _, _ = m.che_fit_chi2(omega, data, 10.0, 0.04, 0.6, 1)
+    _, _, dw, chi2, _, _, _ = rf.che_fit_chi2(omega, data, 10.0, 0.04, 0.6, 1)
 
     assert dw == pytest.approx(0.6)          # 固定 dw：不随数据变化
     assert chi2 > 0                          # 宽度不对，残差不会归零
