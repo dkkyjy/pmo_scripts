@@ -5,8 +5,7 @@
 CoREAS 坐标表解析。物理反演（`efield_recons_from_efield_PWF` / `energy_restruction`）
 仍留在真实输入测试里，这里不碰。
 
-不覆盖：`ADC_trace_to_Voc_time`（`vad2voc` 需要 `parameter_files/Z_ant_3.2m.csv`，仓库没有）
-与 `f_che_residual`（要 `lmfit.Parameters`，是 iminuit 路径之外的旧接口）。
+不覆盖：`ADC_trace_to_Voc_time`（`vad2voc` 需要 `parameter_files/Z_ant_3.2m.csv`，仓库没有）。
 
 断言取"公式层的不变量"，而不是把实现抄一遍：
 rotation 保范数、Fluence = theta + phi 分量、零输入 → 零输出、拟合能回收到真值。

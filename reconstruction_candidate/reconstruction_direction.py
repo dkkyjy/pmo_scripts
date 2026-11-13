@@ -1,14 +1,22 @@
-"""PWF / SWF / ADF 拟合器与方向重建入口。
+"""PWF / SWF / ADF 拟合器、方向重建入口，以及它们共用的模型函数。
 
-本模块只做"给定几何与观测量 → 方向"的计算：三个拟合器（PWF/SWF/ADF）、它们的模型函数、
-ADF 最小化辅助、方向求解入口，以及 :class:`DirectionResult` 声明的 20 字段方向契约。
+内容：
+  - 三个拟合器 PWF / SWF / ADF 与它们的模型函数；
+  - ADF 最小化的唯一实现 ``_adf_minuit`` 及其四个薄壳
+    （``ADF_fit`` / ``ADF_fit_fixdw`` / ``ADF_fit_analytic`` / ``ADF_fit_analytic_fixdw``）；
+  - 方向求解入口（``recons_direction`` / ``recons_direction_swf_adf`` /
+    ``reconstruct_direction_only`` / ``recons_direction_struct``）与
+    :class:`DirectionResult` 声明的 20 字段方向契约（长度在 import 时断言）；
+  - 被编排模块按名 import 的公开符号 ``find_core`` 与 ``magnetic_field_vector``；
+  - 能量反演复用的模型函数与修正量 ``che_fit``（及其内部的 ``che_fit_chi2``）、``f_adf``、
+    ``density_and_alpha_correction``。
 
-它不读 ROOT、不做因果筛选、不碰天线响应与参数文件——那些留在
-``reconstruction_candidate_fluence_error_fixed``。依赖方向因此是单向的：
-该模块 import 本模块，本模块不 import 它。
+边界：它不读 ROOT、不做因果筛选、不碰天线响应，也不需要 ``parameter_files/``——
+那些留在 ``reconstruction_candidate_fluence_error_fixed``；依赖方向因此是单向的
+（该模块 import 本模块，本模块不 import 它）。
 
 数值行为与原文件完全一致：本模块的内容是从原文件原样搬来的，任何计算逻辑的改动
-都应作为独立的一次变更，而不是顺手做在这次搬迁里。
+都应作为独立的一次变更，而不是顺手做在搬迁或清理里。
 """
 
 import os
@@ -16,7 +24,7 @@ import sys
 
 import numpy as np
 import iminuit
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 from scipy.stats import chi2, norm
 
 # 本模块要能被单独 import：它按扁平顶层名引入 logger_config / AiresInfoFunctions 等，
@@ -618,25 +626,6 @@ def f_Che(par, omega_):
 
     return par[0] / (1 + 4 * (((np.tan(omega_) / np.tan(par[1])) ** 2 - 1) / par[2]) ** 2)
 
-def f_che_residual(pars, w_, data):
-    """
-    计算切伦科夫拟合残差。
-    
-    参数:
-        pars (lmfit.Parameters): 拟合参数。
-        w_ (numpy.ndarray): 视角。
-        data (numpy.ndarray): 观测数据。
-    """
-    vals = pars.valuesdict()
-    amp = vals['amp']
-    w_c = vals['w_c']
-    domega = vals['domega']
-    
-    fche = amp * (1 / (1 + 4 * (((np.tan(w_) / np.tan(w_c)) ** 2 - 1) / domega) ** 2))
-    
-    fmin = fche - data
-    chi2 = (fmin ** 2).sum()
-    return chi2
 
 def f_adf(par, omega_, alpha_, phi_):
     """
@@ -916,7 +905,9 @@ def recons_direction(x, y, z, t, p, init_angles, obs_altitude, p_sigma = None,
                dw = float(res.dw), A = float(res.A), wc = float(res.wc))
     return out
 
-# 向后兼容别名: 旧名 recons_angle 保留 (SWF->ADF 方向重建驱动, 返回 20 元组)
+# 向后兼容别名: 旧名 recons_angle 保留 (SWF->ADF 方向重建驱动, 返回 20 元组)。
+# 仓库内没有代码调用它；还在用这个名字的文档只有 README.md:316
+# （reconstruction_candidate/reconstruction_candidate.md 讲的是旧模块自己的同名函数）。
 recons_angle = recons_direction_swf_adf
 
 def _adf_minuit(x, y, z, ant_p, xs, ys, zs, theta0, phi0, obs_altitude,
