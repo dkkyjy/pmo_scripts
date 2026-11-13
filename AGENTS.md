@@ -107,6 +107,7 @@ python du_pair_theoretical.py position/_gp65_rtksort_2002_DU7.txt [--force-recom
 # tests / syntax gate
 pytest reconstruction_candidate/tests -q
 python -m py_compile reconstruction_candidate/*_fluence_error_fixed.py \
+                        reconstruction_candidate/reconstruction_direction.py \
                         reconstruction_candidate/run_parallel_reconstruction_fixed.py
 
 # ADF driver (no dry run; resume-by-default)
@@ -160,7 +161,8 @@ options; `--max-radius` is `coreas`-only.
 | `find_event/plane_wave_model_gradient.py` | PWM; `<4` DU events skipped, σ = 6 ns in χ² |
 | `find_event/spherical_wave_model_nopenal.py` | SWM; `<5` DU skipped, `rho ∈ [2e3,1e6] m`, `theta ∈ [5,95]°` |
 | `find_event/shower_footprint_filter.py` | cut thresholds (`min_du_fraction_in_ellipse=0.8`, `cone_half_angle_deg=2.0`, `dmax_cut_threshold(800, 300, 75)` …) |
-| `reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py` | authoritative ADF/PWF/SWF chain; asserts `_TUPLE_LEN == 20` at import |
+| `reconstruction_candidate/reconstruction_direction.py` | PWF/SWF/ADF fitters, the direction entry points and the 20-field direction contract (`_TUPLE_LEN == 20` asserted at import); no ROOT I/O, no `parameter_files` |
+| `reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py` | ROOT I/O, antenna response (EFL / ADC→Voc), and the three orchestrators `efield_recons_from_efield_PWF` / `energy_restruction` / `adf_angles_from_voc`; imports `reconstruction_direction` one-way |
 | `time_position_offset.py` | `apply_calibration`; `DEFAULT_OFFSET_CSV` is module-anchored (CWD-independent) |
 
 Docs status: `README.md` is the authoritative deep dive (Chinese) — read it before changing
@@ -169,7 +171,7 @@ default applied late (`time_position_offset.py:32`); its flag table prints
 `coreas/starshape 下默认关` for `--skip-footprint`/`--skip-ringcut` (`README.md:127`) while its
 own difference table says 默认 **True** (`README.md:211`) and `loop.py:918-920` forces both on
 for sim readers; and the documented `adf_angles_from_voc(gps-style)` signature is the old one
-(`reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py:2442`).
+(`reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py:1752`).
 `reconstruction_candidate/*.md` describe the **legacy** non-`_fixed` modules (15/16-column
 results, 108-start ADF grid) — do not trust them for the current chain (18 columns, 36 starts).
 
