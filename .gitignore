@@ -30,11 +30,13 @@ __pycache__/
 # Project directories
 docs/
 todos/
-tests/
+/tests/
 cov_annotate/
-reconstruction_candidate/
 scripts/
-restoration/
+
+# 提交前排除的杂项（U1：reconstruction_candidate/ 与 restoration/ 已改为可跟踪）
+.DS_Store
+*.mat
 
 # External directories (如不需追踪)
 ../Reco_Dir
