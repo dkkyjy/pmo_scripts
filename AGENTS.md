@@ -77,7 +77,7 @@ Invariants that are load-bearing:
 | `find_event/` | **current**: `matching_times_graph.py`, `time_difference_fingerprint.py`, `plane_wave_model_gradient.py`, `pwf_refine.py`, `spherical_wave_model_nopenal.py`, `shower_footprint_filter.py`, `plotting.py`, `io.py`, `utils.py` |
 | `find_event/` (legacy, unreferenced) | `matching_times.py`, `plane_wave_model.py`, `spherical_wave_model.py`, `background_rejection.py` — only `matching_times` and `background_rejection` even appear in the package `__all__`; nothing imports them |
 | `find_event/` (legacy, import-load) | `estimation.py`, `time_offset.py` — `main.py:22` imports `estimation`, which imports `time_offset` (`estimation.py:14`); `fe_est` is never dereferenced, but neither module is deletable without editing `main.py` first |
-| `reconstruction_candidate/` | authoritative `reconstruction_candidate_fluence_error_fixed.py` + `run_parallel_reconstruction_fixed.py`; legacy twins without `_fixed`; `tests/` |
+| `reconstruction_candidate/` | authoritative `reconstruction_candidate_fluence_error_fixed.py` (three orchestrators only) + `reconstruction_common.py` / `reconstruction_antenna.py` / `reconstruction_io.py` / `reconstruction_direction.py` + `run_parallel_reconstruction_fixed.py`; legacy twins without `_fixed`; `tests/` |
 | `position/` | DU layout files (`ID x y z`, `#` = disabled DU, space **or** comma separated) + `*_du_pair_theoretical.csv` cache |
 | `calibration/` | `jul24_locked_xyz_additive_utc.csv` (time windows + per-DU xyz offsets) |
 | `time_position_offset.py`, `du_pair_theoretical.py` | calibration subroutine; DU-pair theoretical-Δt cache builder |
@@ -106,7 +106,10 @@ python du_pair_theoretical.py position/_gp65_rtksort_2002_DU7.txt [--force-recom
 
 # tests / syntax gate
 pytest reconstruction_candidate/tests -q
-python -m py_compile reconstruction_candidate/*_fluence_error_fixed.py \
+python -m py_compile reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py \
+                        reconstruction_candidate/reconstruction_common.py \
+                        reconstruction_candidate/reconstruction_antenna.py \
+                        reconstruction_candidate/reconstruction_io.py \
                         reconstruction_candidate/reconstruction_direction.py \
                         reconstruction_candidate/run_parallel_reconstruction_fixed.py
 
@@ -162,7 +165,10 @@ options; `--max-radius` is `coreas`-only.
 | `find_event/spherical_wave_model_nopenal.py` | SWM; `<5` DU skipped, `rho ∈ [2e3,1e6] m`, `theta ∈ [5,95]°` |
 | `find_event/shower_footprint_filter.py` | cut thresholds (`min_du_fraction_in_ellipse=0.8`, `cone_half_angle_deg=2.0`, `dmax_cut_threshold(800, 300, 75)` …) |
 | `reconstruction_candidate/reconstruction_direction.py` | PWF/SWF/ADF fitters, the direction entry points and the 20-field direction contract (`_TUPLE_LEN == 20` asserted at import); no ROOT I/O, no `parameter_files` |
-| `reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py` | ROOT I/O, antenna response (EFL / ADC→Voc), and the three orchestrators `efield_recons_from_efield_PWF` / `energy_restruction` / `adf_angles_from_voc`; imports `reconstruction_direction` one-way |
+| `reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py` | only the three orchestrators `efield_recons_from_efield_PWF` / `energy_restruction` / `adf_angles_from_voc`; imports `reconstruction_common` / `reconstruction_antenna` / `reconstruction_io` / `reconstruction_direction` one-way, defines no I/O or antenna response itself |
+| `reconstruction_candidate/reconstruction_common.py` | path constants (`efield_rec_dir`, `DU_POS_TABLE`, `DU_ROTATION_FILE`, `_PARAM_DIR`) with env overrides, plus `gps_to_lst` / `rotation_m` / `calculate_energy_fluence_and_error`; imports no sibling layer |
+| `reconstruction_candidate/reconstruction_antenna.py` | antenna response (EFL / ADC→Voc), the `REfile_grand` cache (loaded lazily) and the `tukey_wind` / 30–201 MHz band constants |
+| `reconstruction_candidate/reconstruction_io.py` | ROOT reading (`read_root_file_from_path`, `readroot` fallback), DU position/rotation table parsing, `causality_filter` (writes a per-event temp file), `_COREAS_TRUTH_TREES` |
 | `time_position_offset.py` | `apply_calibration`; `DEFAULT_OFFSET_CSV` is module-anchored (CWD-independent) |
 
 Docs status: `README.md` is the authoritative deep dive (Chinese) — read it before changing
@@ -171,7 +177,7 @@ default applied late (`time_position_offset.py:32`); its flag table prints
 `coreas/starshape 下默认关` for `--skip-footprint`/`--skip-ringcut` (`README.md:127`) while its
 own difference table says 默认 **True** (`README.md:211`) and `loop.py:918-920` forces both on
 for sim readers; and the documented `adf_angles_from_voc(gps-style)` signature is the old one
-(`reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py:1752`).
+(`adf_angles_from_voc` in `reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py`).
 `reconstruction_candidate/*.md` describe the **legacy** non-`_fixed` modules (15/16-column
 results, 108-start ADF grid) — do not trust them for the current chain (18 columns, 36 starts).
 
@@ -206,7 +212,7 @@ results, 108-start ADF grid) — do not trust them for the current chain (18 col
 ## Testing & QA
 
 - Suite: `reconstruction_candidate/tests/` (tracked; root `tests/` does not exist and is ignored).
-  `pytest reconstruction_candidate/tests -q` → **87 collected, 60 passed, 27 skipped** without
+  `pytest reconstruction_candidate/tests -q` → **88 collected, 61 passed, 27 skipped** without
   ROOT data, ~33 s (25 skips are real-input ADF cases gated by `PYTEST_COREAS_ROOT`; 2 are
   placeholders needing the absent `parameter_files/` EFL table).
   With `PYTEST_COREAS_ROOT=<CoREAS-AN event dir>` the real-input tests run and add a cross-input
