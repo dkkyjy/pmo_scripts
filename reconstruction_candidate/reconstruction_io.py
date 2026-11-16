@@ -240,7 +240,7 @@ def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanosec
     for j, du_ in enumerate(du_ids_all): detector_positions_for_causal[str(du_)] = np.array([x_position[j], y_position[j], z_position[j]]) # 原函数内部还会自己调用一次 rotate_and_shift, 为了不发生两次旋转，我们直接传原始的未经旋转偏置的硬坐标
     
 
-    temp_causal_file = os.path.join(efield_rec_dir, f'temp_causality_event_{event_num}.txt') # 生成一个满足 parser 语法的纯文本行并写入临时文件
+    temp_causal_file = os.path.join(efield_rec_dir, f'temp_causality_event_{event_num}_{os.getpid()}.txt') # 进程标识: 并发分片可处理同一个 event_num # 生成一个满足 parser 语法的纯文本行并写入临时文件
     
     
     match_str_list = [f"('{du_ids_all[j]}', {int(du_nanoseconds[j])})" for j in range(len(du_ids_all))] # 将 DU_id 和 nanosecond 时间戳组装成 '[('56', 15632890), ('103', 15639100), ...]' 

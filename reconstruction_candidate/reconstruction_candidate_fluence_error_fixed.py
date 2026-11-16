@@ -111,8 +111,6 @@ time_wind = 100 # 定义时间窗口大小
 thetaList, phiList = np.linspace(90, 180, 6), np.linspace(0, 360, 6) # 定义初始角度列表, 用于波前拟合的初始猜测
 
 
-N, f0, f1 = 2000, 1.0, np.linspace(0, 1000, 1001) # 定义频率点数和频率范围, MHz
-
 # magnetic_field_vector = helper.spherical_to_cartesian(np.deg2rad(60.79) + np.pi / 2, 0) # GRAND 站点的地磁场矢量, 单位矢量, 笛卡尔坐标系下
 logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 # ? ? ? ? ? 地磁场矢量方位角 0.36 deg ?

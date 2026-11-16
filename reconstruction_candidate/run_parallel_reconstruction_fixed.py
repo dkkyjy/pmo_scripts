@@ -41,11 +41,14 @@ from typing import Optional, List, NamedTuple
 import numpy as np
 import yaml
 from multiprocessing import Pool
+# ── 引导 sys.path: 本目录 + 仓库根, 使扁平 import 与 logger_config 都可解析 ──
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.dirname(_HERE)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from scipy.signal import hilbert
 from logger_config import logger
-
-# ── 把重建代码所在目录加入 sys.path ─────────────────────────────────────────
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import coordinatesystems
 from reconstruction_candidate_fluence_error_fixed import (

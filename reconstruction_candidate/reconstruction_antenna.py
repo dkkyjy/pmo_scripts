@@ -21,60 +21,14 @@ from logger_config import logger
 from galacticnoise_get import gala_new
 from vad2voc_fixed import vad2voc
 from interpolation_ import inter
-from complex_expansion import expan
 
 from reconstruction_common import rotation_m, _resolve_data_file, _PARAM_DIR
 
 tukey_wind = windows.tukey(200) # 创建一个长度为200的Tukey窗函数
 
-flower, fupper = 30, 201 # 定义频率范围的下界和上界, MHz
-
 REfile_grand = _resolve_data_file('RECON_EFL_MAT', 'EFL_data_3.2m_XYZ_20250313.mat')
 _EFL_CACHE = {}
 
-
-
-def e_recons(Voc, Lce, Vnoise):
-    # 电场重建函数, 最小二乘法 (3分量), 频域输入: Voc (开路电压), Lce (天线有效长度), Vnoise (噪声电压)
-    Et_rec, Ep_rec = np.array([]), np.array([]) # 初始化重建的theta, phi分量电场数组
-    invM_Ett, invM_Epp, invM_Etp = np.array([]), np.array([]), np.array([])
-    
-    for ff in range(fupper - flower): # 遍历频率范围
-        freq = ff + flower # 当前频率
-        V1, V2, V3 = Voc[freq, :] # 获取当前频率下三个端口的电压
-        
-        A = np.array([[Lce[freq, 0, 0], Lce[freq, 1, 0]],
-                      [Lce[freq, 0, 1], Lce[freq, 1, 1]],
-                      [Lce[freq, 0, 2], Lce[freq, 1, 2]]]) # 构建天线响应矩阵 A (3x2矩阵，假设电场只有theta和phi分量)
-        
-        sig_V = np.array([[abs(Vnoise[freq, 0]) ** 2, 0, 0], 
-                          [0, abs(Vnoise[freq, 1]) ** 2, 0],
-                          [0, 0, abs(Vnoise[freq, 2]) ** 2]]) # 构建噪声协方差矩阵 sig_V (对角阵), 使用噪声幅度平方作为方差
-        
-        #AT = A.T # A的转置
-        AT = A.conj().T # A的共轭转置, 因为A是复数矩阵 ; 这样做会更好 ? ? ?
-        
-        #sig_V_inv = np.linalg.inv(sig_V) # 噪声矩阵求逆
-        sig_V_inv = np.linalg.solve(sig_V, np.eye(sig_V.shape[0], dtype = sig_V.dtype)) # 用 solve 等价计算 sig_V_inv，避免显式求逆放大数值误差
-
-        ATsig = np.dot(AT, sig_V_inv) # AT * sig_V_inv
-        ATVA = np.dot(ATsig, A) # AT * sig_V_inv * A (信息矩阵)
-        
-        #ATVA_inv = np.linalg.inv(ATVA) # 信息矩阵求逆 (协方差矩阵)
-        ATVA_inv = np.linalg.solve(ATVA, np.eye(ATVA.shape[0], dtype = ATVA.dtype)) # 用 solve 等价计算 ATVA_inv，避免显式求逆带来的病态放大
-    
-        invAT = np.dot(ATVA_inv, AT) # (AT * sig_V_inv * A)^-1 * AT
-        A_ = np.dot(invAT, sig_V_inv) # 最终的重建矩阵 (最小二乘解)
-        V = np.array([V1, V2, V3]) # 电压向量
-        et, ep = np.dot(A_, V) # 重建电场 (theta, phi)
-        
-        Et_rec, Ep_rec = np.append(Et_rec, et), np.append(Ep_rec, ep) # 保存结果
-        invM_Ett, invM_Epp = np.append(invM_Ett, ATVA_inv[0, 0]), np.append(invM_Epp, ATVA_inv[1, 1]) # 保存不确定度信息
-        invM_Etp = np.append(invM_Etp, ATVA_inv[0, 1]) # 保存协方差信息 (可选)
-
-    E_inv = np.array([invM_Ett, invM_Epp, invM_Etp]) # 组合不确定度
-    
-    return (Et_rec), (Ep_rec), (E_inv) # 返回重建电场和不确定度
 
 
 def e_recons_real_MHz(Voc, Lce, Vnoise):
@@ -119,46 +73,10 @@ def _get_efl_all_grand():
     return _EFL_CACHE['all']
 
 
-def get_lec_grand(e_theta, e_phi, N, f0):
-    """
-    获取 GRAND 天线的有效长度 (Effective Length)。
-    
-    该函数从加载的 GRAND 天线响应数据中插值获取特定方向的有效长度，并将其转换到球面坐标系。
-    
-    参数:
-        e_theta (float): 天顶角 (度)。
-        e_phi (float): 方位角 (度)。
-        N (int): 频率点数。
-        f0 (float): 频率步长。
-    
-    返回:
-        numpy.ndarray: 球面坐标系下的有效长度矩阵 (N x 3 x 3)。
-    """
-
-    # 插值获取辐射方向图数据
-    e_radiation = inter(_get_efl_all_grand(), e_theta, e_phi)
-    Lce = np.zeros((N, 3, 3), dtype = complex)
-    
-    # 展开复数系数
-    for i in range(3):
-        for p in range(3):
-            f, Lce[:, i, p] = expan(N, f0, 30, 250, e_radiation[:, p, i])
-            
-    # 坐标转换：笛卡尔 -> 球面
-    R_sph2cart = rotation_m(e_theta * np.pi / 180, e_phi * np.pi / 180)
-    R_cart2sph = np.linalg.inv(np.matrix(R_sph2cart))
-    Lce_sphere_ = np.zeros((N, 3, 3), dtype = complex)
-    for i in range(2000):
-        for j in range(3):
-            Lce_sphere_[i,:,j] = np.dot(R_cart2sph,Lce[i,:,j])
-    
-    return Lce_sphere_
-
-
 def _interp_complex_1d(f_src, y_src, f_tar, kind = "cubic"):
     """
     复数一维插值 (实部/虚部分别插值, 与 vad2voc 风格一致).
-    范围外的频点置 0 (与 get_lec_grand 中 expan 在 30-250 MHz 之外为 0 的行为一致).
+    范围外的频点置 0 (与频带外置零的既有约定一致).
     """
     f_src = np.asarray(f_src, dtype = float)
     f_tar = np.asarray(f_tar, dtype = float)
@@ -179,8 +97,8 @@ def get_lec_grand_real_MHz(e_theta, e_phi, freq_target_MHz):
 
     参数
     ----
-    e_theta : float, 天顶角 (度), 与 get_lec_grand 完全一致.
-    e_phi : float, 方位角 (度), 与 get_lec_grand 完全一致.
+    e_theta : float, 天顶角 (度).
+    e_phi : float, 方位角 (度).
     freq_target_MHz : array_like
         目标频点数组 (MHz), 可为真实 FFT 频点 (如 0.488 MHz 间隔).
         仅 30-250 MHz 内的频点有效, 范围外置 0.
@@ -191,7 +109,7 @@ def get_lec_grand_real_MHz(e_theta, e_phi, freq_target_MHz):
         索引 [频点, 球面分量, 端口]:
           分量 0 = theta, 1 = phi, 2 = r;
           端口 0/1/2 = X/Y/Z.
-        与 get_lec_grand 返回语义完全一致 (可直接给 e_recons 用 [:, 0, p] 与 [:, 1, p]),
+        球面分量/端口索引与 ``Lce_sphere`` 的既有约定一致 ([:, 0, p] 为 theta, [:, 1, p] 为 phi),
         只是频率轴由 1 MHz 网格换成你指定的 freq_target_MHz.
     """
     freq_target_MHz = np.asarray(freq_target_MHz, dtype = float)
