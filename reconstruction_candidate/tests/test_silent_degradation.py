@@ -65,7 +65,6 @@ def test_coreas_truth_trees_use_coreas_coord_table(tmp_path, monkeypatch):
     R1 修好 tree 探测后这批文件才可达；若仍走 `else` 分支就会用 GP65 生产表，
     而 CoREAS 的 DU id 与生产表不重合 —— 位置静默错。
     """
-    import reconstruction_candidate_fluence_error_fixed as m
 
     coords = tmp_path / "du_coords.txt"
     coords.write_text("1, 0, 0, 0\n")
@@ -79,7 +78,7 @@ def test_coreas_truth_trees_use_coreas_coord_table(tmp_path, monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(m.uproot, "open", lambda *a, **kw: _FakeRoot())
+    monkeypatch.setattr(rio.uproot, "open", lambda *a, **kw: _FakeRoot())
     monkeypatch.setattr(rio, "find_event_tree_key", lambda keys, name: ("tefield;7", "tefield"))
     kind, path = rio._load_du_position_for_input(str(root), None)
     assert kind == "tefield"
@@ -88,7 +87,6 @@ def test_coreas_truth_trees_use_coreas_coord_table(tmp_path, monkeypatch):
 
 def test_all_coreas_kinds_use_coreas_coord_table(tmp_path, monkeypatch):
     """三种 CoREAS kind 都要走 CoREAS 坐标表；trigger 仍走生产表（U1/#8）。"""
-    import reconstruction_candidate_fluence_error_fixed as m
 
     coords = tmp_path / "du_coords.txt"
     coords.write_text("1, 0, 0, 0\n")
@@ -102,7 +100,7 @@ def test_all_coreas_kinds_use_coreas_coord_table(tmp_path, monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(m.uproot, "open", lambda *a, **kw: _FakeRoot())
+    monkeypatch.setattr(rio.uproot, "open", lambda *a, **kw: _FakeRoot())
     for kind in ("tadc", "tefield", "tvoltage"):
         monkeypatch.setattr(rio, "find_event_tree_key", lambda keys, name, k=kind: ("x;1", k))
         got_kind, path = rio._load_du_position_for_input(str(root), None)
@@ -111,7 +109,7 @@ def test_all_coreas_kinds_use_coreas_coord_table(tmp_path, monkeypatch):
 
     monkeypatch.setattr(rio, "find_event_tree_key", lambda keys, name: ("x;1", "teventadc"))
     _, path = rio._load_du_position_for_input(str(root), None)
-    assert path == m.DU_POS_TABLE, "trigger 仍应使用生产表"
+    assert path == rio.DU_POS_TABLE, "trigger 仍应使用生产表"
 
 
 def test_coreas_truth_tree_set_has_one_source():

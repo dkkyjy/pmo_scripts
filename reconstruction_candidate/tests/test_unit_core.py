@@ -5,7 +5,6 @@ import os
 import numpy as np
 import pytest
 
-import reconstruction_candidate_fluence_error_fixed as m
 import reconstruction_common as common
 import reconstruction_io as rio
 import reconstruction_direction as rf
