@@ -116,10 +116,13 @@ def test_coreas_truth_tree_set_has_one_source():
     """"哪些 kind 是 CoREAS 真值树"只能有一处集合字面量（U1/#8）。"""
     import inspect
     import re
-    import reconstruction_candidate_fluence_error_fixed as m
 
-    src = inspect.getsource(rio)
+    import reconstruction_antenna as ant
+    import reconstruction_candidate_fluence_error_fixed as m
+    import reconstruction_common as common
+
+    src = "\n".join(inspect.getsource(mod) for mod in (rio, common, ant, m))
     assert rio._COREAS_TRUTH_TREES == ('tefield', 'tvoltage')
-    hits = [ln for ln in src.splitlines()
-            if re.search(r"[\(\[]\s*['\"]tefield['\"]", ln) and 'tvoltage' in ln]
+    hit_re = (re.compile(r"['\"]tefield['\"]"), re.compile(r"['\"]tvoltage['\"]"))
+    hits = [ln for ln in src.splitlines() if all(p.search(ln) for p in hit_re)]
     assert len(hits) == 1, f"真值树集合字面量出现了 {len(hits)} 处: {hits}"
