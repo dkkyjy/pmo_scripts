@@ -5,8 +5,7 @@ from typing import NamedTuple
 import numpy as np
 from scipy.fftpack import ifft, fft # 引入快速傅里叶变换和逆变换函数
 from scipy.fftpack import fftfreq
-from scipy.interpolate import interp1d
-from scipy.signal import hilbert, windows # 引入希尔伯特变换和窗函数
+from scipy.signal import hilbert # 引入希尔伯特变换
 from scipy import integrate # 引入数值积分函数
 import h5py # 引入h5py库用于读取.mat文件
 import iminuit
@@ -14,8 +13,6 @@ from multiprocessing.pool import Pool
 import io
 import glob
 import contextlib
-import scipy.io
-import uproot
 import scienceplots
 
 plt.rcParams.update({"text.usetex": False})
@@ -39,25 +36,17 @@ from scipy.stats import chi2, norm
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 #--------------------------------------------------------------------------
-# 路径解析层: 所有外部资源都相对本文件定位, 不再依赖任何机器相关的绝对路径,
-# 以增强可移植性 (可在任意机器/集群直接运行)。
+# 路径层已移到 reconstruction_common：外部资源常量与环境变量覆盖在那里定义
 #   - parameter_files/ : EFL / PG_ALL / Z_ant / 30_250galactic 等参数与数据文件
 #   - 每个资源常量都可用同名环境变量覆盖, 便于跨站点部署:
 #       RECON_EFL_MAT            天线有效长度 (EFL) 数据 (.mat)
 #       RECON_DU_POS_TABLE       生产 DU 位置表 (GP65, teventadc 输入用)
 #       RECON_DU_ROTATION_FILE   DU 安装转角表
 #       RECON_COREAS_DET_POS     CoREAS du_coords.txt (tadc 输入用)
+# 本文件只负责导入这些常量并把三个编排串起来。
 #--------------------------------------------------------------------------
 
 
-
-# 生产 (GP65) DU 位置表: 历史上位于仓库根目录的 _gp65_rtksort.txt。
-
-# DU 安装转角表 (RTK 实测)。
-
-# CoREAS 真值树：有 trace 但没有 du_nanoseconds，且 DU id 与 GP65 生产表不重合，
-# 因此必须走 readroot 的探测分支 + CoREAS 坐标表（_resolve_coreas_det_pos）。
-# 这是"哪些 kind 属于这一类"的唯一真相来源：新增同类树时只改这里。
 
 #--------------------------------------------------------------------------
 
@@ -65,10 +54,6 @@ from logger_config import logger  # 统一日志输出 (loguru), 替代 print
 from equivalent import CEL # 引入计算天线有效长度的函数
 from galacticnoise_get import gala, gala_new # 引入获取银河噪声的函数
 from Time_domain_Shower_Edata_get import time_data_get # 引入获取时域簇射电场数据的函数
-# from vad2voc import vad2voc # 引入从Vad计算Voc的核心函数
-from vad2voc_fixed import vad2voc # 引入从Vad计算Voc的核心函数 (新版, 支持直接传真实频点)
-from interpolation_ import inter
-from complex_expansion import expan
 import AiresInfoFunctions as aires
 import coordinatesystems, helper
 import models as atm
@@ -87,11 +72,9 @@ from reconstruction_direction import (
     direction_result_from_tuple,
     magnetic_field_vector,
 )
-from _optimized_read_matching_times_graph import optimized_read_matching_times_graph
 
 # 重建层已按职责拆分（单向依赖：本文件 -> common / antenna / io / direction）。
 from reconstruction_common import (
-    DU_POS_TABLE,
     DU_ROTATION_FILE,
     _PARAM_DIR,
     efield_rec_dir,
@@ -138,7 +121,7 @@ logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 
 # efield_rec_dir = './Reconstruction_test/' # 结果保存目录, 用于测试筛选事件
 # efield_rec_dir = './Reconstruction_colleague/'
-# 目录不在这里创建: 只有真正做电场反演(efield_recons_*)时才需要, 由第 945 行按事例按需创建
+# 目录不在这里创建: 只有真正做电场反演(efield_recons_*)时才需要, 由 _event_rec_dir 按事例按需创建
 # (exist_ok=True)。ADF/解析 A 只用电压 fluence, 完全不碰这个目录。
 
 #--------------------------------------------------------------------------

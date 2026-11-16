@@ -61,6 +61,9 @@ except ImportError:
         return None
 
 
+# CoREAS 真值树：有 trace 但没有 du_nanoseconds，且 DU id 与 GP65 生产表不重合，
+# 因此必须走 readroot 的探测分支 + CoREAS 坐标表（_resolve_coreas_det_pos）。
+# 这是"哪些 kind 属于这一类"的唯一真相来源：新增同类树时只改这里。
 _COREAS_TRUTH_TREES = ('tefield', 'tvoltage')
 
 
