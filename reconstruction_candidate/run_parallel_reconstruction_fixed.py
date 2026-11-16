@@ -41,9 +41,10 @@ from typing import Optional, List, NamedTuple
 import numpy as np
 import yaml
 from multiprocessing import Pool
-# ── 引导 sys.path: 本目录 + 仓库根, 使扁平 import 与 logger_config 都可解析 ──
+
+# ── 引导 sys.path: 本目录优先, 再补仓库根 (扁平 import 与 logger_config 都可解析) ──
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _p in (_HERE, os.path.dirname(_HERE)):
+for _p in (os.path.dirname(_HERE), _HERE):  # 反序插入, 使 _HERE 最终排在最前面
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

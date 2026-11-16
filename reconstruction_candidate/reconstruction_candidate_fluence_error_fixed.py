@@ -42,7 +42,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 #       RECON_EFL_MAT            天线有效长度 (EFL) 数据 (.mat)
 #       RECON_DU_POS_TABLE       生产 DU 位置表 (GP65, teventadc 输入用)
 #       RECON_DU_ROTATION_FILE   DU 安装转角表
-#       RECON_COREAS_DET_POS     CoREAS du_coords.txt (tadc 输入用)
+#       RECON_COREAS_DET_POS     CoREAS du_coords.txt (tadc 输入用, 由 reconstruction_io 读取)
 # 本文件只负责导入这些常量并把三个编排串起来。
 #--------------------------------------------------------------------------
 
@@ -119,7 +119,7 @@ logger.info(f"Magnetic field vector (cartesian): {magnetic_field_vector}")
 
 # efield_rec_dir = './Reconstruction_test/' # 结果保存目录, 用于测试筛选事件
 # efield_rec_dir = './Reconstruction_colleague/'
-# 目录不在这里创建: 只有真正做电场反演(efield_recons_*)时才需要, 由 _event_rec_dir 按事例按需创建
+# 目录不在这里创建: 只有真正做电场反演(efield_recons_*)时才需要, 由下面的 os.makedirs 按事例按需创建
 # (exist_ok=True)。ADF/解析 A 只用电压 fluence, 完全不碰这个目录。
 
 #--------------------------------------------------------------------------

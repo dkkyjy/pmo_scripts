@@ -166,9 +166,9 @@ options; `--max-radius` is `coreas`-only.
 | `find_event/shower_footprint_filter.py` | cut thresholds (`min_du_fraction_in_ellipse=0.8`, `cone_half_angle_deg=2.0`, `dmax_cut_threshold(800, 300, 75)` …) |
 | `reconstruction_candidate/reconstruction_direction.py` | PWF/SWF/ADF fitters, the direction entry points and the 20-field direction contract (`_TUPLE_LEN == 20` asserted at import); no ROOT I/O, no `parameter_files` |
 | `reconstruction_candidate/reconstruction_candidate_fluence_error_fixed.py` | only the three orchestrators `efield_recons_from_efield_PWF` / `energy_restruction` / `adf_angles_from_voc`; imports `reconstruction_common` / `reconstruction_antenna` / `reconstruction_io` / `reconstruction_direction` one-way, defines no I/O or antenna response itself |
-| `reconstruction_candidate/reconstruction_common.py` | path constants (`efield_rec_dir`, `DU_POS_TABLE`, `DU_ROTATION_FILE`, `_PARAM_DIR`) with env overrides, plus `gps_to_lst` / `rotation_m` / `calculate_energy_fluence_and_error`; imports no sibling layer |
-| `reconstruction_candidate/reconstruction_antenna.py` | antenna response (EFL / ADC→Voc), the `REfile_grand` cache (loaded lazily) and the `tukey_wind` / 30–201 MHz band constants |
-| `reconstruction_candidate/reconstruction_io.py` | ROOT reading (`read_root_file_from_path`, `readroot` fallback), DU position/rotation table parsing, `causality_filter` (writes a per-event temp file), `_COREAS_TRUTH_TREES` |
+| `reconstruction_candidate/reconstruction_common.py` | path constants (`efield_rec_dir`, a CWD-relative literal; `DU_POS_TABLE` / `DU_ROTATION_FILE` / `_PARAM_DIR` with env overrides), plus `gps_to_lst` / `rotation_m` / `calculate_energy_fluence_and_error`; imports no sibling layer |
+| `reconstruction_candidate/reconstruction_antenna.py` | antenna response (EFL / ADC→Voc), the `REfile_grand` cache (loaded lazily), `tukey_wind`, and the DU rotation-table reader `read_du_rotation_angles`; the 30–250 MHz band is written inline, there is no band constant |
+| `reconstruction_candidate/reconstruction_io.py` | ROOT reading (`read_root_file_from_path`, `readroot` fallback), `_read_du_position_table`, `causality_filter` (writes a per-event-per-process temp file), `_COREAS_TRUTH_TREES` |
 | `time_position_offset.py` | `apply_calibration`; `DEFAULT_OFFSET_CSV` is module-anchored (CWD-independent) |
 
 Docs status: `README.md` is the authoritative deep dive (Chinese) — read it before changing

@@ -254,12 +254,13 @@ def causality_filter(efield_rec_dir, event_num, du_ids_all, gps_time, du_nanosec
     
     logger.info("Executing strict causality cleaning via graph optimization...") # 调用引用的图论清理函数（设定最少容忍 4 个探测器）
     
-    matching_times = optimized_read_matching_times_graph(
-        file_path = temp_causal_file, 
-        detector_positions = detector_positions_for_causal, 
-        min_detectors = 4)
-
-    if os.path.exists(temp_causal_file): os.remove(temp_causal_file) # 删除临时缓存文件
+    try: # 临时文件名带进程标识后不会互相覆盖, 所以异常路径必须自己清掉, 否则每个崩溃的进程都会留下一份
+        matching_times = optimized_read_matching_times_graph(
+            file_path = temp_causal_file, 
+            detector_positions = detector_positions_for_causal, 
+            min_detectors = 4)
+    finally:
+        if os.path.exists(temp_causal_file): os.remove(temp_causal_file) # 删除临时缓存文件
 
     
     if len(matching_times) == 0: # 分析返回列表，应用掩码

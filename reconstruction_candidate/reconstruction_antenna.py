@@ -109,7 +109,7 @@ def get_lec_grand_real_MHz(e_theta, e_phi, freq_target_MHz):
         索引 [频点, 球面分量, 端口]:
           分量 0 = theta, 1 = phi, 2 = r;
           端口 0/1/2 = X/Y/Z.
-        球面分量/端口索引与 ``Lce_sphere`` 的既有约定一致 ([:, 0, p] 为 theta, [:, 1, p] 为 phi),
+        球面分量/端口索引沿用既有约定 ([:, 0, p] 为 theta, [:, 1, p] 为 phi),
         只是频率轴由 1 MHz 网格换成你指定的 freq_target_MHz.
     """
     freq_target_MHz = np.asarray(freq_target_MHz, dtype = float)
