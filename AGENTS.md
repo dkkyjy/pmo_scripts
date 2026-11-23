@@ -31,7 +31,7 @@ Stage table (`main.py:1013-1209`):
 
 | # | Stage | Call site | Artifact |
 |---|-------|-----------|----------|
-| 0 | layout detect (`det_pos` per event?) | `main.py:1039` | — |
+| 0 | layout detect (`det_pos` per event? `truth` block = simulation) | `main.py` `_load_det_pos_by_event` | — |
 | 0b | calibration (trigger only) | `main.py:1042-1053` | `*.toffset.yaml`, `*.toffset.txt` |
 | 1 | causality matching | `main.py:1099` | `_matched.yaml` |
 | 2 | fingerprint | `main.py:1126` | `_matched_fingerprint.yaml` |
@@ -42,8 +42,13 @@ Stage table (`main.py:1013-1209`):
 
 Invariants that are load-bearing:
 
-- **`det_pos` in the matching YAML is the layout discriminator** (`main.py:1039`). Add a
+- **The layout discriminator is `det_pos` per event *or* a `truth` block** (`main.py` `_load_det_pos_by_event`).
+  StarShape embeds `det_pos`; CoREAS embeds `truth` only and takes its coordinates from
+  `--det-pos` (`loop.py` defaults that to `position/du_coords_CoreasDC2.txt`). Add a
   `det_pos` block to trigger YAML and calibration silently turns off for the whole pipeline.
+- **Only an embedded `det_pos` reaches the PWM/SWM caches.** Trigger and CoREAS rows carry
+  none (the static table stays the single source), so a `_PWM.yaml` from those readers is
+  not self-contained — pass `--det-pos` to standalone cut tools.
 - **Artifact suffixes are the API.** Paths come from `str.replace(".yaml", "_X.yaml")`
   (`main.py:499,630,727,890`) and are consumed by the reconstruction driver. Renaming a
   suffix breaks caches, plotting and downstream tools at once.

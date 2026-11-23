@@ -288,6 +288,14 @@ def _build_simulation_tasks(args: argparse.Namespace) -> list[TaskSpec]:
         out_date_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created output directory: {out_date_dir}")
 
+    # CoREAS YAML carries no per-event det_pos (its layout is the static table),
+    # so main.py must be told which file to use; an explicit --det-pos wins.
+    if not args.det_pos:
+        args.det_pos = str(
+            Path(__file__).resolve().parent / "position" / "du_coords_CoreasDC2.txt"
+        )
+        logger.info(f"coreas reader: using static det_pos {args.det_pos}")
+
     return make_tasks_for_file_paths(file_path_list, COREAS_OUT_DATE, args)
 
 
@@ -748,8 +756,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "detector position file passed through to main.py. When omitted, "
             "main.py falls back to its own default "
-            "(position/_gp65_rtksort_DU7_1029.txt); coreas/starshape ignore this "
-            "because their per-event det_pos is embedded in the matching YAML"
+            "(position/_gp65_rtksort_DU7_1029.txt); for --reader coreas it "
+            "defaults to position/du_coords_CoreasDC2.txt (coreas YAML embeds no "
+            "det_pos); --reader starshape ignores it because its per-event "
+            "det_pos is embedded in the matching YAML"
         ),
     )
     ap.add_argument(

@@ -60,23 +60,32 @@ def _load_det_pos_by_event(matching_file):
     """Load per-event detector coordinates embedded in a matching YAML file.
 
     StarShape files carry no static detector-coordinate file: each event embeds
-    its own ``det_pos`` mapping. Returns ``{event_key: {det_id(int): np.array}}``
-    when at least one event has an embedded ``det_pos``, otherwise ``None`` so
-    callers fall back to the static ``det_pos_file`` layout.
+    its own ``det_pos`` mapping. Returns ``(by_event, is_simulation)``:
+
+    * ``by_event`` — ``{event_key: {det_id(int): np.array}}`` when at least one
+      event has an embedded ``det_pos``, else ``None`` (callers fall back to the
+      static ``det_pos_file`` layout).
+    * ``is_simulation`` — whether the YAML came from a simulation reader. Those
+      events carry a ``truth`` block and a synthetic ``gps_time``, so offset
+      calibration must be skipped; CoREAS embeds no ``det_pos`` and can only be
+      told apart from trigger data by that block.
     """
     if not os.path.exists(matching_file):
-        return None
+        return None, False
 
     with open(matching_file, "r") as f:
         data = yaml.load(f, Loader=yaml.FullLoader)
 
     if not isinstance(data, dict):
-        return None
+        return None, False
 
     by_event = {}
+    is_simulation = False
     for key, payload in data.items():
         if not isinstance(payload, dict):
             continue
+        if isinstance(payload.get("truth"), dict):
+            is_simulation = True
         det_pos = payload.get("det_pos", None)
         if not isinstance(det_pos, dict) or not det_pos:
             continue
@@ -85,7 +94,7 @@ def _load_det_pos_by_event(matching_file):
             for det_id, position in det_pos.items()
         }
 
-    return by_event or None
+    return (by_event or None), is_simulation
 
 
 # =========================
@@ -365,6 +374,27 @@ def _required_fields_for_stage(stage, with_signal):
     if with_signal:
         required.add("signal")
     return required
+
+
+def _det_pos_payload(event_key, du_ids, positions_by_event):
+    """Per-event ``det_pos`` for a stage cache row, or ``None`` when it is absent.
+
+    Only a layout embedded in the matching YAML (StarShape) is carried forward;
+    the static ``--det-pos`` file is *not* copied into stage caches, so a trigger
+    or CoREAS run stays as cheap as before and keeps reading the shared table.
+    """
+    if not positions_by_event:
+        return None
+    coords = positions_by_event.get(event_key)
+    if not coords:
+        return None
+    out = {}
+    for du_id in du_ids or ():
+        position = coords.get(int(du_id))
+        if position is None:
+            continue
+        out[str(du_id)] = [float(v) for v in position]
+    return out or None
 
 
 def _validate_stage_cache_payload(stage, payload, with_signal):
@@ -834,12 +864,17 @@ def run_pwm_stage(
                 "index": state["index"].get(key, None),
                 "time": state["times"][key],
                 "chi_square": chi_squares[key],
+                "det_pos": _det_pos_payload(
+                    key, state["du_ids"][key], detector_positions_by_event
+                ),
                 "zenith": zeniths[key],
                 "azimuth": azimuths[key],
                 "x": float(direction[0]),
                 "y": float(direction[1]),
                 "z": float(direction[2]),
             }
+            if results[key]["det_pos"] is None:
+                del results[key]["det_pos"]
             if with_signal:
                 results[key]["signal"] = state["signals"][key]
 
@@ -984,7 +1019,12 @@ def run_swm_stage(
                 "y": float(directions[key][1]),
                 "z": float(directions[key][2]),
                 "chi_square": float(chi_squares[key]),
+                "det_pos": _det_pos_payload(
+                    key, state["du_ids"][key], detector_positions_by_event
+                ),
             }
+            if results[key]["det_pos"] is None:
+                del results[key]["det_pos"]
             if with_signal:
                 results[key]["signal"] = state["signals"][key]
 
@@ -1036,8 +1076,8 @@ def main(
     # 数据形态判别：trigger 数据的坐标来自静态 det_pos 文件，其 gps_time 是真实
     # 时间码，需施加时间/位置标定；coreas/starshape 的坐标逐事件内嵌于 matching
     # YAML 的 ``det_pos``，gps_time 为合成值，不做标定（--skip-offset 亦可跳过）。
-    detector_positions_by_event = _load_det_pos_by_event(matching_file)
-    is_trigger_layout = detector_positions_by_event is None
+    detector_positions_by_event, is_simulation = _load_det_pos_by_event(matching_file)
+    is_trigger_layout = detector_positions_by_event is None and not is_simulation
 
     if is_trigger_layout:
         if skip_offset:
@@ -1051,6 +1091,12 @@ def main(
             matching_file, det_pos_file, _offset_stats = apply_calibration(
                 matching_file, det_pos_file, offset_csv or DEFAULT_OFFSET_CSV)
             logger.info(f"Calibrated inputs: matching_file={matching_file}, det_pos_file={det_pos_file}")
+    elif is_simulation and detector_positions_by_event is None:
+        logger.info(
+            "Simulation YAML {} carries no per-event det_pos; using the static "
+            "layout and skipping offset calibration",
+            matching_file,
+        )
     else:
         logger.info(
             "Loaded per-event detector coordinates from {} for {} events "
