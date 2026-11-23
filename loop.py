@@ -288,6 +288,14 @@ def _build_simulation_tasks(args: argparse.Namespace) -> list[TaskSpec]:
         out_date_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created output directory: {out_date_dir}")
 
+    # CoREAS YAML carries no per-event det_pos (its layout is the static table),
+    # so main.py must be told which file to use; an explicit --det-pos wins.
+    if not args.det_pos:
+        args.det_pos = str(
+            Path(__file__).resolve().parent / "position" / "du_coords_CoreasDC2.txt"
+        )
+        logger.info(f"coreas reader: using static det_pos {args.det_pos}")
+
     return make_tasks_for_file_paths(file_path_list, COREAS_OUT_DATE, args)
 
 
@@ -748,8 +756,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "detector position file passed through to main.py. When omitted, "
             "main.py falls back to its own default "
-            "(position/_gp65_rtksort_DU7_1029.txt); coreas/starshape ignore this "
-            "because their per-event det_pos is embedded in the matching YAML"
+            "(position/_gp65_rtksort_DU7_1029.txt); for --reader coreas it "
+            "defaults to position/du_coords_CoreasDC2.txt (coreas YAML embeds no "
+            "det_pos); --reader starshape ignores it because its per-event "
+            "det_pos is embedded in the matching YAML"
         ),
     )
     ap.add_argument(
@@ -902,10 +912,10 @@ def parse_cli_args() -> argparse.Namespace:
     if args.skip_fingerprint is None:
         args.skip_fingerprint = simulation_reader
 
-    # The simulation readers (coreas/starshape) embed per-event ``det_pos`` in
-    # their matching YAML, so ``main.py`` prefers those coordinates over any
-    # static file. Leave ``--det-pos`` unset for both (main.py's own default is
-    # only a fallback); an explicit --det-pos always wins.
+    # StarShape embeds per-event ``det_pos`` in its matching YAML and ``main.py``
+    # prefers those coordinates; CoREAS embeds none, so ``_build_simulation_tasks``
+    # fills ``--det-pos`` with the static CoREAS layout. An explicit --det-pos
+    # always wins.
     #
     # However, the customized footprint/ring cuts in ``main.py`` only consult
     # the *static* ``--det-pos`` file, never the per-event coordinates. With

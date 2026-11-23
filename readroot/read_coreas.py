@@ -12,8 +12,10 @@ one ``<lo>-<hi>`` event range per run directory::
 
 This reader takes one ``adc_*`` file and joins its companions (found next to it
 by event range / run prefix) so a single matching YAML carries the same shape
-as the StarShape reader: the trigger inputs, an embedded ``det_pos`` layout, a
-``truth`` block and an ``efield_config`` block. ``shower`` and ``runefieldsim``
+as the StarShape reader: the trigger inputs, a ``truth`` block and an
+``efield_config`` block. Unlike StarShape it embeds **no** ``det_pos``: the DU
+layout is identical to ``position/du_coords_CoreasDC2.txt``, so coordinates come
+from ``--det-pos`` (``loop.py`` passes that file for ``--reader coreas``). ``shower`` and ``runefieldsim``
 are optional: when a companion is missing the corresponding block is skipped
 with a warning rather than failing the whole file.
 
@@ -32,15 +34,12 @@ Output schema (one YAML file per input ROOT file, keyed by ``event_number``)::
         file: str                  # input ROOT file name
         du_id: [str, ...]          # detector ids as strings (schema parity)
         time: {du_id: int}         # det_id -> du_nanoseconds (int)
-        det_pos: {du_id: [x,y,z]}  # per-event antenna positions (xyz, metres)
         truth: {...}               # shower truth scalars for this event
         efield_config: {...}       # runefieldsim config scalars
         signal: {du_id: int}       # det_id -> trace max (--with-signal only)
 
-``det_pos`` is built from the run tree's ``du_xyz`` (indexed by ``du_id``); it is
-identical to the static ``position/du_coords_CoreasDC2.txt`` layout, but carrying it
-per-event lets main.py use one code path for both simulation readers. Unlike
-StarShape, the ``efield`` block is never emitted (``tefield.p2p`` is empty in the
+The run tree's ``du_xyz`` is read only for ``--max-radius`` (horizontal radius);
+it is not written to the YAML. Unlike StarShape, the ``efield`` block is never emitted (``tefield.p2p`` is empty in the
 sample data) and ``signal`` is derived from the ``tadc.trace_ch`` waveforms, so
 it is only produced with ``--with-signal`` (the output file is then named
 ``<file>_<channel>.yaml``, mirroring the trigger/StarShape convention).
@@ -132,7 +131,7 @@ _TSHOWERSIM_FIELDS = {
 
 # Run-level ``trun`` scalars copied onto every event (per the request to carry
 # more of the run metadata). Per-DU arrays (du_xyz/du_geoid/du_tilt/...) are not
-# copied here: the DU layout is exported as ``det_pos`` instead.
+# copied here: the layout lives in the static ``--det-pos`` file.
 _TRUN_SCALAR_FIELDS = (
     "run_mode",
     "first_event",
@@ -204,7 +203,11 @@ def _row_lookup(event_numbers: List[int]) -> Dict[int, int]:
 
 
 def _build_det_pos(du_ids: List[int], du_xyz) -> Dict[str, List[float]]:
-    """Build a ``{str(du): [x, y, z]}`` map from the run tree vectors."""
+    """Build a ``{str(du): [x, y, z]}`` map from the run tree vectors.
+
+    只用于 ``--max-radius`` 的几何筛选 (水平半径), 不再写进产物: CoREAS 的布局与
+    静态 ``position/du_coords_CoreasDC2.txt`` 同源, 坐标一律由 ``--det-pos`` 提供。
+    """
     positions: Dict[str, List[float]] = {}
     for du_id, xyz in zip(du_ids, du_xyz):
         positions[str(int(du_id))] = as_vector(xyz)
@@ -303,10 +306,10 @@ def read_coreas_file(
         run_arrays = run_tree.arrays(
             [*run_branches, *_TRUN_SCALAR_FIELDS], library="ak", entry_stop=1
         )
+        origin_geoid = as_vector(run_arrays["origin_geoid"][0])
         det_pos_static = _build_det_pos(
             ak.to_list(run_arrays["du_id"])[0], ak.to_list(run_arrays["du_xyz"])[0]
         )
-        origin_geoid = as_vector(run_arrays["origin_geoid"][0])
         site_config = {
             "site": as_str_list(run_arrays["site"][0]),
             "site_lat_long": origin_geoid[:2],
@@ -388,12 +391,6 @@ def read_coreas_file(
             du_ids, event_ns
         )
 
-        det_pos = {
-            du_id: det_pos_static[du_id]
-            for du_id in list_du_id
-            if du_id in det_pos_static
-        }
-
         truth: Dict[str, Any] = {}
         if shower_arrays is not None and event_number in shower_row:
             truth.update(
@@ -419,7 +416,6 @@ def read_coreas_file(
             "index": index,
             "du_id": list_du_id,
             "time": time_map,
-            "det_pos": det_pos,
             "truth": truth,
             "efield_config": efield_config,
         }
