@@ -912,10 +912,10 @@ def parse_cli_args() -> argparse.Namespace:
     if args.skip_fingerprint is None:
         args.skip_fingerprint = simulation_reader
 
-    # The simulation readers (coreas/starshape) embed per-event ``det_pos`` in
-    # their matching YAML, so ``main.py`` prefers those coordinates over any
-    # static file. Leave ``--det-pos`` unset for both (main.py's own default is
-    # only a fallback); an explicit --det-pos always wins.
+    # StarShape embeds per-event ``det_pos`` in its matching YAML and ``main.py``
+    # prefers those coordinates; CoREAS embeds none, so ``_build_simulation_tasks``
+    # fills ``--det-pos`` with the static CoREAS layout. An explicit --det-pos
+    # always wins.
     #
     # However, the customized footprint/ring cuts in ``main.py`` only consult
     # the *static* ``--det-pos`` file, never the per-event coordinates. With

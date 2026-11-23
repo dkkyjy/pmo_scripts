@@ -27,18 +27,18 @@ ROOT ──readroot/read_*.py──► <out>/<date|coreas|starshape>/<stem>[_CH]
                 ──► ./Reconstruction/<stem>_event_<n>/… + *_reconstruction_summary.yaml
 ```
 
-Stage table (`main.py:1013-1209`):
+Stage table (functions inside `main.py` `main()`):
 
 | # | Stage | Call site | Artifact |
 |---|-------|-----------|----------|
 | 0 | layout detect (`det_pos` per event? `truth` block = simulation) | `main.py` `_load_det_pos_by_event` | — |
-| 0b | calibration (trigger only) | `main.py:1042-1053` | `*.toffset.yaml`, `*.toffset.txt` |
-| 1 | causality matching | `main.py:1099` | `_matched.yaml` |
-| 2 | fingerprint | `main.py:1126` | `_matched_fingerprint.yaml` |
-| 3 | PWM + PWF refine | `main.py:1139` | `_PWM.yaml` |
-| 4 | footprint + ring cut (memory only) | `main.py:1161` | diagnostics CSV/PNG |
-| 5 | SWM | `main.py:1180` | `_SWM.yaml` |
-| 6 | PWM again (re-plot) | `main.py:1195` | same `_PWM.yaml` |
+| 0b | calibration (trigger only) | `apply_calibration` inside `main()` | `*.toffset.yaml`, `*.toffset.txt` |
+| 1 | causality matching | `run_matching_stage` | `_matched.yaml` |
+| 2 | fingerprint | `run_fingerprint_stage` | `_matched_fingerprint.yaml` |
+| 3 | PWM + PWF refine | `run_pwm_stage` | `_PWM.yaml` |
+| 4 | footprint + ring cut (memory only) | `apply_customized_cuts` | diagnostics CSV/PNG |
+| 5 | SWM | `run_swm_stage` | `_SWM.yaml` |
+| 6 | PWM again (re-plot) | `run_pwm_stage` (second call) | same `_PWM.yaml` |
 
 Invariants that are load-bearing:
 
@@ -50,24 +50,24 @@ Invariants that are load-bearing:
   none (the static table stays the single source), so a `_PWM.yaml` from those readers is
   not self-contained — pass `--det-pos` to standalone cut tools.
 - **Artifact suffixes are the API.** Paths come from `str.replace(".yaml", "_X.yaml")`
-  (`main.py:499,630,727,890`) and are consumed by the reconstruction driver. Renaming a
+  (`run_matching_stage`, `run_fingerprint_stage`, `run_pwm_stage`, `run_swm_stage`) and are consumed by the reconstruction driver. Renaming a
   suffix breaks caches, plotting and downstream tools at once.
 - **Cache validity = exact dict equality** of `{path, exists, size, mtime_ns}` signatures
-  (`main.py:278-334`). The *absolute path* is in the signature — that is why calibration can
+  (`_build_file_signature` + `_build_stage_cache_meta`). The *absolute path* is in the signature — that is why calibration can
   switch inputs without touching stage code, and why moving files invalidates everything.
   Any new stage input must be added to `expected_meta`, and `schema_version` is not enforced
   on read.
 - **Caches are write-mostly on a full run.** `run_fingerprint_stage` returns
-  `fingerprint_computed = True` unconditionally (`main.py:708`) and `run_pwm_stage` does
-  `use_cache = … and not fingerprint_computed` (`main.py:740`); SWM gates on `pwm_computed`
+  `fingerprint_computed = True` unconditionally and `run_pwm_stage` does
+  `use_cache = … and not fingerprint_computed`; SWM gates on `pwm_computed`
   the same way. Alias: the 8th positional arg of `run_pwm_stage` is *not* an "enabled" flag.
 - **Reader-derived defaults** (`loop.py:896-920`): `coreas`/`starshape` default
   `--skip-matching`/`--skip-fingerprint` on (`BooleanOptionalAction`, explicit flag wins) and
   force `--skip-footprint`/`--skip-ringcut` on — those cuts only read the *static* `--det-pos`
   file and would drop every sim event. There is **no CLI switch to re-enable the cuts for sims**.
 - **Skip semantics differ by stage**: `--skip-matching` loads *source* metadata
-  (`main.py:432-455`), `--skip-fingerprint` prefers `<stem>_matched.yaml` when it exists
-  (`main.py:461-462`). Both skip helpers are called before their `if skip_*` test, so their
+  (`_load_event_metadata_map`), `--skip-fingerprint` prefers `<stem>_matched.yaml` when it exists
+  (`skip_fingerprint_stage`). Both skip helpers are called before their `if skip_*` test, so their
   YAML read happens even when the real stage runs.
 - Trigger date filtering is **filename-based** (`basename.split("_")[1]`, `loop.py:113`), not
   mtime; sim readers ignore dates for *file selection* but still write into the fixed
@@ -81,7 +81,7 @@ Invariants that are load-bearing:
 | `readroot/` | `common.py` (TTree detect, time maps, YAML IO), `read_header.py`/`read_trace.py` (trigger), `read_coreas.py`, `read_starshape.py` |
 | `find_event/` | **current**: `matching_times_graph.py`, `time_difference_fingerprint.py`, `plane_wave_model_gradient.py`, `pwf_refine.py`, `spherical_wave_model_nopenal.py`, `shower_footprint_filter.py`, `plotting.py`, `io.py`, `utils.py` |
 | `find_event/` (legacy, unreferenced) | `matching_times.py`, `plane_wave_model.py`, `spherical_wave_model.py`, `background_rejection.py` — only `matching_times` and `background_rejection` even appear in the package `__all__`; nothing imports them |
-| `find_event/` (legacy, import-load) | `estimation.py`, `time_offset.py` — `main.py:22` imports `estimation`, which imports `time_offset` (`estimation.py:14`); `fe_est` is never dereferenced, but neither module is deletable without editing `main.py` first |
+| `find_event/` (legacy, import-load) | `estimation.py`, `time_offset.py` — `main.py:22` (`from find_event import estimation as fe_est`) imports `estimation`, which imports `time_offset` (`estimation.py:14`); `fe_est` is never dereferenced, but neither module is deletable without editing `main.py` first |
 | `reconstruction_candidate/` | authoritative `reconstruction_candidate_fluence_error_fixed.py` (three orchestrators only) + `reconstruction_common.py` / `reconstruction_antenna.py` / `reconstruction_io.py` / `reconstruction_direction.py` + `run_parallel_reconstruction_fixed.py`; legacy twins without `_fixed`; `tests/` |
 | `position/` | DU layout files (`ID x y z`, `#` = disabled DU, space **or** comma separated) + `*_du_pair_theoretical.csv` cache |
 | `calibration/` | `jul24_locked_xyz_additive_utc.csv` (time windows + per-DU xyz offsets) |
@@ -142,7 +142,7 @@ options; `--max-radius` is `coreas`-only.
   Cuts must truncate *every* field (`shower_footprint_filter.py:387-389`).
 - **Error handling:** broad `except` → `logger.warning`/`error` → return `(state, False)` or a
   status int; per-file reader failures never abort a batch. Plotting failures are swallowed so
-  caches still get written (`main.py:405-406`).
+  caches still get written (`_validate_stage_cache_payload`).
 - **Comments/docstrings:** identifiers and module docstrings English; section comments and the
   algorithm modules (`matching_times_graph`, `spherical_wave_model_nopenal`,
   `reconstruction_candidate*`) Chinese. Match the file you edit.
@@ -155,7 +155,7 @@ options; `--max-radius` is `coreas`-only.
   SWM YAML `x,y,z` is a *source point* in metres while `zenith/azimuth` are copied from PWM;
   cuts use `atan2(-y,-x)` and plots `atan2(y,x)`. `dw_err = NaN` is a sentinel for
   "not computed", not a bug.
-- `main()` reads the **module-global `args`** (`main.py:1105,1149,1205`), set only under
+- `main()` reads the **module-global `args`** (module-level `args = None`, then `args.<field>` inside `main()`), set only under
   `if __name__ == "__main__"` — calling `main.main(...)` programmatically raises `NameError`.
 
 ## Important Files
@@ -206,8 +206,8 @@ results, 108-start ADF grid) — do not trust them for the current chain (18 col
   (normally taken relative to `RECON_PARAM_DIR`), and `RECON_ROOT`/`RECON_EVENT`/`RECON_ADF_VOC_WINDOW`
   only drive the module's own `__main__` demo.
 - Machine-specific defaults: `--base-path /mnt/sdb2/users/m/mapx/…` (`loop.py:723`),
-  `--out-dir-base ../Reco_Dir`, `--det-pos position/_gp65_rtksort_DU7_1029.txt` (CWD-relative,
-  `main.py:112`), `./Reconstruction/` for ADF outputs. Several code defaults point at files that
+  `--out-dir-base ../Reco_Dir`, `--det-pos position/_gp65_rtksort_DU7_1029.txt` (CWD-relative, `main.py`
+  `parse_args` default), `./Reconstruction/` for ADF outputs. Several code defaults point at files that
   do not exist: `reconstruction_candidate/parameter_files/` (EFL `.mat`, rotation table) and
   `<repo>/_gp65_rtksort.txt` (the real file is `position/_gp65_rtksort.txt`).
 - `.gitignore` is blanket (`*.yaml *.json *.csv *.txt *.png *.pdf *.log *.mat`) and also hides

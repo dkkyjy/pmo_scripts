@@ -52,6 +52,8 @@ def _load_event_metadata_map(matching_file):
             "gps_time": payload.get("gps_time", None),
             "file": payload.get("file", None),
             "index": payload.get("index", None),
+            "truth": payload.get("truth", None),
+            "det_pos": payload.get("det_pos", None),
         }
     return metadata
 
@@ -616,6 +618,10 @@ def run_matching_stage(
                 "du_id": du_ids[key],
                 "time": times[key],
             }
+            # 仿真标记必须穿过 _matched.yaml，否则从它重跑会被当成 trigger 数据
+            for carried in ("truth", "det_pos"):
+                if meta.get(carried) is not None:
+                    results[key][carried] = meta[carried]
             if with_signal:
                 results[key]["signal"] = signal
 
@@ -1073,9 +1079,9 @@ def main(
     # Configure loguru to replace the root logging configuration
     logger.info(f"Start processing: {matching_file}")
 
-    # 数据形态判别：trigger 数据的坐标来自静态 det_pos 文件，其 gps_time 是真实
-    # 时间码，需施加时间/位置标定；coreas/starshape 的坐标逐事件内嵌于 matching
-    # YAML 的 ``det_pos``，gps_time 为合成值，不做标定（--skip-offset 亦可跳过）。
+    # 数据形态判别：trigger 数据没有逐事例布局也没有 truth 块，gps_time 是真实时间码，
+    # 需施加时间/位置标定；仿真数据带 truth 块（starshape 另带逐事例 ``det_pos``），
+    # gps_time 为合成值，不做标定（--skip-offset 亦可跳过）。
     detector_positions_by_event, is_simulation = _load_det_pos_by_event(matching_file)
     is_trigger_layout = detector_positions_by_event is None and not is_simulation
 
@@ -1123,6 +1129,32 @@ def main(
         logger.error(f"Detector position file does not exist: {det_pos_file}")
         return 2
     metadata = _load_event_metadata_map(matching_file)
+
+    if is_simulation and detector_positions_by_event is None and detector_positions:
+        # CoREAS embeds no layout, so the static table must cover every DU of every
+        # event; otherwise the fits silently drop antennas (or, worse, fit a foreign
+        # array). Fail loudly instead of writing empty/incorrect stage caches.
+        covered = {str(du) for du in detector_positions}
+        uncovered = {}
+        for key, meta in metadata.items():
+            absent = [
+                str(du) for du in (meta.get("du_id") or ()) if str(du) not in covered
+            ]
+            if absent:
+                uncovered[key] = absent
+        if uncovered:
+            first_key, absent = next(iter(uncovered.items()))
+            logger.error(
+                "Simulation YAML {} has no per-event det_pos and the static table {} "
+                "does not cover event {} (missing DU {}, {} events affected in total); "
+                "pass --det-pos with the layout that matches this simulation.",
+                matching_file,
+                det_pos_file,
+                first_key,
+                absent[:5],
+                len(uncovered),
+            )
+            return 2
 
     # Ensure plots are written into the same directory as the input matching file
     # If matching_file is relative, convert to absolute first
